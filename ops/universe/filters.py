@@ -31,14 +31,23 @@ def apply_liquidity_filter(
 
 
 def fetch_price_and_adv_from_yfinance(symbol: str) -> tuple[Decimal, Decimal] | None:
-    """20-day average dollar volume = mean(close * volume) over last 20 trading days."""
+    """20-day average dollar volume = mean(close * volume) over last 20 trading days.
+
+    Boundary policy: yfinance returns float64 pandas Series. We convert each
+    close/volume value to Decimal individually (via str()) and do all
+    multiplication, summation, and division in Decimal space."""
     try:
         t = yf.Ticker(symbol)
         hist = t.history(period="20d", auto_adjust=False)
         if hist.empty:
             return None
-        last_price = Decimal(str(hist["Close"].iloc[-1]))
-        dollar_vol = (hist["Close"] * hist["Volume"]).mean()
-        return last_price, Decimal(str(float(dollar_vol)))
+        closes = [Decimal(str(c)) for c in hist["Close"].tolist()]
+        volumes = [Decimal(str(v)) for v in hist["Volume"].tolist()]
+        last_price = closes[-1]
+        if not closes:
+            return None
+        dollar_vols = [c * v for c, v in zip(closes, volumes)]
+        avg_dollar_vol = sum(dollar_vols) / Decimal(len(dollar_vols))
+        return last_price, avg_dollar_vol
     except Exception:
         return None

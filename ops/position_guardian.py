@@ -5,6 +5,7 @@ if the position is at or past the per_position_stop_pct threshold. This is
 the single-pass variant; Plan 3 will wrap it in a background-thread loop."""
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
@@ -69,8 +70,12 @@ class PositionGuardian:
                     reason=f"unrealized {pct} above stop {self._cfg.per_position_stop_pct}",
                 ))
                 continue
+            # UUID suffix ensures each stop-sell attempt has a distinct
+            # client_order_id — otherwise re-entering the same symbol after
+            # a prior stop would emit a duplicate ID and confuse any future
+            # replay/idempotency logic keyed on client_order_id.
             sell = Order(
-                client_order_id=f"stop-{pos.symbol}",
+                client_order_id=f"stop-{pos.symbol}-{uuid.uuid4().hex[:8]}",
                 symbol=pos.symbol, side=Side.SELL,
                 notional_dollars=Decimal("0"),  # sell-all
                 order_type=OrderType.MARKET,

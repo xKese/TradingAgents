@@ -29,15 +29,47 @@ class PaperBroker(Broker):
         """Rebuild in-memory state by replaying fills from the journal.
 
         stop_loss_price is not persisted on fills; recovered positions come
-        back with stop_loss_price=None (guardian falls back to config)."""
+        back with stop_loss_price=None (guardian falls back to config).
+
+        Cash is reconstructed from each fill's matching order's
+        notional_dollars (looked up by client_order_id) rather than
+        qty * price, because qty is derived from notional_dollars / price
+        at fill time and multiplying back out reintroduces Decimal division
+        rounding error. Every fill (including close_position closes) now
+        has a matching order row, so the qty*price path below is a
+        defensive fallback only; it should not be hit in practice, and it
+        journals a journal_replay_fallback event when it is, so an ops
+        engineer can see the journal is missing an order row for a fill.
+
+        This is also the seam where we detect recovered positions that
+        carry no per-position stop_loss_price (see I4): unlike
+        RobinhoodBroker.get_positions(), which is called on every routine
+        poll and would spam this event, from_journal only runs once at
+        process start, so it is the natural place to emit a one-shot
+        recovery warning."""
         broker = cls(journal=journal, quote_source=quote_source, starting_cash=starting_cash)
+        orders_by_id = {o["client_order_id"]: o for o in journal.read_orders()}
         for f in journal.read_fills():
             symbol = f["symbol"]
             side = f["side"]
             qty = f["quantity"]
             price = f["price"]
+            order = orders_by_id.get(f["client_order_id"])
+            if order is not None:
+                notional = order["notional_dollars"]
+            else:
+                notional = qty * price
+                journal.record_event(
+                    "journal_replay_fallback",
+                    {
+                        "client_order_id": f["client_order_id"],
+                        "symbol": symbol,
+                        "side": side,
+                        "reason": "no matching order row; falling back to qty*price",
+                    },
+                )
             if side == Side.BUY.value:
-                cost = qty * price
+                cost = notional
                 broker._cash -= cost
                 existing = broker._positions.get(symbol)
                 if existing is None:
@@ -60,7 +92,7 @@ class PaperBroker(Broker):
                     # Journal is inconsistent — SELL replayed without a prior BUY.
                     # Log and skip. In production this triggers reconciliation.
                     continue
-                proceeds = qty * price
+                proceeds = notional
                 broker._cash += proceeds
                 remaining = existing.quantity - qty
                 if remaining > _EPSILON:
@@ -71,6 +103,15 @@ class PaperBroker(Broker):
                     )
                 else:
                     del broker._positions[symbol]
+        unstopped = sorted(
+            symbol for symbol, pos in broker._positions.items()
+            if pos.stop_loss_price is None
+        )
+        if unstopped:
+            journal.record_event(
+                "positions_recovered_without_stops",
+                {"symbols": unstopped, "count": len(unstopped)},
+            )
         return broker
 
     def get_cash(self) -> Decimal:
@@ -129,18 +170,23 @@ class PaperBroker(Broker):
         self._positions[order.symbol] = new_pos
         return self._make_fill(order, qty, price)
 
-    def close_position(self, symbol: str) -> Fill:
+    def close_position(self, symbol: str, *, client_order_id: str | None = None) -> Fill:
         existing = self._positions.get(symbol)
         if existing is None:
             raise NoSuchPosition(f"no position in {symbol}")
         price = self._quote(symbol)
         qty = existing.quantity
         proceeds = qty * price
+        order_id = client_order_id or f"close-{symbol}-{uuid4().hex[:8]}"
+        self._journal.record_order(
+            client_order_id=order_id, symbol=symbol, side=Side.SELL.value,
+            notional_dollars=proceeds, stop_loss_price=None,
+        )
         self._cash += proceeds
         del self._positions[symbol]
         fill = Fill(
             order_id=str(uuid4()),
-            client_order_id=f"close-{symbol}-{uuid4().hex[:8]}",
+            client_order_id=order_id,
             symbol=symbol,
             side=Side.SELL,
             quantity=qty,

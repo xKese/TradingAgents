@@ -81,7 +81,7 @@ class RobinhoodBroker(Broker):
             raise BrokerError(f"mcp unavailable: {exc}") from exc
         return self._ack_to_fill(order, ack)
 
-    def close_position(self, symbol: str) -> Fill:
+    def close_position(self, symbol: str, *, client_order_id: str | None = None) -> Fill:
         self._enforce_spot_hard_check(symbol)
         try:
             positions = self._client.get_positions()
@@ -90,7 +90,16 @@ class RobinhoodBroker(Broker):
         existing = next((p for p in positions if p.symbol == symbol), None)
         if existing is None:
             raise NoSuchPosition(f"no position in {symbol}")
-        client_order_id = f"close-{symbol}-{uuid.uuid4().hex[:8]}"
+        client_order_id = client_order_id or f"close-{symbol}-{uuid.uuid4().hex[:8]}"
+        try:
+            quote = self._client.get_quote(symbol)
+        except MCPUnavailable as exc:
+            raise BrokerError(f"mcp unavailable: {exc}") from exc
+        notional = existing.quantity * quote
+        self._journal.record_order(
+            client_order_id=client_order_id, symbol=symbol, side=Side.SELL.value,
+            notional_dollars=notional, stop_loss_price=None,
+        )
         try:
             ack = self._client.place_equity_order(
                 symbol=symbol, side=Side.SELL,

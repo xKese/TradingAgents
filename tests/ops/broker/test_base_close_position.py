@@ -11,5 +11,5 @@ def test_broker_close_position_is_abstract():
         def get_quote(self, symbol): return Decimal("1")
         def place_order(self, order): raise NotImplementedError
     import pytest
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="close_position"):
         Incomplete()  # type: ignore[abstract]

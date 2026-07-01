@@ -77,7 +77,8 @@ class FakeMCPClient:
             ack_qty = qty
         else:  # SELL
             existing = self._positions.get(symbol)
-            assert existing is not None, f"SELL with no position in {symbol}"
+            if existing is None:
+                raise ValueError(f"SELL with no position in {symbol}")
             if quantity is not None:
                 ack_qty = quantity
             else:

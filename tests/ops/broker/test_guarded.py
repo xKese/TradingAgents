@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 import pytest
 from ops.broker.base import OrderRejected
@@ -196,3 +197,49 @@ def test_guarded_close_position_races_with_concurrent_buy(guarded, inner, quote_
         # sold the full top-ped-up quantity — nothing left over.
         assert close_result["fill"].quantity == Decimal("7")
         assert positions == []
+
+
+_CLOSE_ID_RE = re.compile(r"^close-[A-Za-z]+-[0-9a-f]{8}$")
+
+
+def test_guarded_close_position_client_order_id_continuity_on_rejection(journal, quote_source):
+    """GuardedBroker mints the close's client_order_id once. On rejection, the id
+    journaled in order_rejected must be in the guarded layer's own
+    close-{symbol}-{hex8} format (it is minted before the rule chain runs, so a
+    rejection never reaches the inner broker to mint a different one)."""
+    quote_source.set("SPOT", Decimal("400"))
+    inner = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("250"))
+    inner._positions["SPOT"] = Position(
+        symbol="SPOT", quantity=Decimal("1"), avg_entry_price=Decimal("400"),
+    )
+    from ops.guardrails.static_rules import DenyListRule
+    engine = RuleEngine([DenyListRule()])
+    guarded_denylist = GuardedBroker(inner=inner, engine=engine, journal=journal, config=OpsConfig())
+
+    with pytest.raises(OrderRejected):
+        guarded_denylist.close_position("SPOT")
+
+    events = journal.read_events()
+    rejections = [e for e in events if e["kind"] == "order_rejected"]
+    assert len(rejections) == 1
+    rejected_id = rejections[0]["payload"]["client_order_id"]
+    assert _CLOSE_ID_RE.match(rejected_id), rejected_id
+
+
+def test_guarded_close_position_client_order_id_continuity_on_success(guarded, inner, quote_source, journal):
+    """On success, the id minted by GuardedBroker is passed through to the inner
+    broker so it appears — unchanged — on both the journaled order row and the
+    fill, matching the guarded layer's close-{symbol}-{hex8} format."""
+    quote_source.set("AAPL", Decimal("10"))
+    guarded.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("9"),
+    ))
+    fill = guarded.close_position("AAPL")
+
+    assert _CLOSE_ID_RE.match(fill.client_order_id), fill.client_order_id
+    orders = journal.read_orders()
+    close_orders = [o for o in orders if o["client_order_id"] == fill.client_order_id]
+    assert len(close_orders) == 1
+    assert close_orders[0]["side"] == "SELL"

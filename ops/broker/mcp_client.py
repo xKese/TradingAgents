@@ -134,6 +134,7 @@ class RealRobinhoodMCPClient:
         self._endpoint = endpoint
         self._token_path = token_path or _resolve_token_path()
         self._session = None  # populated on connect(); see class docstring
+        self._loop: asyncio.AbstractEventLoop | None = None  # created lazily; see connect()
 
     def connect(self) -> None:
         """Load (or mint via OAuth) a token, then establish the MCP session.
@@ -142,15 +143,30 @@ class RealRobinhoodMCPClient:
         file. Establishing the actual MCP session over the SDK's async
         transport is deferred — see class docstring — so `self._session`
         stays `None` after this call until that bridging lands.
+
+        Also creates this client's own event loop (`self._loop`), so every
+        `_call_tool` bridge for the lifetime of this client runs on the
+        same loop instead of `asyncio.run()` spinning up and tearing down a
+        fresh one per call. That matters once Task 12 wires up real async
+        streams/subscriptions on the SDK transport — those need to stay
+        bound to a single loop.
         """
         token = _read_token(self._token_path)
         if token is None:
             token = self._run_oauth_browser_flow()
             _write_token(self._token_path, token)
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
         # Establishing self._session requires entering the mcp SDK's async
         # transport/session context managers (streamablehttp_client +
         # ClientSession), which is out of scope for this task — see the
         # class docstring. Left as None; wired in Task 12.
+
+    def close(self) -> None:
+        """Close this client's owned event loop, if one was created."""
+        if self._loop is not None:
+            self._loop.close()
+            self._loop = None
 
     def _run_oauth_browser_flow(self) -> dict:
         raise NotImplementedError(
@@ -161,9 +177,13 @@ class RealRobinhoodMCPClient:
     def _call_tool(self, name: str, arguments: dict) -> dict:
         """Sync bridge to the SDK's async `ClientSession.call_tool`.
 
-        Runs the coroutine to completion with `asyncio.run` and unpacks the
-        real SDK response shape (`mcp.types.CallToolResult`), preferring
-        `structuredContent` when the server provides it.
+        Runs the coroutine to completion on this client's own event loop
+        (created in `connect()`, or lazily here if a test/caller set
+        `_session` without going through `connect()` first — matching the
+        existing `if self._session is None: self.connect()` lazy pattern
+        used by every Protocol method) and unpacks the real SDK response
+        shape (`mcp.types.CallToolResult`), preferring `structuredContent`
+        when the server provides it.
         """
         async def _call() -> dict:
             result = await self._session.call_tool(name, arguments)
@@ -173,7 +193,9 @@ class RealRobinhoodMCPClient:
                 return result.structuredContent
             return {"content": result.content}
 
-        return asyncio.run(_call())
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop.run_until_complete(_call())
 
     # Protocol methods delegate to the MCP session with narrow try/except
     # wrapping to MCPUnavailable.

@@ -112,7 +112,9 @@ class GuardedBroker(Broker):
                 )
                 raise OrderRejected(result.failed_rule_name, result.reason)
             try:
-                return self.__inner.close_position(symbol)
+                return self.__inner.close_position(
+                    symbol, client_order_id=close_order.client_order_id,
+                )
             except BrokerError as exc:
                 self._journal.record_event(
                     "order_rejected",

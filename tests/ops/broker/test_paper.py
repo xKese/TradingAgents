@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 import pytest
 from ops.broker.types import Order, Side, OrderType
@@ -220,3 +221,62 @@ def test_from_journal_replays_multiple_buys_same_symbol_averages_entry(tmp_path,
     # 10 shares @ 10 + 10 shares @ 20 = 20 shares avg 15
     assert pos.quantity == Decimal("20")
     assert pos.avg_entry_price == Decimal("15")
+
+
+def test_from_journal_replay_matches_live_cash_exactly_with_fractional_notional(tmp_path, quote_source):
+    """BUY $25 @ $7/share makes qty = 25/7, a repeating decimal. Reconstructing
+    cost as qty*price on replay (instead of reading the journaled order's
+    notional_dollars) reintroduces the Decimal rounding error from that
+    division, so live and replayed cash silently diverge by ~1e-27. Using the
+    stored notional_dollars keeps them exactly equal."""
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    quote_source.set("AAPL", Decimal("7"))
+    seed = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("100"))
+    seed.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("25"), order_type=OrderType.MARKET,
+    ))
+    seed.close_position("AAPL")
+    live_cash = seed.get_cash()
+
+    replayed = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100"),
+    )
+    assert replayed.get_cash() == live_cash
+
+
+def test_from_journal_emits_positions_recovered_without_stops_event(tmp_path, quote_source):
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    quote_source.set("AAPL", Decimal("10"))
+    seed = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("500"))
+    seed.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("9"),
+    ))
+    PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
+    )
+    warnings = [e for e in journal.read_events() if e["kind"] == "positions_recovered_without_stops"]
+    assert len(warnings) == 1
+    assert warnings[0]["payload"]["symbols"] == ["AAPL"]
+    assert warnings[0]["payload"]["count"] == 1
+
+
+def test_from_journal_falls_back_to_qty_times_price_when_order_row_missing(tmp_path, quote_source):
+    """Defensive path: a fill with no matching order row (shouldn't happen after
+    I1, but journals can predate it) reconstructs cost from qty*price and
+    journals a journal_replay_fallback event instead of raising."""
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    journal.record_fill(
+        order_id="orphan-order", client_order_id="orphan-cid", symbol="AAPL",
+        side="BUY", quantity=Decimal("5"), price=Decimal("10"),
+        filled_at=datetime.now(timezone.utc),
+    )
+    replayed = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
+    )
+    assert replayed.get_cash() == Decimal("450")  # 500 - 5*10
+    fallbacks = [e for e in journal.read_events() if e["kind"] == "journal_replay_fallback"]
+    assert len(fallbacks) == 1
+    assert fallbacks[0]["payload"]["client_order_id"] == "orphan-cid"

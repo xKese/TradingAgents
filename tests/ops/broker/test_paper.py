@@ -12,6 +12,24 @@ def _broker(tmp_path, prices: dict[str, str], cash: str = "250"):
     return PaperBroker(journal=j, quote_source=lambda s: quotes[s], starting_cash=Decimal(cash))
 
 
+class _MutableQuoteSource:
+    """Callable quote source whose prices can be updated between orders."""
+
+    def __init__(self) -> None:
+        self._prices: dict[str, Decimal] = {}
+
+    def set(self, symbol: str, price: Decimal) -> None:
+        self._prices[symbol] = price
+
+    def __call__(self, symbol: str) -> Decimal:
+        return self._prices[symbol]
+
+
+@pytest.fixture
+def quote_source():
+    return _MutableQuoteSource()
+
+
 def test_buy_creates_position_and_debits_cash(tmp_path):
     b = _broker(tmp_path, {"AAPL": "200"})
     o = Order(
@@ -138,3 +156,67 @@ def test_close_position_records_fill_to_journal(tmp_path):
     close_fills = [f for f in fills if f["client_order_id"].startswith("close-AAPL-")]
     assert len(close_fills) == 1
     assert close_fills[0]["side"] == "SELL"
+
+
+def test_from_journal_empty_journal_yields_starting_state(tmp_path, quote_source):
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
+    )
+    assert broker.get_cash() == Decimal("500")
+    assert broker.get_positions() == []
+
+
+def test_from_journal_replays_buy(tmp_path, quote_source):
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    quote_source.set("AAPL", Decimal("10"))
+    seed = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("500"))
+    seed.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+    ))
+    replayed = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
+    )
+    assert replayed.get_cash() == Decimal("400")
+    assert len(replayed.get_positions()) == 1
+    assert replayed.get_positions()[0].quantity == Decimal("10")
+
+
+def test_from_journal_replays_buy_then_close(tmp_path, quote_source):
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    quote_source.set("AAPL", Decimal("10"))
+    seed = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("500"))
+    seed.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+    ))
+    quote_source.set("AAPL", Decimal("11"))
+    seed.close_position("AAPL")
+    replayed = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
+    )
+    assert replayed.get_positions() == []
+    assert replayed.get_cash() == Decimal("510")   # 500 - 100 + 110
+
+
+def test_from_journal_replays_multiple_buys_same_symbol_averages_entry(tmp_path, quote_source):
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    quote_source.set("AAPL", Decimal("10"))
+    seed = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("1000"))
+    seed.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+    ))
+    quote_source.set("AAPL", Decimal("20"))
+    seed.place_order(Order(
+        client_order_id="b-2", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("200"), order_type=OrderType.MARKET,
+    ))
+    replayed = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("1000"),
+    )
+    pos = replayed.get_positions()[0]
+    # 10 shares @ 10 + 10 shares @ 20 = 20 shares avg 15
+    assert pos.quantity == Decimal("20")
+    assert pos.avg_entry_price == Decimal("15")

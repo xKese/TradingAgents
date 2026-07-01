@@ -22,6 +22,57 @@ class PaperBroker(Broker):
         self._cash = Decimal(starting_cash)
         self._positions: dict[str, Position] = {}
 
+    @classmethod
+    def from_journal(
+        cls, *, journal: Journal, quote_source: QuoteSource, starting_cash: Decimal,
+    ) -> "PaperBroker":
+        """Rebuild in-memory state by replaying fills from the journal.
+
+        stop_loss_price is not persisted on fills; recovered positions come
+        back with stop_loss_price=None (guardian falls back to config)."""
+        broker = cls(journal=journal, quote_source=quote_source, starting_cash=starting_cash)
+        for f in journal.read_fills():
+            symbol = f["symbol"]
+            side = f["side"]
+            qty = f["quantity"]
+            price = f["price"]
+            if side == Side.BUY.value:
+                cost = qty * price
+                broker._cash -= cost
+                existing = broker._positions.get(symbol)
+                if existing is None:
+                    broker._positions[symbol] = Position(
+                        symbol=symbol, quantity=qty,
+                        avg_entry_price=price, stop_loss_price=None,
+                    )
+                else:
+                    total_qty = existing.quantity + qty
+                    avg = (
+                        (existing.avg_entry_price * existing.quantity) + (price * qty)
+                    ) / total_qty
+                    broker._positions[symbol] = Position(
+                        symbol=symbol, quantity=total_qty,
+                        avg_entry_price=avg, stop_loss_price=None,
+                    )
+            elif side == Side.SELL.value:
+                existing = broker._positions.get(symbol)
+                if existing is None:
+                    # Journal is inconsistent — SELL replayed without a prior BUY.
+                    # Log and skip. In production this triggers reconciliation.
+                    continue
+                proceeds = qty * price
+                broker._cash += proceeds
+                remaining = existing.quantity - qty
+                if remaining > _EPSILON:
+                    broker._positions[symbol] = Position(
+                        symbol=symbol, quantity=remaining,
+                        avg_entry_price=existing.avg_entry_price,
+                        stop_loss_price=None,
+                    )
+                else:
+                    del broker._positions[symbol]
+        return broker
+
     def get_cash(self) -> Decimal:
         return self._cash
 

@@ -65,3 +65,54 @@ def test_fetch_returns_none_on_empty_history(monkeypatch):
     from ops.universe.filters import fetch_price_and_adv_from_yfinance
     _fake_yf_module(monkeypatch, {"Close": [], "Volume": []})
     assert fetch_price_and_adv_from_yfinance("AAPL") is None
+
+
+def test_fetch_normalises_nan_values_via_safe_decimal(monkeypatch):
+    """NaN values in the historical data must NOT produce Decimal('NaN')
+    (which would silently pass any comparison in the liquidity filter)."""
+    import math
+    from ops.universe.filters import fetch_price_and_adv_from_yfinance
+    _fake_yf_module(monkeypatch, {
+        "Close":  [100.0, math.nan, 120.0],
+        "Volume": [1_000_000.0, 1_000_000.0, math.nan],
+    })
+    result = fetch_price_and_adv_from_yfinance("AAPL")
+    assert result is not None
+    last_price, adv = result
+    # last_price is the last close (120)
+    assert last_price == Decimal("120.0")
+    # NaN entries are coerced to 0; per-bar dollar volumes are:
+    #   100 * 1M + 0 * 1M + 120 * 0 = 100_000_000
+    # mean over 3 bars = 33_333_333.33...
+    assert adv == Decimal("100000000") / Decimal("3")
+    # And crucially: adv is a real number, not NaN
+    assert not adv.is_nan()
+
+
+def test_fetch_returns_none_and_logs_on_yfinance_exception(monkeypatch, capsys):
+    """A yfinance boundary exception should log to stderr and return None,
+    never propagate a raw KeyError/AttributeError to the caller."""
+    from ops.universe.filters import fetch_price_and_adv_from_yfinance
+
+    class BoomTicker:
+        def history(self, *a, **k):
+            raise KeyError("['Adj Close']")
+
+    fake_yf = types.SimpleNamespace(Ticker=MagicMock(return_value=BoomTicker()))
+    monkeypatch.setattr("ops.universe.filters.yf", fake_yf)
+
+    result = fetch_price_and_adv_from_yfinance("AAPL")
+    assert result is None
+    err = capsys.readouterr().err
+    assert "AAPL" in err
+    assert "KeyError" in err
+
+
+def test_fetch_returns_none_and_logs_on_missing_columns(monkeypatch, capsys):
+    """If the returned DataFrame lacks Close/Volume columns, log + skip."""
+    from ops.universe.filters import fetch_price_and_adv_from_yfinance
+    _fake_yf_module(monkeypatch, {"Open": [100.0], "High": [110.0]})
+    result = fetch_price_and_adv_from_yfinance("AAPL")
+    assert result is None
+    err = capsys.readouterr().err
+    assert "AAPL" in err

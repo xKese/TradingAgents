@@ -166,3 +166,40 @@ def test_guardian_survives_quote_unavailable(tmp_path):
     assert msft.sold is True
     events = j.read_events()
     assert any(e["kind"] == "quote_unavailable" for e in events)
+
+
+def test_guardian_stop_sell_client_order_ids_are_unique_per_attempt(tmp_path):
+    """Two check_stops_once() passes that hit the same symbol must emit
+    distinct client_order_ids on the resulting SELL orders. Duplicate IDs
+    break any future replay/idempotency logic keyed on client_order_id."""
+    quotes = {"AAPL": Decimal("200")}
+    j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
+    guarded.place_order(Order(
+        client_order_id="open-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+    quotes["AAPL"] = Decimal("180")   # trip the stop
+    g = PositionGuardian(broker=guarded, quote_source=guarded.get_quote, config=cfg)
+    actions_1 = g.check_stops_once()
+    assert any(a.sold and a.symbol == "AAPL" for a in actions_1)
+
+    # Re-enter AAPL, then trip stop again
+    quotes["AAPL"] = Decimal("200")
+    guarded.place_order(Order(
+        client_order_id="open-2", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+    quotes["AAPL"] = Decimal("180")
+    actions_2 = g.check_stops_once()
+    assert any(a.sold and a.symbol == "AAPL" for a in actions_2)
+
+    # The two SELLs in the journal should have distinct client_order_ids
+    fills = j.read_fills()
+    stop_fills = [f for f in fills if f["side"] == "SELL"]
+    assert len(stop_fills) == 2
+    cids = {f["client_order_id"] for f in stop_fills}
+    assert len(cids) == 2
+    # Both should still start with the readable prefix
+    assert all(c.startswith("stop-AAPL-") for c in cids)

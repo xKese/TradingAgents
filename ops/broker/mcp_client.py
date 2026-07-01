@@ -242,10 +242,10 @@ class RealRobinhoodMCPClient:
             return MCPOrderAck(
                 order_id=result["id"], client_order_id=client_order_id,
                 symbol=symbol, side=side,
-                quantity=Decimal(str(result["quantity"])) if result.get("quantity") else None,
-                notional=Decimal(str(result["notional"])) if result.get("notional") else None,
+                quantity=Decimal(str(result["quantity"])) if result.get("quantity") is not None else None,
+                notional=Decimal(str(result["notional"])) if result.get("notional") is not None else None,
                 status=result["status"],
-                fill_price=Decimal(str(result["fill_price"])) if result.get("fill_price") else None,
+                fill_price=Decimal(str(result["fill_price"])) if result.get("fill_price") is not None else None,
             )
         except Exception as exc:
             raise MCPUnavailable(f"place_equity_order failed: {exc}") from exc

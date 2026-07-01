@@ -3,7 +3,11 @@ from decimal import Decimal
 import pytest
 
 from ops.broker.base import BrokerError, NoSuchPosition, OrderRejected
-from ops.broker.mcp_client import MCPUnavailable, RobinhoodMCPClient
+from ops.broker.mcp_client import (
+    MCPUnavailable,
+    RealRobinhoodMCPClient,
+    RobinhoodMCPClient,
+)
 from ops.broker.robinhood import RobinhoodBroker
 from ops.broker.types import Order, OrderType, Side
 from ops.journal import Journal
@@ -211,3 +215,61 @@ def test_write_token_creates_dir_with_0600_perms(tmp_path):
     assert path.exists()
     mode = path.stat().st_mode & 0o777
     assert mode == 0o600
+
+
+# --- RealRobinhoodMCPClient error mapping -----------------------------------
+#
+# `_call_tool` bridges to the SDK's async `ClientSession.call_tool`. Any
+# exception raised there (network, auth, protocol) must surface as
+# MCPUnavailable with the original exception chained via `__cause__`, so
+# callers can log/inspect the root cause without catching SDK-specific types.
+
+
+class _StubSessionThatFails:
+    async def call_tool(self, name, arguments):
+        raise RuntimeError("mcp died")
+
+
+def test_get_account_wraps_session_error(tmp_path):
+    client = RealRobinhoodMCPClient(token_path=tmp_path / "fake.json")
+    client._session = _StubSessionThatFails()
+    with pytest.raises(MCPUnavailable) as exc_info:
+        client.get_account()
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_get_positions_wraps_session_error(tmp_path):
+    client = RealRobinhoodMCPClient(token_path=tmp_path / "fake.json")
+    client._session = _StubSessionThatFails()
+    with pytest.raises(MCPUnavailable) as exc_info:
+        client.get_positions()
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_get_quote_wraps_session_error(tmp_path):
+    client = RealRobinhoodMCPClient(token_path=tmp_path / "fake.json")
+    client._session = _StubSessionThatFails()
+    with pytest.raises(MCPUnavailable) as exc_info:
+        client.get_quote("AAPL")
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_place_equity_order_wraps_session_error(tmp_path):
+    client = RealRobinhoodMCPClient(token_path=tmp_path / "fake.json")
+    client._session = _StubSessionThatFails()
+    with pytest.raises(MCPUnavailable) as exc_info:
+        client.place_equity_order(
+            symbol="AAPL", side=Side.BUY,
+            notional=Decimal("50"), quantity=None,
+            order_type=OrderType.MARKET, limit_price=None,
+            client_order_id="b-1",
+        )
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_cancel_equity_order_wraps_session_error(tmp_path):
+    client = RealRobinhoodMCPClient(token_path=tmp_path / "fake.json")
+    client._session = _StubSessionThatFails()
+    with pytest.raises(MCPUnavailable) as exc_info:
+        client.cancel_equity_order("order-1")
+    assert isinstance(exc_info.value.__cause__, RuntimeError)

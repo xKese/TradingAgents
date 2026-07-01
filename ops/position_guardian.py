@@ -56,7 +56,26 @@ class PositionGuardian:
                 notional_dollars=Decimal("0"),  # sell-all
                 order_type=OrderType.MARKET,
             )
-            self._broker.place_order(sell)
+            try:
+                self._broker.place_order(sell)
+            except BrokerError as exc:
+                self._broker.journal.record_event(
+                    "stop_failed",
+                    {
+                        "symbol": pos.symbol,
+                        "entry": str(pos.avg_entry_price),
+                        "current": str(current),
+                        "pct": str(pct),
+                        "threshold": str(self._cfg.per_position_stop_pct),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                actions.append(StopAction(
+                    symbol=pos.symbol, entry=pos.avg_entry_price,
+                    current=current, pct=pct, sold=False,
+                    reason=f"stop-sell failed: {type(exc).__name__}: {exc}",
+                ))
+                continue
             self._broker.journal.record_event(
                 "stop_hit",
                 {

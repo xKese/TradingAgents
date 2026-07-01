@@ -78,3 +78,54 @@ def test_guardian_handles_multiple_positions(tmp_path):
     assert sold == {"MSFT"}
     remaining = {p.symbol for p in guarded.get_positions()}
     assert remaining == {"AAPL"}
+
+
+def test_guardian_continues_after_failed_sell(tmp_path):
+    """If one position's stop-sell fails, remaining positions must still be checked."""
+    import unittest.mock as _mock
+    quotes = {"AAPL": Decimal("200"), "MSFT": Decimal("200")}
+    j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
+    # Open two positions, both will trip the stop simultaneously
+    guarded.place_order(Order(
+        client_order_id="a", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+    guarded.place_order(Order(
+        client_order_id="m", symbol="MSFT", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+    quotes["AAPL"] = Decimal("180")   # -10%, stop
+    quotes["MSFT"] = Decimal("180")   # -10%, stop
+
+    # Rig the broker so the first SELL raises; second must still be attempted
+    original_place = guarded.place_order
+    call_count = {"n": 0}
+
+    def flaky_place_order(order):
+        # Only fail SELLs; the initial BUYs already ran with the real method
+        if order.side == Side.SELL:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                from ops.broker.base import BrokerError
+                raise BrokerError("simulated failure on first sell")
+        return original_place(order)
+
+    with _mock.patch.object(guarded, "place_order", side_effect=flaky_place_order):
+        g = PositionGuardian(broker=guarded, quote_source=guarded.get_quote, config=cfg)
+        actions = g.check_stops_once()
+
+    # Both positions were evaluated (one action per position)
+    assert {a.symbol for a in actions} == {"AAPL", "MSFT"}
+    # Exactly one succeeded, one failed
+    sold_symbols = {a.symbol for a in actions if a.sold}
+    failed_symbols = {a.symbol for a in actions if not a.sold}
+    assert len(sold_symbols) == 1 and len(failed_symbols) == 1
+    # The failed one has an error-flavored reason
+    failed_action = next(a for a in actions if not a.sold)
+    assert "failed" in failed_action.reason.lower()
+    # Journal recorded exactly one stop_failed event
+    events = j.read_events()
+    stop_failed = [e for e in events if e["kind"] == "stop_failed"]
+    assert len(stop_failed) == 1

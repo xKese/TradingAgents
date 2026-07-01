@@ -129,3 +129,40 @@ def test_guardian_continues_after_failed_sell(tmp_path):
     events = j.read_events()
     stop_failed = [e for e in events if e["kind"] == "stop_failed"]
     assert len(stop_failed) == 1
+
+
+def test_guardian_survives_quote_unavailable(tmp_path):
+    """If the quote source fails for one position, guardian must not halt."""
+    from ops.broker.base import QuoteUnavailable
+    quotes = {"AAPL": Decimal("200"), "MSFT": Decimal("200")}
+    j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
+    guarded.place_order(Order(
+        client_order_id="a", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+    guarded.place_order(Order(
+        client_order_id="m", symbol="MSFT", side=Side.BUY,
+        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+
+    def flaky_quote(symbol):
+        if symbol == "AAPL":
+            raise QuoteUnavailable(f"boom on {symbol}")
+        return Decimal("180")   # MSFT will trip stop
+
+    g = PositionGuardian(broker=guarded, quote_source=flaky_quote, config=cfg)
+    actions = g.check_stops_once()
+
+    # Both positions were evaluated
+    assert {a.symbol for a in actions} == {"AAPL", "MSFT"}
+    aapl = next(a for a in actions if a.symbol == "AAPL")
+    msft = next(a for a in actions if a.symbol == "MSFT")
+    # AAPL got a quote_unavailable non-sale
+    assert aapl.sold is False
+    assert "quote unavailable" in aapl.reason.lower()
+    # MSFT tripped and sold
+    assert msft.sold is True
+    events = j.read_events()
+    assert any(e["kind"] == "quote_unavailable" for e in events)

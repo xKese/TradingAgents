@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
 
-from ops.broker.base import BrokerError
+from ops.broker.base import BrokerError, QuoteUnavailable
 from ops.broker.guarded import GuardedBroker
 from ops.broker.types import Order, OrderType, Side
 from ops.config import OpsConfig
@@ -40,7 +40,26 @@ class PositionGuardian:
     def check_stops_once(self) -> list[StopAction]:
         actions: list[StopAction] = []
         for pos in self._broker.get_positions():
-            current = self._quote(pos.symbol)
+            try:
+                current = self._quote(pos.symbol)
+            except QuoteUnavailable as exc:
+                self._broker.journal.record_event(
+                    "quote_unavailable",
+                    {
+                        "symbol": pos.symbol,
+                        "context": "guardian_stop_check",
+                        "error": str(exc),
+                    },
+                )
+                actions.append(StopAction(
+                    symbol=pos.symbol,
+                    entry=pos.avg_entry_price,
+                    current=Decimal("0"),
+                    pct=Decimal("0"),
+                    sold=False,
+                    reason=f"quote unavailable: {exc}",
+                ))
+                continue
             pct = pos.unrealized_pct(current)
             triggered = pct <= self._cfg.per_position_stop_pct
             if not triggered:

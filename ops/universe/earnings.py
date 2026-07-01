@@ -55,40 +55,50 @@ def _trading_days_back(asof: date, n: int) -> date:
 
 def _fetch_from_yfinance(symbol: str) -> EarningsHit | None:
     """Fetch the most recent earnings row for `symbol` from yfinance.
-    Returns None on any failure — yfinance's scraping is flaky and one bad
-    symbol should never abort the batch. Prints a one-line diagnostic to
-    stderr on exception so we can spot systemic problems in the logs."""
+
+    Only yfinance's I/O boundary is wrapped in try/except — subsequent
+    conversion and dataclass construction happen outside so genuine
+    internal regressions surface as real errors rather than being
+    silently reported as external fetch failures."""
+    import sys
     try:
         t = yf.Ticker(symbol)
         df = getattr(t, "earnings_dates", None)
-        if df is None or df.empty:
-            return None
-        df = df.dropna(subset=["EPS Estimate", "Reported EPS"])
-        if df.empty:
-            return None
-        # most recent reported row
-        row = df.iloc[0]
-        eps_actual = _safe_decimal(row["Reported EPS"])
-        eps_est = _safe_decimal(row["EPS Estimate"])
-        rev_actual = _safe_decimal(row.get("Reported Revenue"))
-        rev_est = _safe_decimal(row.get("Revenue Estimate"))
-        return EarningsHit(
-            symbol=symbol,
-            report_date=row.name.date() if hasattr(row.name, "date") else row.name,
-            eps_actual=eps_actual,
-            eps_estimate=eps_est,
-            revenue_actual=rev_actual,
-            revenue_estimate=rev_est,
-            eps_beat=eps_actual > eps_est,
-            revenue_beat=rev_actual > rev_est,
-        )
     except Exception as exc:
-        import sys
         print(
             f"[earnings] skipped {symbol}: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
         return None
+    if df is None or df.empty:
+        return None
+    try:
+        df = df.dropna(subset=["EPS Estimate", "Reported EPS"])
+    except (KeyError, ValueError) as exc:
+        # DataFrame column layout changed — treat as fetch failure
+        print(
+            f"[earnings] skipped {symbol}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    eps_actual = _safe_decimal(row["Reported EPS"])
+    eps_est = _safe_decimal(row["EPS Estimate"])
+    rev_actual = _safe_decimal(row.get("Reported Revenue"))
+    rev_est = _safe_decimal(row.get("Revenue Estimate"))
+    report_date = row.name.date() if hasattr(row.name, "date") else row.name
+    return EarningsHit(
+        symbol=symbol,
+        report_date=report_date,
+        eps_actual=eps_actual,
+        eps_estimate=eps_est,
+        revenue_actual=rev_actual,
+        revenue_estimate=rev_est,
+        eps_beat=eps_actual > eps_est,
+        revenue_beat=rev_actual > rev_est,
+    )
 
 
 def find_recent_earnings_beats(

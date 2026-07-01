@@ -45,10 +45,21 @@ def test_quote_source_refreshes_after_ttl(monkeypatch):
 
 
 def test_quote_source_raises_on_missing_price():
+    from ops.broker.base import QuoteUnavailable
     bad = MagicMock()
     bad.fast_info = MagicMock()
     bad.fast_info.last_price = None
     with patch("ops.quotes.yf.Ticker", return_value=bad):
         q = make_yfinance_quote_source()
-        with pytest.raises(ValueError, match="ZZZZ"):
+        with pytest.raises(QuoteUnavailable, match="ZZZZ"):
             q("ZZZZ")
+
+
+def test_quote_source_raises_quote_unavailable_on_yfinance_exception():
+    from ops.broker.base import QuoteUnavailable
+    def boom(symbol):
+        raise KeyError("['fast_info']")
+    with patch("ops.quotes.yf.Ticker", side_effect=boom):
+        q = make_yfinance_quote_source()
+        with pytest.raises(QuoteUnavailable, match="AAPL"):
+            q("AAPL")

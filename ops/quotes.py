@@ -7,6 +7,8 @@ from typing import Callable
 
 import yfinance as yf
 
+from ops.broker.base import QuoteUnavailable
+
 
 def _now() -> float:
     return time.monotonic()
@@ -20,10 +22,15 @@ def make_yfinance_quote_source(*, ttl_seconds: int = 60) -> Callable[[str], Deci
         cached = cache.get(symbol)
         if cached is not None and now - cached[0] < ttl_seconds:
             return cached[1]
-        ticker = yf.Ticker(symbol)
-        raw = ticker.fast_info.last_price
+        try:
+            ticker = yf.Ticker(symbol)
+            raw = ticker.fast_info.last_price
+        except Exception as exc:
+            raise QuoteUnavailable(
+                f"yfinance quote fetch for {symbol} failed: {type(exc).__name__}: {exc}"
+            ) from exc
         if raw is None:
-            raise ValueError(f"no last_price available for {symbol}")
+            raise QuoteUnavailable(f"no last_price available for {symbol}")
         price = Decimal(str(raw))
         cache[symbol] = (now, price)
         return price

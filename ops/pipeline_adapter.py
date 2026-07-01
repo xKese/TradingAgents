@@ -32,26 +32,36 @@ class PipelineAdapter(Protocol):
     def propagate(self, symbol: str, asof_date: date) -> PipelineResult: ...
 
 
-_DECISION_PATTERN = re.compile(
-    r"\b(BUY|SELL|HOLD)\b", re.IGNORECASE,
-)
+# Upstream ratings are one of: Buy, Overweight, Hold, Underweight, Sell.
+# For v1's conservative posture, only Buy/Sell trigger action; Overweight
+# and Underweight collapse to HOLD along with Hold and any unknown value.
+_HIGH_CONVICTION_BUY = {"BUY"}
+_HIGH_CONVICTION_SELL = {"SELL"}
+_UPSTREAM_RATINGS = {"BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"}
 
 
 def parse_decision(text: str) -> PipelineDecision:
-    """Parse the upstream's final decision text into the enum.
+    """Parse the upstream's decision text into a PipelineDecision.
 
-    The framework's Portfolio Manager emits 'FINAL TRANSACTION PROPOSAL: <X>'
-    where X is BUY/SELL/HOLD. We accept that AND any prominent occurrence of
-    those tokens, falling back to HOLD if none is found (safe default)."""
+    The upstream `TradingAgentsGraph.propagate()` returns a bare rating word
+    from SignalProcessor.parse_rating: one of Buy/Overweight/Hold/Underweight/Sell.
+
+    v1 posture: only Buy and Sell trigger action. Overweight and Underweight
+    collapse to HOLD along with Hold itself. Unknown or missing text also
+    defaults to HOLD (safe posture). We also still accept a leading
+    'FINAL TRANSACTION PROPOSAL: <X>' wrapper for defensive matching against
+    older upstream formats.
+    """
     if not text:
         return PipelineDecision.HOLD
-    # Prefer the FINAL TRANSACTION PROPOSAL line if present
-    m = re.search(r"FINAL TRANSACTION PROPOSAL:\s*(BUY|SELL|HOLD)", text, re.IGNORECASE)
-    if m:
-        return PipelineDecision(m.group(1).upper())
-    m = _DECISION_PATTERN.search(text)
-    if m:
-        return PipelineDecision(m.group(1).upper())
+    # Defensive: strip a legacy "FINAL TRANSACTION PROPOSAL:" prefix if present
+    m = re.search(r"FINAL TRANSACTION PROPOSAL:\s*(\S+)", text, re.IGNORECASE)
+    candidate = m.group(1) if m else text.strip().split()[0] if text.strip() else ""
+    candidate = candidate.strip().rstrip(".,").upper()
+    if candidate in _HIGH_CONVICTION_BUY:
+        return PipelineDecision.BUY
+    if candidate in _HIGH_CONVICTION_SELL:
+        return PipelineDecision.SELL
     return PipelineDecision.HOLD
 
 

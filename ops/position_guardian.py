@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
 
+from ops.broker.base import BrokerError
 from ops.broker.guarded import GuardedBroker
 from ops.broker.types import Order, OrderType, Side
 from ops.config import OpsConfig

@@ -26,13 +26,25 @@ def test_stub_defaults_to_hold_for_unknown_symbol():
 
 
 @pytest.mark.parametrize("text,expected", [
-    ("FINAL TRANSACTION PROPOSAL: BUY", PipelineDecision.BUY),
-    ("FINAL TRANSACTION PROPOSAL: SELL", PipelineDecision.SELL),
-    ("FINAL TRANSACTION PROPOSAL: HOLD", PipelineDecision.HOLD),
-    ("buy", PipelineDecision.BUY),
-    ("the analysts agree: SELL the position", PipelineDecision.SELL),
-    ("we should HOLD for now", PipelineDecision.HOLD),
-    ("inconclusive analysis", PipelineDecision.HOLD),   # fallback
+    # Actual upstream shape — single Title-case rating word
+    ("Buy", PipelineDecision.BUY),
+    ("Sell", PipelineDecision.SELL),
+    ("Hold", PipelineDecision.HOLD),
+    # Overweight/Underweight collapse to HOLD in v1
+    ("Overweight", PipelineDecision.HOLD),
+    ("Underweight", PipelineDecision.HOLD),
+    # Case-insensitive
+    ("BUY", PipelineDecision.BUY),
+    ("sell", PipelineDecision.SELL),
+    # Legacy "FINAL TRANSACTION PROPOSAL:" wrapper still parses
+    ("FINAL TRANSACTION PROPOSAL: Buy", PipelineDecision.BUY),
+    ("FINAL TRANSACTION PROPOSAL: Sell", PipelineDecision.SELL),
+    ("FINAL TRANSACTION PROPOSAL: Overweight", PipelineDecision.HOLD),
+    # Trailing punctuation tolerated
+    ("Buy.", PipelineDecision.BUY),
+    # Unknown/empty defaults to HOLD (safe)
+    ("", PipelineDecision.HOLD),
+    ("gibberish", PipelineDecision.HOLD),
 ])
 def test_parse_decision_handles_various_phrasings(text, expected):
     assert parse_decision(text) == expected
@@ -48,7 +60,7 @@ def test_real_adapter_constructs_graph_lazily(monkeypatch):
             constructed.append(kwargs)
 
         def propagate(self, ticker, dt):
-            return ({}, "FINAL TRANSACTION PROPOSAL: BUY")
+            return ({}, "Buy")
 
     monkeypatch.setattr("ops.pipeline_adapter.TradingAgentsGraph", FakeGraph)
     adapter = TradingAgentsPipelineAdapter()

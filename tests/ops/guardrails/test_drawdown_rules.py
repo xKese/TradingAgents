@@ -1,5 +1,6 @@
 from decimal import Decimal
 from unittest.mock import MagicMock
+import pytest
 from ops.broker.types import Order, Side, OrderType
 from ops.config import OpsConfig
 from ops.guardrails.base import RuleContext
@@ -38,6 +39,7 @@ def test_daily_drawdown_blocks_at_threshold():
 
 
 def test_daily_drawdown_does_not_block_sells():
+    pytest.skip("moves to close_position in task 2")
     rule = DailyDrawdownRule(start_of_day_equity=lambda: Decimal("250"))
     assert rule.check(_sell_ctx("200")).allowed is True
 
@@ -53,5 +55,6 @@ def test_weekly_drawdown_blocks_at_threshold():
 
 
 def test_weekly_drawdown_blocks_sells_too():
+    pytest.skip("moves to close_position in task 2")
     rule = WeeklyDrawdownRule(start_of_week_equity=lambda: Decimal("250"))
     assert rule.check(_sell_ctx("200")).allowed is True

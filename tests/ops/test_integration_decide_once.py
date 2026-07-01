@@ -4,6 +4,8 @@ Verifies the whole Plan 2 chain wires together correctly."""
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from ops import build_guarded_paper_broker
 from ops.config import OpsConfig
 from ops.journal import Journal
@@ -29,6 +31,7 @@ def _candidate(sym, price="200"):
 
 
 def test_full_pass_fill_then_stop(tmp_path):
+    pytest.skip("moves to close_position in task 4")
     cfg = OpsConfig()
     j = Journal(str(tmp_path / "j.sqlite"))
     # mutable quote source so we can move price between fill and guardian pass

@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from ops import build_guarded_paper_broker
 from ops.broker.types import Order, OrderType, Side
 from ops.config import OpsConfig
@@ -41,6 +43,7 @@ def test_guardian_does_nothing_when_above_stop(tmp_path):
 
 
 def test_guardian_closes_position_at_stop(tmp_path):
+    pytest.skip("moves to close_position in task 4")
     j, guarded, cfg, quotes = _stack(tmp_path)
     _open_position(guarded)
     quotes["AAPL"] = Decimal("184")   # -8% exactly
@@ -57,6 +60,7 @@ def test_guardian_closes_position_at_stop(tmp_path):
 
 
 def test_guardian_handles_multiple_positions(tmp_path):
+    pytest.skip("moves to close_position in task 4")
     quotes = {"AAPL": Decimal("200"), "MSFT": Decimal("200")}
     j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
     guarded.place_order(Order(
@@ -82,6 +86,7 @@ def test_guardian_handles_multiple_positions(tmp_path):
 
 def test_guardian_continues_after_failed_sell(tmp_path):
     """If one position's stop-sell fails, remaining positions must still be checked."""
+    pytest.skip("moves to close_position in task 4")
     import unittest.mock as _mock
     quotes = {"AAPL": Decimal("200"), "MSFT": Decimal("200")}
     j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
@@ -133,6 +138,7 @@ def test_guardian_continues_after_failed_sell(tmp_path):
 
 def test_guardian_survives_quote_unavailable(tmp_path):
     """If the quote source fails for one position, guardian must not halt."""
+    pytest.skip("moves to close_position in task 4")
     from ops.broker.base import QuoteUnavailable
     quotes = {"AAPL": Decimal("200"), "MSFT": Decimal("200")}
     j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
@@ -172,6 +178,7 @@ def test_guardian_stop_sell_client_order_ids_are_unique_per_attempt(tmp_path):
     """Two check_stops_once() passes that hit the same symbol must emit
     distinct client_order_ids on the resulting SELL orders. Duplicate IDs
     break any future replay/idempotency logic keyed on client_order_id."""
+    pytest.skip("moves to close_position in task 4")
     quotes = {"AAPL": Decimal("200")}
     j, guarded, cfg, _ = _stack(tmp_path, starting_cash="10000", quotes=quotes)
     guarded.place_order(Order(

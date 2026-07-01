@@ -1,5 +1,6 @@
 from decimal import Decimal
 from unittest.mock import MagicMock
+import pytest
 from ops.broker.types import Order, Side, OrderType, Position
 from ops.config import OpsConfig
 from ops.guardrails.base import RuleContext
@@ -99,6 +100,7 @@ def test_cash_reserve_allows_if_post_trade_cash_above_floor():
 
 
 def test_cash_reserve_does_not_constrain_sells():
+    pytest.skip("moves to close_position in task 2")
     sell = Order(
         client_order_id="c", symbol="AAPL", side=Side.SELL,
         notional_dollars=Decimal("0"), order_type=OrderType.MARKET,

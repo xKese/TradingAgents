@@ -1,7 +1,152 @@
-from ops.broker.mcp_client import RobinhoodMCPClient
+from decimal import Decimal
+
+import pytest
+
+from ops.broker.base import BrokerError, NoSuchPosition, OrderRejected
+from ops.broker.mcp_client import MCPUnavailable, RobinhoodMCPClient
+from ops.broker.robinhood import RobinhoodBroker
+from ops.broker.types import Order, OrderType, Side
+from ops.journal import Journal
 from tests.ops.broker.fakes import FakeMCPClient
+
+
+@pytest.fixture
+def fake_client():
+    return FakeMCPClient()
+
+
+@pytest.fixture
+def journal(tmp_path):
+    return Journal(str(tmp_path / "j.sqlite"))
 
 
 def test_fake_client_satisfies_protocol():
     client: RobinhoodMCPClient = FakeMCPClient()
     assert isinstance(client, RobinhoodMCPClient)
+
+
+def test_get_cash_maps_from_account(fake_client, journal):
+    fake_client.seed_position("AAPL", Decimal("5"), Decimal("10"))
+    fake_client.set_quote("AAPL", Decimal("11"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    assert broker.get_cash() == fake_client.get_account().cash
+
+
+def test_get_equity_maps_from_account(fake_client, journal):
+    fake_client.seed_position("AAPL", Decimal("5"), Decimal("10"))
+    fake_client.set_quote("AAPL", Decimal("11"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    assert broker.get_equity() == fake_client.get_account().equity
+
+
+def test_get_positions_maps_mcp_positions(fake_client, journal):
+    fake_client.seed_position("AAPL", Decimal("5"), Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    positions = broker.get_positions()
+    assert len(positions) == 1
+    assert positions[0].symbol == "AAPL"
+    assert positions[0].quantity == Decimal("5")
+    assert positions[0].avg_entry_price == Decimal("10")
+    assert positions[0].stop_loss_price is None
+
+
+def test_get_quote_delegates_to_client(fake_client, journal):
+    fake_client.set_quote("AAPL", Decimal("11"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    assert broker.get_quote("AAPL") == Decimal("11")
+
+
+def test_place_order_buy_calls_mcp(fake_client, journal):
+    fake_client.set_quote("AAPL", Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    fill = broker.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("9"),
+    ))
+    assert fill.side == Side.BUY
+    assert fill.quantity == Decimal("5")
+    assert len(fake_client.placed) == 1
+    assert fake_client.placed[0].notional == Decimal("50")
+
+
+def test_place_order_journals_order_and_fill(fake_client, journal):
+    fake_client.set_quote("AAPL", Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    broker.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("9"),
+    ))
+    orders = journal.read_orders()
+    fills = journal.read_fills()
+    assert len(orders) == 1
+    assert orders[0]["client_order_id"] == "b-1"
+    assert len(fills) == 1
+    assert fills[0]["symbol"] == "AAPL"
+
+
+def test_close_position_places_quantity_sell(fake_client, journal):
+    fake_client.set_quote("AAPL", Decimal("10"))
+    fake_client.seed_position("AAPL", Decimal("5"), Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    fill = broker.close_position("AAPL")
+    assert fill.side == Side.SELL
+    assert fill.quantity == Decimal("5")
+    ack = fake_client.placed[-1]
+    assert ack.quantity == Decimal("5")
+    assert ack.notional is None
+
+
+def test_close_position_missing_raises(fake_client, journal):
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    with pytest.raises(NoSuchPosition):
+        broker.close_position("NVDA")
+
+
+def test_mcp_unavailable_wraps_as_broker_error(fake_client, journal):
+    fake_client.set_quote("AAPL", Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    fake_client.fail_next(MCPUnavailable("network"))
+    with pytest.raises(BrokerError):
+        broker.place_order(Order(
+            client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+            notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
+            stop_loss_price=Decimal("9"),
+        ))
+
+
+def test_mcp_unavailable_wraps_on_get_cash(fake_client, journal):
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    fake_client.fail_next(MCPUnavailable("network"))
+    with pytest.raises(BrokerError):
+        broker.get_cash()
+
+
+def test_mcp_unavailable_wraps_on_close_position(fake_client, journal):
+    fake_client.seed_position("AAPL", Decimal("5"), Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    fake_client.fail_next(MCPUnavailable("network"))
+    with pytest.raises(BrokerError):
+        broker.close_position("AAPL")
+
+
+def test_place_order_spot_hard_check_rejects(fake_client, journal):
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    with pytest.raises(OrderRejected) as exc:
+        broker.place_order(Order(
+            client_order_id="b-1", symbol="SPOT", side=Side.BUY,
+            notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
+            stop_loss_price=Decimal("9"),
+        ))
+    assert exc.value.rule_name == "SpotDenyList"
+    assert len(fake_client.placed) == 0
+
+
+def test_close_position_spot_hard_check_rejects(fake_client, journal):
+    fake_client.seed_position("SPOT", Decimal("5"), Decimal("10"))
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    with pytest.raises(OrderRejected) as exc:
+        broker.close_position("SPOT")
+    assert exc.value.rule_name == "SpotDenyList"
+    assert len(fake_client.placed) == 0

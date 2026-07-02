@@ -245,10 +245,12 @@ def test_from_journal_replay_matches_live_cash_exactly_with_fractional_notional(
     assert replayed.get_cash() == live_cash
 
 
-def test_from_journal_emits_positions_recovered_without_stops_event_for_legacy_fills(tmp_path, quote_source):
+def test_from_journal_leaves_stop_none_for_legacy_fills(tmp_path, quote_source):
     """A position whose BUY fill carries no journaled stop (legacy data,
-    predating Task 2's stop_loss_price persistence) still can't be rehydrated
-    with a stop, so the recovery warning still fires for it."""
+    predating Task 2's stop_loss_price persistence) is rehydrated with
+    stop_loss_price=None. The reconciler is now the sole emitter of the
+    positions_recovered_without_stops event, so from_journal itself no
+    longer writes to the journal from this path."""
     journal = Journal(str(tmp_path / "j.sqlite"))
     quote_source.set("AAPL", Decimal("10"))
     journal.record_order(client_order_id="b-1", symbol="AAPL", side="BUY",
@@ -256,30 +258,14 @@ def test_from_journal_emits_positions_recovered_without_stops_event_for_legacy_f
     journal.record_fill(order_id="o-1", client_order_id="b-1", symbol="AAPL",
                         side="BUY", quantity=Decimal("10"), price=Decimal("10"),
                         filled_at=datetime.now(timezone.utc), stop_loss_price=None)
-    PaperBroker.from_journal(
+    broker = PaperBroker.from_journal(
         journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
     )
-    warnings = [e for e in journal.read_events() if e["kind"] == "positions_recovered_without_stops"]
-    assert len(warnings) == 1
-    assert warnings[0]["payload"]["symbols"] == ["AAPL"]
-    assert warnings[0]["payload"]["count"] == 1
-
-
-def test_from_journal_no_warning_when_stop_is_recovered(tmp_path, quote_source):
-    """Task 2 closes the recovery gap: a BUY that journaled a stop_loss_price
-    is rehydrated on replay, so the position is no longer 'unstopped' and the
-    positions_recovered_without_stops warning must not fire for it."""
-    journal = Journal(str(tmp_path / "j.sqlite"))
-    quote_source.set("AAPL", Decimal("10"))
-    seed = PaperBroker(journal=journal, quote_source=quote_source, starting_cash=Decimal("500"))
-    seed.place_order(Order(
-        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
-        notional_dollars=Decimal("100"), order_type=OrderType.MARKET,
-        stop_loss_price=Decimal("9"),
-    ))
-    PaperBroker.from_journal(
-        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
-    )
+    positions = broker.get_positions()
+    assert len(positions) == 1
+    assert positions[0].symbol == "AAPL"
+    assert positions[0].stop_loss_price is None
+    # No positions_recovered_without_stops event emitted from from_journal.
     warnings = [e for e in journal.read_events() if e["kind"] == "positions_recovered_without_stops"]
     assert warnings == []
 

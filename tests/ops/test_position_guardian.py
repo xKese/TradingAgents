@@ -474,3 +474,31 @@ def test_kill_switch_paper_mode_records_close_failure_and_continues(_broker_with
     # MSFT was still closed despite AAPL failing.
     remaining = {p.symbol for p in broker.get_positions()}
     assert "MSFT" not in remaining
+
+
+def test_guardian_journals_check_error_on_unexpected_exception(tmp_path):
+    """The scheduler-safety invariant: any exception from broker/journal
+    is journaled as guardian_check_error and swallowed. The APScheduler
+    job body must never propagate an exception up."""
+    from unittest.mock import MagicMock
+    from ops.broker.base import BrokerError
+
+    j = Journal(str(tmp_path / "j.sqlite"))
+    broker = MagicMock()
+    broker.get_positions.side_effect = BrokerError("mcp down")
+
+    guardian = PositionGuardian(
+        broker=broker,
+        quote_source=lambda s: Decimal("10"),
+        config=OpsConfig(),
+        journal=j,
+        broker_mode="robinhood",
+    )
+
+    result = guardian.check_stops_once()
+    assert result == []
+
+    events = j.read_events()
+    err_events = [e for e in events if e["kind"] == "guardian_check_error"]
+    assert len(err_events) == 1
+    assert "mcp down" in err_events[0]["payload"]["error"]

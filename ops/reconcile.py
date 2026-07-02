@@ -17,7 +17,7 @@ class PositionDiff:
     symbol: str
     journal_qty: Decimal | None
     broker_qty: Decimal | None
-    kind: str   # "extra_in_broker" | "extra_in_journal" | "qty_mismatch"
+    kind: str   # "extra_in_broker" | "extra_in_journal" | "qty_mismatch" | "cash_drift"
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,16 @@ def reconcile(*, journal: Journal, broker: Any, broker_mode: str) -> ReconcileRe
     cash_journal = replay.get_cash()
     cash_broker = broker.get_cash()
     cash_diff = cash_broker - cash_journal
+
+    # Live mode: any material cash drift halts startup. Paper mode carries a
+    # known structural offset (live PaperBroker's starting_cash vs replay's
+    # starting_cash=0), so cash drift is not a diff there.
+    if broker_mode == "robinhood" and abs(cash_diff) > _EPSILON_CASH:
+        diffs.append(PositionDiff(
+            symbol="__CASH__",
+            journal_qty=cash_journal, broker_qty=cash_broker,
+            kind="cash_drift",
+        ))
 
     positions_recovered_without_stops = sorted(
         p.symbol for p in broker.get_positions() if p.stop_loss_price is None

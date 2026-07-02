@@ -74,9 +74,10 @@ def test_reconcile_live_diff_when_rh_has_extra_symbol(tmp_path):
         start_of_week_equity=lambda: Decimal("500"),
     )
     result = reconcile(journal=j, broker=broker, broker_mode="robinhood")
-    assert len(result.diffs) == 1
-    assert result.diffs[0].symbol == "NVDA"
-    assert result.diffs[0].kind == "extra_in_broker"
+    position_diffs = [d for d in result.diffs if d.kind != "cash_drift"]
+    assert len(position_diffs) == 1
+    assert position_diffs[0].symbol == "NVDA"
+    assert position_diffs[0].kind == "extra_in_broker"
 
 
 def test_reconcile_live_diff_when_journal_has_extra_symbol(tmp_path):
@@ -147,3 +148,42 @@ def test_emit_reconcile_events_writes_positions_recovered_without_stops(tmp_path
     matching = [e for e in events if e["kind"] == "positions_recovered_without_stops"]
     assert len(matching) == 1
     assert matching[0]["payload"]["symbols"] == ["NVDA"]
+
+
+def test_reconcile_live_cash_drift_produces_diff(tmp_path):
+    """Live mode: material cash drift (Robinhood withdrawal between sessions,
+    say) surfaces as a __CASH__ PositionDiff so main.run's halt gate catches it."""
+    from tests.ops.broker.fakes import FakeMCPClient
+    from ops import build_guarded_robinhood_broker
+
+    j = Journal(str(tmp_path / "j.sqlite"))
+    # Journal is empty → replay cash = 0. FakeMCPClient reports live cash of $500.
+    # cash_diff = 500 - 0 = 500, well above the 0.01 epsilon.
+    client = FakeMCPClient(cash=Decimal("500"))
+    broker = build_guarded_robinhood_broker(
+        config=OpsConfig(broker_mode="robinhood"), journal=j,
+        mcp_client=client,
+        start_of_day_equity=lambda: Decimal("500"),
+        start_of_week_equity=lambda: Decimal("500"),
+    )
+    result = reconcile(journal=j, broker=broker, broker_mode="robinhood")
+    cash_diffs = [d for d in result.diffs if d.kind == "cash_drift"]
+    assert len(cash_diffs) == 1
+    assert cash_diffs[0].symbol == "__CASH__"
+    assert cash_diffs[0].broker_qty == Decimal("500")
+
+
+def test_reconcile_paper_mode_ignores_cash_drift(tmp_path):
+    """Paper mode has a structural cash offset (live starting_cash vs
+    replay starting_cash=0), so cash_diff is NOT surfaced as a diff."""
+    j = Journal(str(tmp_path / "j.sqlite"))
+    broker = build_guarded_paper_broker(
+        config=OpsConfig(), journal=j,
+        quote_source=_quote_source({"AAPL": Decimal("10")}),
+        starting_cash=Decimal("500"),
+        start_of_day_equity=lambda: Decimal("500"),
+        start_of_week_equity=lambda: Decimal("500"),
+    )
+    result = reconcile(journal=j, broker=broker, broker_mode="paper")
+    cash_diffs = [d for d in result.diffs if d.kind == "cash_drift"]
+    assert cash_diffs == []

@@ -44,12 +44,12 @@ class PaperBroker(Broker):
         journals a journal_replay_fallback event when it is, so an ops
         engineer can see the journal is missing an order row for a fill.
 
-        This is also the seam where we detect recovered positions that
-        carry no per-position stop_loss_price (see I4): unlike
-        RobinhoodBroker.get_positions(), which is called on every routine
-        poll and would spam this event, from_journal only runs once at
-        process start, so it is the natural place to emit a one-shot
-        recovery warning."""
+        Detection of recovered positions without a per-position
+        stop_loss_price is intentionally NOT emitted here — the
+        reconciler (ops.reconcile.emit_reconcile_events) is the single
+        source of truth for the `positions_recovered_without_stops`
+        event so paper mode doesn't get a duplicate emission on every
+        startup."""
         broker = cls(journal=journal, quote_source=quote_source, starting_cash=starting_cash)
         orders_by_id = {o["client_order_id"]: o for o in journal.read_orders()}
         for f in journal.read_fills():
@@ -119,15 +119,6 @@ class PaperBroker(Broker):
             else:
                 new_positions[symbol] = pos
         broker._positions = new_positions
-        unstopped = sorted(
-            symbol for symbol, pos in broker._positions.items()
-            if pos.stop_loss_price is None
-        )
-        if unstopped:
-            journal.record_event(
-                "positions_recovered_without_stops",
-                {"symbols": unstopped, "count": len(unstopped)},
-            )
         return broker
 
     def get_cash(self) -> Decimal:

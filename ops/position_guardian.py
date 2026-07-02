@@ -41,6 +41,20 @@ class PositionGuardian:
         self._broker_mode = broker_mode
 
     def check_stops_once(self) -> list[StopAction]:
+        """Scheduler-safe wrapper: any unexpected exception is journaled
+        as guardian_check_error and swallowed, so the APScheduler job
+        keeps running. The guardian is the last line of defence on real
+        money — a silent crash here would leave positions unprotected."""
+        try:
+            return self._check_stops_once_impl()
+        except Exception as exc:
+            self._journal.record_event(
+                "guardian_check_error",
+                {"error": f"{type(exc).__name__}: {exc}"},
+            )
+            return []
+
+    def _check_stops_once_impl(self) -> list[StopAction]:
         actions: list[StopAction] = []
         for pos in self._broker.get_positions():
             try:

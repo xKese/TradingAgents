@@ -52,3 +52,59 @@ def test_emit_halt_events_writes_inconsistency_and_startup_halted(tmp_path):
     kinds = [e["kind"] for e in j.read_events()]
     assert "inconsistency" in kinds
     assert "startup_halted" in kinds
+
+
+def test_paper_mode_restart_preserves_positions(tmp_path):
+    """Two ops-run sessions against the same journal must see the same
+    positions and stops. Session B rehydrates from the journal that
+    session A wrote, so a BUY placed in A is visible (with its stop)
+    in B without any reconciler diffs."""
+    from ops import build_guarded_paper_broker_from_journal
+    from ops.broker.types import Order, OrderType, Side
+    from ops.reconcile import reconcile as _reconcile
+
+    class _Q:
+        def __init__(self): self._m = {}
+        def set(self, s, p): self._m[s] = p
+        def get(self, s): return self._m[s]
+
+    journal_path = str(tmp_path / "j.sqlite")
+    quotes = _Q()
+    quotes.set("AAPL", Decimal("10"))
+
+    # Session A — place a BUY with a stop.
+    j_a = Journal(journal_path)
+    broker_a = build_guarded_paper_broker_from_journal(
+        config=OpsConfig(), journal=j_a, quote_source=quotes.get,
+        starting_cash=Decimal("250"),
+        start_of_day_equity=lambda: Decimal("250"),
+        start_of_week_equity=lambda: Decimal("250"),
+    )
+    broker_a.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("20"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("9.5"),
+    ))
+    positions_a = broker_a.get_positions()
+    assert len(positions_a) == 1
+    assert positions_a[0].stop_loss_price == Decimal("9.5")
+    j_a.close()
+
+    # Session B — restart on the same journal.
+    j_b = Journal(journal_path)
+    broker_b = build_guarded_paper_broker_from_journal(
+        config=OpsConfig(), journal=j_b, quote_source=quotes.get,
+        starting_cash=Decimal("250"),
+        start_of_day_equity=lambda: Decimal("250"),
+        start_of_week_equity=lambda: Decimal("250"),
+    )
+    positions_b = broker_b.get_positions()
+    assert len(positions_b) == 1
+    assert positions_b[0].symbol == "AAPL"
+    assert positions_b[0].quantity == positions_a[0].quantity
+    assert positions_b[0].stop_loss_price == Decimal("9.5")
+
+    # Reconcile in paper mode must produce zero diffs on the restarted broker.
+    result = _reconcile(journal=j_b, broker=broker_b, broker_mode="paper")
+    assert result.diffs == []
+    j_b.close()

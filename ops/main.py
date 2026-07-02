@@ -16,7 +16,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from ops import build_guarded_paper_broker, build_guarded_robinhood_broker
+from ops import (
+    build_guarded_paper_broker_from_journal,
+    build_guarded_robinhood_broker,
+)
 from ops.config import OpsConfig, load_config
 from ops.journal import Journal
 from ops.position_guardian import PositionGuardian
@@ -35,12 +38,11 @@ def _shutdown_handler(signum, frame) -> None:
 def _build_broker(config: OpsConfig, journal: Journal):
     """Construct the guarded broker for the configured mode.
 
-    Paper starts with a fixed $250 (matches the user's account posture);
-    the orchestrator does not need starting_cash for RH because live cash
-    comes from the MCP.
+    Paper mode rebuilds the inner PaperBroker from the journal (via
+    build_guarded_paper_broker_from_journal) so a restarted ops run
+    picks up prior positions and cash. Robinhood mode reads live state
+    from the MCP.
     """
-    # A quote source is required for the paper factory; the orchestrator
-    # gets the same source via the guarded broker.
     from ops.quotes import make_yfinance_quote_source
     quote_source = make_yfinance_quote_source()
 
@@ -57,7 +59,7 @@ def _build_broker(config: OpsConfig, journal: Journal):
             config=config, journal=journal,
             start_of_day_equity=_sod, start_of_week_equity=_sow,
         )
-    return build_guarded_paper_broker(
+    return build_guarded_paper_broker_from_journal(
         config=config, journal=journal,
         quote_source=quote_source,
         starting_cash=Decimal("250"),
@@ -131,6 +133,14 @@ def run() -> int:
         broker = _build_broker(config, journal)
         orchestrator, guardian, calendar = _wire(broker, journal, config)
         result = reconcile(journal=journal, broker=broker, broker_mode=config.broker_mode)
+        if result.positions_recovered_without_stops:
+            print(
+                "WARNING: "
+                f"{len(result.positions_recovered_without_stops)} position(s) "
+                "opened without recorded stops — guardian will use config "
+                f"fallback: {result.positions_recovered_without_stops}",
+                file=sys.stderr,
+            )
         if result.diffs:
             _emit_halt_events(journal, result)
             print(

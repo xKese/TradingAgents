@@ -90,6 +90,35 @@ def build_guarded_paper_broker(
     return GuardedBroker(inner=inner, engine=engine, journal=journal, config=config)
 
 
+def build_guarded_paper_broker_from_journal(
+    *,
+    config: OpsConfig,
+    journal: Journal,
+    quote_source: Callable[[str], Decimal],
+    starting_cash: Decimal,
+    start_of_day_equity: EquityFn,
+    start_of_week_equity: EquityFn,
+) -> GuardedBroker:
+    """Like build_guarded_paper_broker, but the inner PaperBroker is
+    rebuilt from the journal via PaperBroker.from_journal so a restarted
+    ops run picks up prior positions + cash. Recovered positions carry
+    their per-position stop from the most recent journaled BUY when
+    available; the reconciler surfaces any remaining stopless symbols
+    via the positions_recovered_without_stops event."""
+    inner = PaperBroker.from_journal(
+        journal=journal,
+        quote_source=quote_source,
+        starting_cash=starting_cash,
+    )
+    engine = RuleEngine(
+        build_default_rule_chain(
+            start_of_day_equity=start_of_day_equity,
+            start_of_week_equity=start_of_week_equity,
+        )
+    )
+    return GuardedBroker(inner=inner, engine=engine, journal=journal, config=config)
+
+
 def build_guarded_robinhood_broker(
     *,
     config: OpsConfig,
@@ -123,5 +152,6 @@ __all__ = [
     "GuardedBroker",
     "build_default_rule_chain",
     "build_guarded_paper_broker",
+    "build_guarded_paper_broker_from_journal",
     "build_guarded_robinhood_broker",
 ]

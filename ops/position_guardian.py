@@ -31,12 +31,30 @@ class PositionGuardian:
         broker: GuardedBroker,
         quote_source: Callable[[str], Decimal],
         config: OpsConfig,
+        journal=None,
+        broker_mode: str = "paper",
     ):
         self._broker = broker
         self._quote = quote_source
         self._cfg = config
+        self._journal = journal if journal is not None else broker.journal
+        self._broker_mode = broker_mode
 
     def check_stops_once(self) -> list[StopAction]:
+        """Scheduler-safe wrapper: any unexpected exception is journaled
+        as guardian_check_error and swallowed, so the APScheduler job
+        keeps running. The guardian is the last line of defence on real
+        money — a silent crash here would leave positions unprotected."""
+        try:
+            return self._check_stops_once_impl()
+        except Exception as exc:
+            self._journal.record_event(
+                "guardian_check_error",
+                {"error": f"{type(exc).__name__}: {exc}"},
+            )
+            return []
+
+    def _check_stops_once_impl(self) -> list[StopAction]:
         actions: list[StopAction] = []
         for pos in self._broker.get_positions():
             try:
@@ -111,4 +129,36 @@ class PositionGuardian:
                 current=current, pct=pct, sold=True,
                 reason=f"stop hit at {pct} ({mode} {threshold_repr})",
             ))
+        self._maybe_trip_kill_switch()
         return actions
+
+    def _maybe_trip_kill_switch(self) -> None:
+        snap = self._journal.get_latest_equity_snapshot(kind="open_week")
+        if snap is None:
+            return
+        equity_now = self._broker.get_equity()
+        weekly_pct = (equity_now - snap.equity) / snap.equity
+        if weekly_pct > self._cfg.weekly_drawdown_pct:
+            return
+        # Idempotency: don't fire twice in the same week.
+        if self._journal.has_event_since_last_monday("kill_switch"):
+            return
+        self._journal.record_event(
+            "kill_switch",
+            {
+                "mode": self._broker_mode,
+                "equity_now": str(equity_now),
+                "equity_open_week": str(snap.equity),
+                "pct": str(weekly_pct),
+                "threshold": str(self._cfg.weekly_drawdown_pct),
+            },
+        )
+        if self._broker_mode == "paper":
+            for pos in list(self._broker.get_positions()):
+                try:
+                    self._broker.close_position(pos.symbol)
+                except Exception as exc:
+                    self._journal.record_event(
+                        "kill_switch_close_failed",
+                        {"symbol": pos.symbol, "error": f"{type(exc).__name__}: {exc}"},
+                    )

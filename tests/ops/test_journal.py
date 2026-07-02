@@ -130,3 +130,102 @@ def test_context_manager_closes_connection(tmp_path):
     j2 = Journal(path)
     assert len(j2.read_events()) == 1
     j2.close()
+
+
+def test_fills_gain_stop_loss_price_column(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    ts = datetime(2026, 7, 2, 14, tzinfo=timezone.utc)
+    j.record_fill(
+        order_id="o-1", client_order_id="c-1", symbol="AAPL",
+        side="BUY", quantity=Decimal("5"), price=Decimal("10"),
+        filled_at=ts, stop_loss_price=Decimal("9.2"),
+    )
+    fills = j.read_fills()
+    assert fills[0]["stop_loss_price"] == Decimal("9.2")
+
+
+def test_record_fill_stop_loss_price_default_none(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    ts = datetime(2026, 7, 2, 14, tzinfo=timezone.utc)
+    j.record_fill(
+        order_id="o-1", client_order_id="c-1", symbol="AAPL",
+        side="SELL", quantity=Decimal("5"), price=Decimal("10"),
+        filled_at=ts,
+    )
+    assert j.read_fills()[0]["stop_loss_price"] is None
+
+
+def test_last_buy_fill_for_returns_most_recent_buy(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    older = datetime(2026, 6, 30, tzinfo=timezone.utc)
+    newer = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    j.record_fill(order_id="o-1", client_order_id="c-1", symbol="AAPL",
+                  side="BUY", quantity=Decimal("5"), price=Decimal("10"),
+                  filled_at=older, stop_loss_price=Decimal("9"))
+    j.record_fill(order_id="o-2", client_order_id="c-2", symbol="AAPL",
+                  side="BUY", quantity=Decimal("3"), price=Decimal("11"),
+                  filled_at=newer, stop_loss_price=Decimal("10.1"))
+    last = j.last_buy_fill_for("AAPL")
+    assert last["stop_loss_price"] == Decimal("10.1")
+    assert last["filled_at"] == newer
+
+
+def test_last_buy_fill_for_none_when_missing(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    assert j.last_buy_fill_for("AAPL") is None
+
+
+def test_last_buy_fill_for_ignores_sells(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    ts = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    j.record_fill(order_id="o-1", client_order_id="c-1", symbol="AAPL",
+                  side="SELL", quantity=Decimal("5"), price=Decimal("10"),
+                  filled_at=ts)
+    assert j.last_buy_fill_for("AAPL") is None
+
+
+def test_has_event_today_true_when_event_today(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    j.record_event("daily_halt", {"reason": "drawdown"})
+    now = datetime.now(timezone.utc)
+    assert j.has_event_today("daily_halt", now=now) is True
+
+
+def test_has_event_today_false_when_no_event_today(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    now = datetime.now(timezone.utc)
+    assert j.has_event_today("daily_halt", now=now) is False
+
+
+def test_has_event_since_last_monday_true(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    j.record_event("kill_switch", {"reason": "weekly"})
+    # 2026-07-02 is a Thursday; last Monday is 2026-06-29.
+    now = datetime(2026, 7, 2, 15, tzinfo=timezone.utc)
+    assert j.has_event_since_last_monday("kill_switch", now=now) is True
+
+
+def test_migrates_pre_existing_fills_without_stop_column(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.sqlite")
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE fills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            client_order_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity TEXT NOT NULL,
+            price TEXT NOT NULL,
+            filled_at TEXT NOT NULL
+        );
+    """)
+    conn.close()
+    j = Journal(path)
+    ts = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    j.record_fill(order_id="o-1", client_order_id="c-1", symbol="AAPL",
+                  side="BUY", quantity=Decimal("1"), price=Decimal("10"),
+                  filled_at=ts, stop_loss_price=Decimal("9"))
+    assert j.read_fills()[0]["stop_loss_price"] == Decimal("9")

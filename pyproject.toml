@@ -9,6 +9,7 @@ description = "TradingAgents: Multi-Agents LLM Financial Trading Framework"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "apscheduler>=3.10",
     "langchain-core>=0.3.81",
     "backtrader>=1.9.78.123",
     "langchain-anthropic>=0.3.15",
@@ -19,6 +20,7 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "mcp>=1.0",
     "pandas>=2.3.0",
+    "pandas_market_calendars>=4.4",
     "parsel>=1.10.0",
     "python-dotenv>=1.0.0",
     "pytz>=2025.2",

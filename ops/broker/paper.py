@@ -28,8 +28,11 @@ class PaperBroker(Broker):
     ) -> "PaperBroker":
         """Rebuild in-memory state by replaying fills from the journal.
 
-        stop_loss_price is not persisted on fills; recovered positions come
-        back with stop_loss_price=None (guardian falls back to config).
+        stop_loss_price is journaled on each BUY fill (see PaperBroker._make_fill /
+        _fill_buy). After the replay loop rebuilds positions, each symbol's stop
+        is rehydrated from its most recent BUY fill via journal.last_buy_fill_for.
+        Positions with no journaled stop (e.g. legacy fills predating this) still
+        come back with stop_loss_price=None (guardian falls back to config).
 
         Cash is reconstructed from each fill's matching order's
         notional_dollars (looked up by client_order_id) rather than
@@ -41,12 +44,12 @@ class PaperBroker(Broker):
         journals a journal_replay_fallback event when it is, so an ops
         engineer can see the journal is missing an order row for a fill.
 
-        This is also the seam where we detect recovered positions that
-        carry no per-position stop_loss_price (see I4): unlike
-        RobinhoodBroker.get_positions(), which is called on every routine
-        poll and would spam this event, from_journal only runs once at
-        process start, so it is the natural place to emit a one-shot
-        recovery warning."""
+        Detection of recovered positions without a per-position
+        stop_loss_price is intentionally NOT emitted here — the
+        reconciler (ops.reconcile.emit_reconcile_events) is the single
+        source of truth for the `positions_recovered_without_stops`
+        event so paper mode doesn't get a duplicate emission on every
+        startup."""
         broker = cls(journal=journal, quote_source=quote_source, starting_cash=starting_cash)
         orders_by_id = {o["client_order_id"]: o for o in journal.read_orders()}
         for f in journal.read_fills():
@@ -103,15 +106,19 @@ class PaperBroker(Broker):
                     )
                 else:
                     del broker._positions[symbol]
-        unstopped = sorted(
-            symbol for symbol, pos in broker._positions.items()
-            if pos.stop_loss_price is None
-        )
-        if unstopped:
-            journal.record_event(
-                "positions_recovered_without_stops",
-                {"symbols": unstopped, "count": len(unstopped)},
-            )
+        new_positions = {}
+        for symbol, pos in broker._positions.items():
+            last_buy = journal.last_buy_fill_for(symbol)
+            if last_buy is not None and last_buy["stop_loss_price"] is not None:
+                new_positions[symbol] = Position(
+                    symbol=pos.symbol,
+                    quantity=pos.quantity,
+                    avg_entry_price=pos.avg_entry_price,
+                    stop_loss_price=last_buy["stop_loss_price"],
+                )
+            else:
+                new_positions[symbol] = pos
+        broker._positions = new_positions
         return broker
 
     def get_cash(self) -> Decimal:
@@ -168,7 +175,7 @@ class PaperBroker(Broker):
                 stop_loss_price=order.stop_loss_price or existing.stop_loss_price,
             )
         self._positions[order.symbol] = new_pos
-        return self._make_fill(order, qty, price)
+        return self._make_fill(order, qty, price, stop_loss_price=new_pos.stop_loss_price)
 
     def close_position(self, symbol: str, *, client_order_id: str | None = None) -> Fill:
         existing = self._positions.get(symbol)
@@ -227,7 +234,10 @@ class PaperBroker(Broker):
             del self._positions[order.symbol]
         return self._make_fill(order, qty_to_sell, price)
 
-    def _make_fill(self, order: Order, qty: Decimal, price: Decimal) -> Fill:
+    def _make_fill(
+        self, order: Order, qty: Decimal, price: Decimal,
+        *, stop_loss_price: Decimal | None = None,
+    ) -> Fill:
         fill = Fill(
             order_id=str(uuid4()),
             client_order_id=order.client_order_id,
@@ -245,5 +255,6 @@ class PaperBroker(Broker):
             quantity=fill.quantity,
             price=fill.price,
             filled_at=fill.filled_at,
+            stop_loss_price=stop_loss_price,
         )
         return fill

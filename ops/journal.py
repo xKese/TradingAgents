@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS fills (
     side TEXT NOT NULL,
     quantity TEXT NOT NULL,
     price TEXT NOT NULL,
-    filled_at TEXT NOT NULL
+    filled_at TEXT NOT NULL,
+    stop_loss_price TEXT
 );
 
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -100,6 +101,12 @@ class Journal:
             "CREATE INDEX IF NOT EXISTS idx_equity_kind_at ON equity_snapshots (kind, at)"
         )
 
+        # Defensive migration for DBs created before stop_loss_price existed.
+        cur = self._conn.execute("PRAGMA table_info(fills)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "stop_loss_price" not in cols:
+            self._conn.execute("ALTER TABLE fills ADD COLUMN stop_loss_price TEXT")
+
     def record_event(self, kind: str, payload: dict[str, Any]) -> None:
         self._conn.execute(
             "INSERT INTO events (at, kind, payload) VALUES (?, ?, ?)",
@@ -145,19 +152,21 @@ class Journal:
     def record_fill(
         self, *, order_id: str, client_order_id: str, symbol: str, side: str,
         quantity: Decimal, price: Decimal, filled_at: datetime,
+        stop_loss_price: Decimal | None = None,
     ) -> None:
         self._conn.execute(
-            "INSERT INTO fills (at, order_id, client_order_id, symbol, side, quantity, price, filled_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO fills (at, order_id, client_order_id, symbol, side, quantity, price, filled_at, stop_loss_price)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 _now_iso(), order_id, client_order_id, symbol, side,
                 str(quantity), str(price), _to_iso(filled_at),
+                str(stop_loss_price) if stop_loss_price is not None else None,
             ),
         )
 
     def read_fills(self) -> list[dict[str, Any]]:
         cur = self._conn.execute(
-            "SELECT at, order_id, client_order_id, symbol, side, quantity, price, filled_at"
+            "SELECT at, order_id, client_order_id, symbol, side, quantity, price, filled_at, stop_loss_price"
             " FROM fills ORDER BY id"
         )
         return [
@@ -166,9 +175,45 @@ class Journal:
                 "client_order_id": row[2], "symbol": row[3], "side": row[4],
                 "quantity": Decimal(row[5]), "price": Decimal(row[6]),
                 "filled_at": _from_iso(row[7]),
+                "stop_loss_price": Decimal(row[8]) if row[8] is not None else None,
             }
             for row in cur
         ]
+
+    def last_buy_fill_for(self, symbol: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT at, order_id, client_order_id, symbol, side, quantity, price, filled_at, stop_loss_price"
+            " FROM fills WHERE symbol = ? AND side = 'BUY' ORDER BY filled_at DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "at": _from_iso(row[0]), "order_id": row[1],
+            "client_order_id": row[2], "symbol": row[3], "side": row[4],
+            "quantity": Decimal(row[5]), "price": Decimal(row[6]),
+            "filled_at": _from_iso(row[7]),
+            "stop_loss_price": Decimal(row[8]) if row[8] is not None else None,
+        }
+
+    def has_event_today(self, kind: str, *, now: datetime | None = None) -> bool:
+        when = now if now is not None else datetime.now(timezone.utc)
+        start = when.replace(hour=0, minute=0, second=0, microsecond=0)
+        row = self._conn.execute(
+            "SELECT 1 FROM events WHERE kind = ? AND at >= ? LIMIT 1",
+            (kind, _to_iso(start)),
+        ).fetchone()
+        return row is not None
+
+    def has_event_since_last_monday(self, kind: str, *, now: datetime | None = None) -> bool:
+        when = now if now is not None else datetime.now(timezone.utc)
+        monday = when - timedelta(days=when.weekday())
+        monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        row = self._conn.execute(
+            "SELECT 1 FROM events WHERE kind = ? AND at >= ? LIMIT 1",
+            (kind, _to_iso(monday)),
+        ).fetchone()
+        return row is not None
 
     def record_equity_snapshot(
         self, *, kind: str, equity: Decimal, cash: Decimal,

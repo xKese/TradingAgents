@@ -56,6 +56,44 @@ class _MutableQuotes:
 
 
 @pytest.fixture
+def _broker_with_positions(tmp_path):
+    from ops.journal import Journal
+    from ops import build_guarded_paper_broker
+    from ops.config import OpsConfig
+
+    class _Q:
+        def __init__(self):
+            self._m = {}
+        def set(self, s, p): self._m[s] = p
+        def get(self, s): return self._m[s]
+
+    def _make(positions, weekly_open_equity):
+        j = Journal(str(tmp_path / "j.sqlite"))
+        quotes = _Q()
+        for symbol, entry, _stop, _notional in positions:
+            quotes.set(symbol, entry)
+        broker = build_guarded_paper_broker(
+            config=OpsConfig(), journal=j, quote_source=quotes.get,
+            starting_cash=Decimal("500"),
+            start_of_day_equity=lambda: weekly_open_equity,
+            start_of_week_equity=lambda: weekly_open_equity,
+        )
+        for symbol, entry, stop, notional in positions:
+            broker.place_order(Order(
+                client_order_id=f"b-{symbol}", symbol=symbol, side=Side.BUY,
+                notional_dollars=notional, order_type=OrderType.MARKET,
+                stop_loss_price=stop,
+            ))
+        from datetime import datetime, timezone
+        j.record_equity_snapshot(
+            kind="open_week", equity=weekly_open_equity, cash=Decimal("500"),
+            at=datetime(2026, 6, 29, 13, 30, tzinfo=timezone.utc),
+        )
+        return broker, quotes, OpsConfig(), j
+    return _make
+
+
+@pytest.fixture
 def guardian_fixtures(tmp_path):
     """(broker, quotes, cfg) — cfg.per_position_stop_pct defaults to -0.08."""
     j = Journal(str(tmp_path / "j.sqlite"))
@@ -291,6 +329,75 @@ def test_guardian_falls_back_to_config_pct_when_no_position_stop(guardian_fixtur
     assert guardian.check_stops_once()[0].sold is False
     quotes.set("MSFT", Decimal("91.5"))   # -8.5%, past threshold
     assert guardian.check_stops_once()[0].sold is True
+
+
+def test_kill_switch_paper_mode_closes_all_positions(_broker_with_positions):
+    """Paper mode: guardian trips kill_switch and closes every open position.
+
+    Notional is capped at 10% of equity ($50 on $500) by PerPositionCapRule,
+    so two $50 positions are used (not the brief's $50/$100 split, which
+    would violate the cap). Stops are set loose (well below the target
+    quotes) so neither position closes via the ordinary per-position stop
+    pass — the closes below are exercised via the kill-switch path only.
+    AAPL 10->2 (-$40) and MSFT 100->20 (-$40) drop equity from $500 to
+    $420, a -16% weekly move, past the -15% default threshold.
+    """
+    broker, quotes, cfg, journal = _broker_with_positions(
+        [("AAPL", Decimal("10"), Decimal("0.50"), Decimal("50")),
+         ("MSFT", Decimal("100"), Decimal("5"), Decimal("50"))],
+        weekly_open_equity=Decimal("500"),
+    )
+    quotes.set("AAPL", Decimal("2"))
+    quotes.set("MSFT", Decimal("20"))
+    guardian = PositionGuardian(
+        broker=broker, quote_source=quotes.get, config=cfg,
+        journal=journal, broker_mode="paper",
+    )
+    guardian.check_stops_once()
+    assert broker.get_positions() == []
+    events = journal.read_events()
+    assert any(e["kind"] == "kill_switch" for e in events)
+
+
+def test_kill_switch_live_mode_halts_only(_broker_with_positions):
+    """Live mode: guardian trips kill_switch but does NOT close positions.
+
+    Same two-position, -16% setup as the paper-mode test above (a single
+    $50 position out of $500 equity can only ever lose 10% given the
+    per-position cap, so a lone AAPL position can never breach -15%).
+    """
+    broker, quotes, cfg, journal = _broker_with_positions(
+        [("AAPL", Decimal("10"), Decimal("0.50"), Decimal("50")),
+         ("MSFT", Decimal("100"), Decimal("5"), Decimal("50"))],
+        weekly_open_equity=Decimal("500"),
+    )
+    quotes.set("AAPL", Decimal("2"))
+    quotes.set("MSFT", Decimal("20"))
+    guardian = PositionGuardian(
+        broker=broker, quote_source=quotes.get, config=cfg,
+        journal=journal, broker_mode="robinhood",
+    )
+    guardian.check_stops_once()
+    # Positions remain; kill_switch event was still journaled.
+    assert len(broker.get_positions()) == 2
+    events = journal.read_events()
+    assert any(e["kind"] == "kill_switch" for e in events)
+
+
+def test_kill_switch_not_tripped_when_within_threshold(_broker_with_positions):
+    broker, quotes, cfg, journal = _broker_with_positions(
+        [("AAPL", Decimal("10"), Decimal("9"), Decimal("50"))],
+        weekly_open_equity=Decimal("500"),
+    )
+    # Small drop only (-5%): does NOT trip.
+    quotes.set("AAPL", Decimal("9.5"))
+    guardian = PositionGuardian(
+        broker=broker, quote_source=quotes.get, config=cfg,
+        journal=journal, broker_mode="paper",
+    )
+    guardian.check_stops_once()
+    events = journal.read_events()
+    assert not any(e["kind"] == "kill_switch" for e in events)
 
 
 def test_guardian_records_stop_hit_with_mode_and_threshold(guardian_fixtures):

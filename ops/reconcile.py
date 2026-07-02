@@ -1,7 +1,7 @@
 """Startup state reconciliation between journal replay and live broker."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -26,6 +26,7 @@ class ReconcileResult:
     cash_journal: Decimal
     cash_broker: Decimal
     cash_diff: Decimal
+    positions_recovered_without_stops: list[str] = field(default_factory=list)
 
 
 def reconcile(*, journal: Journal, broker: Any, broker_mode: str) -> ReconcileResult:
@@ -63,10 +64,16 @@ def reconcile(*, journal: Journal, broker: Any, broker_mode: str) -> ReconcileRe
     cash_journal = replay.get_cash()
     cash_broker = broker.get_cash()
     cash_diff = cash_broker - cash_journal
+
+    positions_recovered_without_stops = sorted(
+        p.symbol for p in broker.get_positions() if p.stop_loss_price is None
+    )
+
     return ReconcileResult(
         diffs=diffs,
         cash_journal=cash_journal, cash_broker=cash_broker,
         cash_diff=cash_diff,
+        positions_recovered_without_stops=positions_recovered_without_stops,
     )
 
 
@@ -88,4 +95,9 @@ def emit_reconcile_events(journal: Journal, result: ReconcileResult) -> None:
                 "cash_broker": str(result.cash_broker),
                 "cash_diff": str(result.cash_diff),
             },
+        )
+    if result.positions_recovered_without_stops:
+        journal.record_event(
+            "positions_recovered_without_stops",
+            {"symbols": result.positions_recovered_without_stops},
         )

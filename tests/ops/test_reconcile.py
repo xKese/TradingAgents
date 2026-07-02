@@ -113,3 +113,37 @@ def test_emit_reconcile_events_writes_inconsistency_when_diffs(tmp_path):
     events = j.read_events()
     kinds = [e["kind"] for e in events]
     assert "inconsistency" in kinds
+
+
+def test_reconcile_populates_positions_recovered_without_stops(tmp_path):
+    """A live position with no matching journal BUY comes back with
+    stop_loss_price=None from RobinhoodBroker.get_positions(); reconcile()
+    must surface that symbol in positions_recovered_without_stops."""
+    from tests.ops.broker.fakes import FakeMCPClient
+    from ops import build_guarded_robinhood_broker
+    j = Journal(str(tmp_path / "j.sqlite"))
+    client = FakeMCPClient(cash=Decimal("500"))
+    client.seed_position("NVDA", Decimal("1"), Decimal("500"))
+    broker = build_guarded_robinhood_broker(
+        config=OpsConfig(broker_mode="robinhood"), journal=j,
+        mcp_client=client,
+        start_of_day_equity=lambda: Decimal("500"),
+        start_of_week_equity=lambda: Decimal("500"),
+    )
+    result = reconcile(journal=j, broker=broker, broker_mode="robinhood")
+    assert result.positions_recovered_without_stops == ["NVDA"]
+
+
+def test_emit_reconcile_events_writes_positions_recovered_without_stops(tmp_path):
+    j = Journal(str(tmp_path / "j.sqlite"))
+    result = ReconcileResult(
+        diffs=[],
+        cash_journal=Decimal("100"), cash_broker=Decimal("100"),
+        cash_diff=Decimal("0"),
+        positions_recovered_without_stops=["NVDA"],
+    )
+    emit_reconcile_events(j, result)
+    events = j.read_events()
+    matching = [e for e in events if e["kind"] == "positions_recovered_without_stops"]
+    assert len(matching) == 1
+    assert matching[0]["payload"]["symbols"] == ["NVDA"]

@@ -6,6 +6,7 @@ import pytest
 from ops.scheduler.orchestrator import Orchestrator
 from ops.broker.types import Order, OrderType, Side
 from ops.broker.base import OrderRejected, BrokerError
+from ops.strategy.base import StrategyOrder
 
 
 def _fake_calendar(is_open: bool):
@@ -14,29 +15,18 @@ def _fake_calendar(is_open: bool):
     return cal
 
 
-def _fake_pipeline(decision_by_symbol: dict[str, str]):
-    pa = MagicMock()
-    def _propagate(symbol, d):
-        result = MagicMock()
-        result.action = decision_by_symbol.get(symbol, "HOLD")
-        return result
-    pa.propagate.side_effect = _propagate
-    return pa
+def _fake_pipeline():
+    return MagicMock()
 
 
-def _fake_strategy(candidates, buy_order_by_symbol):
+def _fake_strategy(propose_orders_return):
     strat = MagicMock()
-    strat.rank.return_value = candidates
-    def _build(candidate, decision):
-        return buy_order_by_symbol[candidate.symbol]
-    strat.build_order.side_effect = _build
+    strat.propose_orders.return_value = propose_orders_return
     return strat
 
 
 def _fake_universe(symbols):
-    ub = MagicMock()
-    ub.build.return_value = set(symbols)
-    return ub
+    return MagicMock(return_value=[MagicMock(symbol=s) for s in symbols])
 
 
 def _fake_broker(positions=None, equity=Decimal("1000"), cash=Decimal("500")):
@@ -55,13 +45,22 @@ def _order(symbol):
     )
 
 
+def _strategy_order(symbol):
+    return StrategyOrder(
+        order=_order(symbol),
+        reason="test",
+        candidate=MagicMock(symbol=symbol),
+        pipeline=MagicMock(),
+    )
+
+
 def test_tick_market_closed_noop(tmp_path):
     from ops.journal import Journal
     j = Journal(str(tmp_path / "j.sqlite"))
     broker = _fake_broker()
     orch = Orchestrator(
         broker=broker, universe_builder=_fake_universe([]),
-        strategy=_fake_strategy([], {}), pipeline_adapter=_fake_pipeline({}),
+        strategy=_fake_strategy([]), pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=False), journal=j,
         config=MagicMock(),
     )
@@ -77,11 +76,11 @@ def test_tick_journals_orchestrator_tick_error_on_unexpected_exception(tmp_path)
     j = Journal(str(tmp_path / "j.sqlite"))
     broker = _fake_broker()
     universe = _fake_universe(["AAPL"])
-    universe.build.side_effect = RuntimeError("boom")
+    universe.side_effect = RuntimeError("boom")
     orch = Orchestrator(
         broker=broker, universe_builder=universe,
-        strategy=_fake_strategy([MagicMock(symbol="AAPL")], {"AAPL": _order("AAPL")}),
-        pipeline_adapter=_fake_pipeline({"AAPL": "BUY"}),
+        strategy=_fake_strategy([_strategy_order("AAPL")]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
@@ -92,7 +91,7 @@ def test_tick_journals_orchestrator_tick_error_on_unexpected_exception(tmp_path)
     assert "boom" in err_events[0]["payload"]["error"]
 
 
-def test_tick_places_buy_when_pipeline_says_buy(tmp_path):
+def test_tick_places_buy_when_strategy_proposes_order(tmp_path):
     from ops.journal import Journal
     from ops.config import OpsConfig
     j = Journal(str(tmp_path / "j.sqlite"))
@@ -100,8 +99,8 @@ def test_tick_places_buy_when_pipeline_says_buy(tmp_path):
     orch = Orchestrator(
         broker=broker,
         universe_builder=_fake_universe(["AAPL"]),
-        strategy=_fake_strategy([MagicMock(symbol="AAPL")], {"AAPL": _order("AAPL")}),
-        pipeline_adapter=_fake_pipeline({"AAPL": "BUY"}),
+        strategy=_fake_strategy([_strategy_order("AAPL")]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
@@ -111,7 +110,9 @@ def test_tick_places_buy_when_pipeline_says_buy(tmp_path):
     assert placed.symbol == "AAPL"
 
 
-def test_tick_skips_hold(tmp_path):
+def test_tick_skips_when_strategy_proposes_nothing(tmp_path):
+    """Real Strategy filters non-BUY decisions internally via pipeline.propagate;
+    the orchestrator just sees an empty proposal list."""
     from ops.journal import Journal
     from ops.config import OpsConfig
     j = Journal(str(tmp_path / "j.sqlite"))
@@ -119,8 +120,8 @@ def test_tick_skips_hold(tmp_path):
     orch = Orchestrator(
         broker=broker,
         universe_builder=_fake_universe(["AAPL"]),
-        strategy=_fake_strategy([MagicMock(symbol="AAPL")], {"AAPL": _order("AAPL")}),
-        pipeline_adapter=_fake_pipeline({"AAPL": "HOLD"}),
+        strategy=_fake_strategy([]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
@@ -138,11 +139,8 @@ def test_tick_continues_after_rule_reject(tmp_path):
     orch = Orchestrator(
         broker=broker,
         universe_builder=_fake_universe(["AAPL", "MSFT"]),
-        strategy=_fake_strategy(
-            [MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT")],
-            {"AAPL": _order("AAPL"), "MSFT": _order("MSFT")},
-        ),
-        pipeline_adapter=_fake_pipeline({"AAPL": "BUY", "MSFT": "BUY"}),
+        strategy=_fake_strategy([_strategy_order("AAPL"), _strategy_order("MSFT")]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
@@ -159,11 +157,8 @@ def test_tick_breaks_on_broker_error(tmp_path):
     orch = Orchestrator(
         broker=broker,
         universe_builder=_fake_universe(["AAPL", "MSFT"]),
-        strategy=_fake_strategy(
-            [MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT")],
-            {"AAPL": _order("AAPL"), "MSFT": _order("MSFT")},
-        ),
-        pipeline_adapter=_fake_pipeline({"AAPL": "BUY", "MSFT": "BUY"}),
+        strategy=_fake_strategy([_strategy_order("AAPL"), _strategy_order("MSFT")]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
@@ -178,7 +173,7 @@ def test_maybe_snapshot_equity_writes_open_day_once(tmp_path):
     broker = _fake_broker(equity=Decimal("1000"), cash=Decimal("500"))
     orch = Orchestrator(
         broker=broker, universe_builder=_fake_universe([]),
-        strategy=_fake_strategy([], {}), pipeline_adapter=_fake_pipeline({}),
+        strategy=_fake_strategy([]), pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
@@ -201,13 +196,13 @@ def test_tick_shortcircuits_on_daily_halt(tmp_path):
     universe = _fake_universe(["AAPL"])
     orch = Orchestrator(
         broker=broker, universe_builder=universe,
-        strategy=_fake_strategy([MagicMock(symbol="AAPL")], {"AAPL": _order("AAPL")}),
-        pipeline_adapter=_fake_pipeline({"AAPL": "BUY"}),
+        strategy=_fake_strategy([_strategy_order("AAPL")]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
     orch.tick()
-    universe.build.assert_not_called()
+    universe.assert_not_called()
     broker.place_order.assert_not_called()
 
 
@@ -220,11 +215,11 @@ def test_tick_shortcircuits_on_weekly_kill_switch(tmp_path):
     universe = _fake_universe(["AAPL"])
     orch = Orchestrator(
         broker=broker, universe_builder=universe,
-        strategy=_fake_strategy([MagicMock(symbol="AAPL")], {"AAPL": _order("AAPL")}),
-        pipeline_adapter=_fake_pipeline({"AAPL": "BUY"}),
+        strategy=_fake_strategy([_strategy_order("AAPL")]),
+        pipeline_adapter=_fake_pipeline(),
         calendar=_fake_calendar(is_open=True), journal=j,
         config=OpsConfig(),
     )
     orch.tick()
-    universe.build.assert_not_called()
+    universe.assert_not_called()
     broker.place_order.assert_not_called()

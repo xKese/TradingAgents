@@ -10,9 +10,7 @@ from __future__ import annotations
 import signal
 import sys
 import threading
-from datetime import date
 from decimal import Decimal
-from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -67,28 +65,16 @@ def _build_broker(config: OpsConfig, journal: Journal):
     )
 
 
-class _UniverseBuilder:
-    """Adapter — wraps ops.universe.build_universe() into the .build()
-    interface Orchestrator expects. build_universe() needs asof_date and
-    config, so those are captured here and supplied at call time."""
-
-    def __init__(self, config: OpsConfig):
-        self._config = config
-
-    def build(self):
-        from ops.universe import build_universe
-        return build_universe(asof_date=date.today(), config=self._config)
-
-
 def _wire(broker, journal: Journal, config: OpsConfig):
     """Wire the orchestrator + guardian + calendar for the given broker+config."""
     from ops.strategy.post_earnings_momentum import PostEarningsMomentumStrategy
     from ops.pipeline_adapter import TradingAgentsPipelineAdapter
+    from ops.universe import build_universe
 
     calendar = MarketCalendar()
     orchestrator = Orchestrator(
         broker=broker,
-        universe_builder=_UniverseBuilder(config),
+        universe_builder=build_universe,
         strategy=PostEarningsMomentumStrategy(config=config),
         pipeline_adapter=TradingAgentsPipelineAdapter(),
         calendar=calendar, journal=journal, config=config,
@@ -105,8 +91,7 @@ def _emit_halt_events(journal: Journal, result: ReconcileResult) -> None:
     journal.record_event("startup_halted", {"reason": "reconciliation"})
 
 
-def _start_full_scheduler(orchestrator: Orchestrator, guardian: PositionGuardian,
-                          calendar: MarketCalendar) -> BackgroundScheduler:
+def _start_full_scheduler(orchestrator: Orchestrator, guardian: PositionGuardian) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
         orchestrator.tick,
@@ -122,7 +107,7 @@ def _start_full_scheduler(orchestrator: Orchestrator, guardian: PositionGuardian
     return sched
 
 
-def _start_guardian_only(guardian: PositionGuardian, calendar: MarketCalendar) -> BackgroundScheduler:
+def _start_guardian_only(guardian: PositionGuardian) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
         guardian.check_stops_once,
@@ -153,11 +138,11 @@ def run() -> int:
                 "Guardian continues. Investigate journal 'inconsistency' events.",
                 file=sys.stderr,
             )
-            sched = _start_guardian_only(guardian, calendar)
+            sched = _start_guardian_only(guardian)
             _run_until_signal()
             sched.shutdown(wait=True)
             return 2
-        sched = _start_full_scheduler(orchestrator, guardian, calendar)
+        sched = _start_full_scheduler(orchestrator, guardian)
         _run_until_signal()
         sched.shutdown(wait=True)
         return 0

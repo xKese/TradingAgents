@@ -1,7 +1,7 @@
 """Orchestrator tick handler — called by APScheduler at :00/:30 during trading hours."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ops.broker.base import BrokerError, OrderRejected
 
@@ -34,16 +34,20 @@ class Orchestrator:
         self._maybe_snapshot_equity()
         if self._is_daily_halted() or self._is_weekly_halted():
             return
-        universe = self._universe_builder.build()
+        asof_date = datetime.now(timezone.utc).date()
+        candidates = self._universe_builder(asof_date=asof_date, config=self._config)
         held = {p.symbol for p in self._broker.get_positions()}
-        candidates = self._strategy.rank(universe - held)
-        for candidate in candidates:
-            decision = self._pipeline_adapter.propagate(candidate.symbol, self._today())
-            if decision.action != "BUY":
-                continue
-            order = self._strategy.build_order(candidate, decision)
+        fresh_candidates = [c for c in candidates if c.symbol not in held]
+        current_equity = self._broker.get_equity()
+        proposals = self._strategy.propose_orders(
+            candidates=fresh_candidates,
+            pipeline=self._pipeline_adapter,
+            current_equity=current_equity,
+            asof_date=asof_date,
+        )
+        for proposal in proposals:
             try:
-                self._broker.place_order(order)
+                self._broker.place_order(proposal.order)
             except OrderRejected:
                 continue
             except BrokerError:
@@ -64,7 +68,7 @@ class Orchestrator:
             )
         # Weekly snapshot at first tick of the week.
         weekday = now.weekday()
-        monday = now - _days(weekday)
+        monday = now - timedelta(days=weekday)
         monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
         existing_week = self._journal.get_latest_equity_snapshot(
             kind="open_week", since=monday,
@@ -82,11 +86,3 @@ class Orchestrator:
 
     def _is_weekly_halted(self) -> bool:
         return self._journal.has_event_since_last_monday("kill_switch")
-
-    def _today(self) -> str:
-        return datetime.now(timezone.utc).date().isoformat()
-
-
-def _days(n: int):
-    from datetime import timedelta
-    return timedelta(days=n)

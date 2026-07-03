@@ -137,6 +137,7 @@ def build_guarded_robinhood_broker(
     """
     from ops.broker.mcp_client import RealRobinhoodMCPClient
     from ops.broker.robinhood import RobinhoodBroker
+    from ops.live_gate import count_live_buy_fills
 
     client = mcp_client if mcp_client is not None else RealRobinhoodMCPClient()
     inner = RobinhoodBroker(client=client, journal=journal)
@@ -144,6 +145,7 @@ def build_guarded_robinhood_broker(
         build_default_rule_chain(
             start_of_day_equity=start_of_day_equity,
             start_of_week_equity=start_of_week_equity,
+            live_fill_count=lambda: count_live_buy_fills(journal),
         )
     )
     return GuardedBroker(inner=inner, engine=engine, journal=journal, config=config)

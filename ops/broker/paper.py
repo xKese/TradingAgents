@@ -157,10 +157,8 @@ class PaperBroker(Broker):
             symbol=order.symbol,
             side=order.side.value,
             notional_dollars=order.notional_dollars,
-            # The absolute stop is not knowable before the fill (it is
-            # entry-relative — see Order.stop_pct); only the fill row (and
-            # the Position rehydrated from it) ever carries a resolved
-            # absolute stop_loss_price.
+            # Not knowable before the fill — see Order.stop_pct docstring
+            # and _fill_buy below for why.
             stop_loss_price=None,
         )
         price = self._quote(order.symbol)
@@ -175,8 +173,10 @@ class PaperBroker(Broker):
         qty = cost / price
         self._cash -= cost
         # Resolve the stop from the ACTUAL fill price, never a stale
-        # reference — a gap between reference and fill can otherwise put an
-        # absolute stop on the wrong side of the fill (M2).
+        # pre-trade reference — a gap between reference and fill can
+        # otherwise put an absolute stop on the wrong side of the fill
+        # (M2). See Order.stop_pct for the full rationale; RobinhoodBroker
+        # applies the identical resolution at its own fill point.
         resolved_stop = (
             price * (Decimal("1") + order.stop_pct) if order.stop_pct is not None else None
         )

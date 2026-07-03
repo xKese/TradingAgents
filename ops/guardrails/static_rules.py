@@ -91,11 +91,14 @@ class LongOnlyRule(Rule):
     def check(self, ctx: RuleContext) -> RuleResult:
         if ctx.order.side != Side.SELL:
             return RuleResult.allow()
-        symbol = ctx.order.symbol
+        # Normalize both sides of the comparison — a case mismatch between
+        # order.symbol and the broker's Position.symbol must never cause a
+        # false over-sell rejection.
+        symbol = ctx.order.symbol.upper()
         quote = ctx.broker.get_quote(symbol)
         sell_qty = ctx.order.notional_dollars / quote
         held = next(
-            (p.quantity for p in ctx.broker.get_positions() if p.symbol == symbol),
+            (p.quantity for p in ctx.broker.get_positions() if p.symbol.upper() == symbol),
             Decimal("0"),
         )
         if sell_qty > held + _SELL_QTY_EPSILON:

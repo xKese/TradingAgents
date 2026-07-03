@@ -76,10 +76,8 @@ class RobinhoodBroker(Broker):
         self._journal.record_order(
             client_order_id=order.client_order_id, symbol=order.symbol,
             side=order.side.value, notional_dollars=order.notional_dollars,
-            # The absolute stop is not knowable before the fill (it is
-            # entry-relative — see Order.stop_pct); only the fill row (and
-            # the Position rehydrated from it) ever carries a resolved
-            # absolute stop_loss_price.
+            # Not knowable before the fill — see Order.stop_pct docstring
+            # and _ack_to_fill below for why (mirrors PaperBroker.place_order).
             stop_loss_price=None,
         )
         try:
@@ -164,8 +162,9 @@ class RobinhoodBroker(Broker):
             filled_at=datetime.now(timezone.utc),
         )
         # Resolve the stop from the ACTUAL fill price, never a stale
-        # reference — a gap between reference and fill can otherwise put an
-        # absolute stop on the wrong side of the fill (M2).
+        # pre-trade reference (see PaperBroker._fill_buy for the full
+        # rationale, M2) — identical resolution, applied here for the
+        # broker-ack path.
         resolved_stop = (
             ack.fill_price * (Decimal("1") + order.stop_pct)
             if order.stop_pct is not None else None

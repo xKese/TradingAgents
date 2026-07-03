@@ -8,6 +8,7 @@ from ops.broker.types import Order, OrderType, Side
 from ops.config import OpsConfig
 from ops.journal import Journal
 from ops.position_guardian import PositionGuardian
+from ops.trading_time import trading_week_start
 
 
 def _stack(tmp_path, *, starting_cash="250", quotes=None):
@@ -693,8 +694,10 @@ def test_kill_switch_ignores_stale_week_snapshot_and_rebaselines(tmp_path):
     kinds = [e["kind"] for e in j.read_events()]
     assert "kill_switch" not in kinds       # equity 250 vs stale 1000 must NOT trip
     assert len(guarded.get_positions()) == 1
-    monday = (now - timedelta(days=now.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0)
+    # Use the real ET-calendar boundary (matches what PositionGuardian
+    # itself uses, per M7) rather than re-implementing the old
+    # UTC-Monday-midnight formula inline.
+    monday = trading_week_start(now)
     fresh = [s for s in j.read_equity_snapshots()
              if s["kind"] == "open_week" and s["at"] >= monday]
     assert fresh, "guardian should have recorded a fresh weekly baseline"

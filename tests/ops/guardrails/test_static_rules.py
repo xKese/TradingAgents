@@ -142,6 +142,18 @@ def test_long_only_rejects_sell_with_no_position():
     order = _sell("AAPL", notional_dollars=Decimal("50"))
     assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is False
 
+def test_long_only_matches_held_position_case_insensitively():
+    """A lowercase-symbol SELL order must still match an uppercase-held
+    position (and vice versa) — a case mismatch between order.symbol and
+    the broker's Position.symbol must never cause a false over-sell
+    rejection."""
+    broker = _FakeBroker(
+        positions=[Position(symbol="AAPL", quantity=Decimal("1"), avg_entry_price=Decimal("100"))],
+        quotes={"AAPL": Decimal("100")},
+    )
+    order = _sell("aapl", notional_dollars=Decimal("100"))
+    assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is True
+
 def test_stop_attached_requires_stop_on_buy():
     o = Order(
         client_order_id="c", symbol="AAPL", side=Side.BUY,

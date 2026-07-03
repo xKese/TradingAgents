@@ -280,6 +280,12 @@ def test_run_exits_3_and_journals_on_broker_unreachable(monkeypatch, tmp_path, c
     assert "startup_halted" in kinds
     startup_halted = next(e for e in events if e["kind"] == "startup_halted")
     assert startup_halted["payload"]["reason"] == "broker_unreachable"
+    # The journaled broker_unreachable payload must carry only the exception
+    # TYPE name — never the raw str(exc), which can embed connection
+    # details — for consistency with the notify_dispatch_error sanitization.
+    broker_unreachable = next(e for e in events if e["kind"] == "broker_unreachable")
+    assert broker_unreachable["payload"] == {"error_type": "BrokerError"}
+    assert "connection refused" not in str(broker_unreachable["payload"])
     j.close()
 
     captured = capsys.readouterr()

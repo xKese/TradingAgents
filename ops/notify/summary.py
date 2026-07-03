@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from ops.trading_time import trading_day_start
+
 
 def emit_daily_summary(journal, broker, *, now: datetime | None = None) -> bool:
     when = now if now is not None else datetime.now(timezone.utc)
@@ -16,9 +18,13 @@ def emit_daily_summary(journal, broker, *, now: datetime | None = None) -> bool:
     day_pnl = (equity - start.equity) if start is not None else None
 
     day_str = when.date().isoformat()
+    # ET trading-day boundary, matching has_event_today's idempotency guard
+    # (M7): a UTC-calendar-date comparison mis-buckets fills recorded in the
+    # UTC-evening/ET-morning gap into the wrong trading day.
+    day_start = trading_day_start(when)
     fills_today = [
         f for f in journal.read_fills()
-        if f["at"].date() == when.date()
+        if f["at"] >= day_start
     ]
 
     pnl_txt = f"${day_pnl}" if day_pnl is not None else "n/a"

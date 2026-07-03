@@ -32,6 +32,7 @@ from ops.notify.config import load_notify_config
 from ops.notify.dispatcher import NotifyDispatcher
 from ops.notify.email import build_email_transport
 from ops.notify.push import build_push_transport
+from ops.notify.transport import DisabledTransport
 from ops.notify.summary import emit_daily_summary
 from ops.position_guardian import PositionGuardian
 from ops.reconcile import ReconcileResult, emit_reconcile_events, reconcile
@@ -209,10 +210,16 @@ def _build_dispatcher(journal: Journal) -> NotifyDispatcher:
     send), so this is safe to call unconditionally in both paper and live
     mode — no crash, no accidental delivery without creds."""
     cfg = load_notify_config()
-    transports = {
-        "push": build_push_transport(cfg),
-        "email": build_email_transport(cfg),
-    }
+    if not cfg.notify_enabled:
+        transports = {
+            "push": DisabledTransport("notify disabled: OPS_NOTIFY_ENABLED not set"),
+            "email": DisabledTransport("notify disabled: OPS_NOTIFY_ENABLED not set"),
+        }
+    else:
+        transports = {
+            "push": build_push_transport(cfg),
+            "email": build_email_transport(cfg),
+        }
     return NotifyDispatcher(journal, transports)
 
 
@@ -299,7 +306,14 @@ def run() -> int:
         try:
             broker, orchestrator, guardian, calendar, result = _startup(config, journal)
         except BrokerError as exc:
-            journal.record_event("broker_unreachable", {"error": str(exc)})
+            # Do NOT journal str(exc): broker-connectivity exceptions can
+            # embed credentials/hostnames. Only the exception type name is
+            # safe to persist in the durable, potentially-shared journal —
+            # same rationale as NotifyDispatcher.dispatch_once's
+            # notify_dispatch_error sanitization.
+            journal.record_event(
+                "broker_unreachable", {"error_type": type(exc).__name__},
+            )
             journal.record_event("startup_halted", {"reason": "broker_unreachable"})
             print(
                 f"Startup halted: broker unreachable ({exc}). "

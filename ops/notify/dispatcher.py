@@ -64,12 +64,12 @@ class NotifyDispatcher:
         entry = self._policy.get(ev["kind"])
         if entry is None:
             return 0  # not notified; cursor still advances
+        now = None
         if entry.cooldown_seconds is not None:
             last = self._last_sent.get(ev["kind"])
             now = self._now()
             if last is not None and (now - last).total_seconds() < entry.cooldown_seconds:
                 return 0  # suppressed; cursor still advances
-            self._last_sent[ev["kind"]] = now
         message = render(ev["kind"], ev["payload"])
         sent = 0
         for channel in entry.channels:
@@ -78,4 +78,11 @@ class NotifyDispatcher:
                 continue
             transport.send(message)  # may raise -> caught by dispatch_once
             sent += 1
+        # Arm the cooldown only after every send in the loop above completed
+        # without raising. Arming it before sending would suppress the retry
+        # of a FAILED send on the next dispatch_once (still inside the
+        # cooldown window the failed attempt just armed), silently dropping
+        # a throttled alert — an at-least-once violation.
+        if entry.cooldown_seconds is not None:
+            self._last_sent[ev["kind"]] = now
         return sent

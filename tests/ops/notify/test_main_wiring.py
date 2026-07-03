@@ -18,6 +18,23 @@ def test_build_dispatcher_returns_dispatcher(tmp_path, monkeypatch):
     assert j.get_cursor("notify") == 1    # advanced even with disabled transports
 
 
+def test_build_dispatcher_honors_notify_enabled_false(tmp_path, monkeypatch):
+    """When OPS_NOTIFY_ENABLED is unset/false, the dispatcher must be built
+    with disabled transports regardless of credentials — nothing is
+    delivered even if push/email creds are present — but dispatching still
+    advances the cursor (the event is consumed, not held)."""
+    monkeypatch.delenv("OPS_NOTIFY_ENABLED", raising=False)
+    monkeypatch.setenv("OPS_PUSHOVER_USER_KEY", "user-key")
+    monkeypatch.setenv("OPS_PUSHOVER_APP_TOKEN", "app-token")
+    j = Journal(str(tmp_path / "j.sqlite"))
+    d = _build_dispatcher(j)
+    j.record_event("fill", {"symbol": "AAPL", "side": "BUY",
+                            "quantity": "0.1", "price": "200", "context": "place"})
+    n = d.dispatch_once()
+    assert n == 0                          # nothing delivered
+    assert j.get_cursor("notify") == 1     # cursor still advances
+
+
 def test_notify_tick_swallows_errors(tmp_path):
     class Boom:
         def dispatch_once(self):

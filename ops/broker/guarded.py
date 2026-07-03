@@ -35,6 +35,21 @@ class GuardedBroker(Broker):
     def journal(self) -> Journal:
         return self._journal
 
+    def _journal_fill_event(self, fill: Fill, context: str) -> None:
+        self._journal.record_event(
+            "fill",
+            {
+                "client_order_id": fill.client_order_id,
+                "order_id": fill.order_id,
+                "symbol": fill.symbol,
+                "side": fill.side.value,
+                "quantity": str(fill.quantity),
+                "price": str(fill.price),
+                "filled_at": fill.filled_at.isoformat(),
+                "context": context,
+            },
+        )
+
     def get_cash(self) -> Decimal:
         return self.__inner.get_cash()
 
@@ -65,7 +80,9 @@ class GuardedBroker(Broker):
                 )
                 raise OrderRejected(result.failed_rule_name, result.reason)
             try:
-                return self.__inner.place_order(order)
+                fill = self.__inner.place_order(order)
+                self._journal_fill_event(fill, "place")
+                return fill
             except BrokerError as exc:
                 self._journal.record_event(
                     "order_rejected",
@@ -120,9 +137,11 @@ class GuardedBroker(Broker):
                 )
                 raise OrderRejected(result.failed_rule_name, result.reason)
             try:
-                return self.__inner.close_position(
+                fill = self.__inner.close_position(
                     symbol, client_order_id=close_order.client_order_id,
                 )
+                self._journal_fill_event(fill, "close")
+                return fill
             except BrokerError as exc:
                 self._journal.record_event(
                     "order_rejected",

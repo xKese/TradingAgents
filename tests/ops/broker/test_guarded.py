@@ -226,6 +226,31 @@ def test_guarded_close_position_client_order_id_continuity_on_rejection(journal,
     assert _CLOSE_ID_RE.match(rejected_id), rejected_id
 
 
+def test_guarded_emits_fill_event_on_place(tmp_path):
+    j, paper, guarded = _stack(tmp_path)
+    guarded.place_order(Order(
+        client_order_id="c1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("25"), order_type=OrderType.MARKET,
+        stop_loss_price=Decimal("184"),
+    ))
+    fills = [e for e in j.read_events() if e["kind"] == "fill"]
+    assert len(fills) == 1
+    p = fills[0]["payload"]
+    assert p["symbol"] == "AAPL" and p["side"] == "BUY" and p["context"] == "place"
+    assert Decimal(p["price"]) == Decimal("200")
+
+
+def test_guarded_no_fill_event_on_rejection(tmp_path):
+    j, paper, guarded = _stack(tmp_path)
+    with pytest.raises(OrderRejected):
+        guarded.place_order(Order(
+            client_order_id="c1", symbol="BANNED", side=Side.BUY,
+            notional_dollars=Decimal("25"), order_type=OrderType.MARKET,
+            stop_loss_price=Decimal("184"),
+        ))
+    assert [e for e in j.read_events() if e["kind"] == "fill"] == []
+
+
 def test_guarded_close_position_client_order_id_continuity_on_success(guarded, inner, quote_source, journal):
     """On success, the id minted by GuardedBroker is passed through to the inner
     broker so it appears — unchanged — on both the journaled order row and the

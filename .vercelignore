@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Tests
+tests/
+pytest.ini
+test.py
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Development
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.pytest_cache
+.coverage
+htmlcov
+
+# Documentation
+*.md
+docs/
+assets/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.enterprise.example
+.env.example
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Other
+.editorconfig
+CHANGELOG.md
+LICENSE
+README.md

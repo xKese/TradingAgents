@@ -1,0 +1,21 @@
+{
+  "buildCommand": "pip install -q -e .",
+  "runtime": "python@3.12",
+  "env": {
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "functions": {
+    "tradingagents/**/*.py": {
+      "memory": 3008,
+      "maxDuration": 900
+    }
+  },
+  "routes": [
+    {
+      "src": "^/api/(.*)",
+      "dest": "api/$1",
+      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    }
+  ]
+}

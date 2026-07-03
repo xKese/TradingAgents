@@ -399,6 +399,31 @@ def test_stop_equals_fill_price_times_one_plus_pct_exactly(tmp_path):
     assert fills[0]["stop_loss_price"] == expected
 
 
+def test_from_journal_journals_orphan_sell_and_skips_it(tmp_path, quote_source):
+    """A SELL fill with no matching prior BUY (journal inconsistency) must not
+    silently vanish during replay — it should journal a
+    journal_replay_orphan_sell event (mirroring journal_replay_fallback) so
+    an ops engineer can see the journal is missing the position, while
+    replay itself continues rather than raising."""
+    journal = Journal(str(tmp_path / "j.sqlite"))
+    journal.record_order(client_order_id="s-1", symbol="AAPL", side="SELL",
+                         notional_dollars=Decimal("50"), stop_loss_price=None)
+    journal.record_fill(order_id="o-1", client_order_id="s-1", symbol="AAPL",
+                        side="SELL", quantity=Decimal("5"), price=Decimal("10"),
+                        filled_at=datetime.now(timezone.utc))
+    replayed = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("500"),
+    )
+    # No position existed to sell from — cash is untouched and no phantom
+    # position is created.
+    assert replayed.get_cash() == Decimal("500")
+    assert replayed.get_positions() == []
+    orphans = [e for e in journal.read_events() if e["kind"] == "journal_replay_orphan_sell"]
+    assert len(orphans) == 1
+    assert orphans[0]["payload"]["client_order_id"] == "s-1"
+    assert orphans[0]["payload"]["symbol"] == "AAPL"
+
+
 def test_from_journal_applies_cash_adjustments(tmp_path, quote_source):
     """Replayed cash = starting_cash + adjustments + fills. Deposits and the
     startup seed are journaled as cash adjustments so restarts and live-mode

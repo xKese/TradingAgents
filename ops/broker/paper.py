@@ -94,8 +94,21 @@ class PaperBroker(Broker):
             elif side == Side.SELL.value:
                 existing = broker._positions.get(symbol)
                 if existing is None:
-                    # Journal is inconsistent — SELL replayed without a prior BUY.
-                    # Log and skip. In production this triggers reconciliation.
+                    # Journal is inconsistent — SELL replayed without a prior
+                    # BUY (or a BUY that predates this journal). Journal it
+                    # (mirrors journal_replay_fallback) and skip — the SELL's
+                    # cash effect cannot be reconstructed without a position
+                    # to sell from. In production this triggers reconciliation.
+                    journal.record_event(
+                        "journal_replay_orphan_sell",
+                        {
+                            "client_order_id": f["client_order_id"],
+                            "symbol": symbol,
+                            "quantity": str(qty),
+                            "price": str(price),
+                            "reason": "SELL replayed with no matching prior BUY position",
+                        },
+                    )
                     continue
                 proceeds = notional
                 broker._cash += proceeds

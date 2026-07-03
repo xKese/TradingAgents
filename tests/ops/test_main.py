@@ -210,3 +210,39 @@ def test_start_of_day_equity_uses_fresh_snapshot(tmp_path):
                              cash=Decimal("310"), at=now)
     assert _start_of_day_equity(j) == Decimal("300")
     assert _start_of_week_equity(j) == Decimal("310")
+
+
+def test_run_exits_3_and_journals_on_broker_unreachable(monkeypatch, tmp_path, capsys):
+    """M6: a broker that can't be reached at startup (build or reconcile)
+    must halt loudly — exit 3, both broker_unreachable and startup_halted
+    events journaled, no bare traceback — and must NOT start the guardian
+    (there is nothing for it to guard with an unreachable broker)."""
+    from ops.broker.mcp_client import MCPUnavailable
+    from ops.main import run
+    from tests.ops.broker.fakes import FakeMCPClient
+
+    fake = FakeMCPClient()
+    fake.fail_next(MCPUnavailable("connection refused"))
+    monkeypatch.setattr(
+        "ops.broker.mcp_client.RealRobinhoodMCPClient", lambda: fake,
+    )
+    journal_path = str(tmp_path / "j.sqlite")
+    monkeypatch.setenv("OPS_BROKER_MODE", "robinhood")
+    monkeypatch.setenv("OPS_JOURNAL_PATH", journal_path)
+
+    exit_code = run()
+
+    assert exit_code == 3
+
+    j = Journal(journal_path)
+    events = j.read_events()
+    kinds = [e["kind"] for e in events]
+    assert "broker_unreachable" in kinds
+    assert "startup_halted" in kinds
+    startup_halted = next(e for e in events if e["kind"] == "startup_halted")
+    assert startup_halted["payload"]["reason"] == "broker_unreachable"
+    j.close()
+
+    captured = capsys.readouterr()
+    assert "unreachable" in captured.err.lower()
+    assert "Traceback" not in captured.err

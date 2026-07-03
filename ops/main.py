@@ -4,6 +4,8 @@ Runs in the foreground. SIGINT/SIGTERM triggers graceful shutdown:
 scheduler drains in-flight jobs, journal closes cleanly. Exit codes:
 - 0: clean shutdown
 - 2: reconciliation-halted shutdown (journal has inconsistency events)
+- 3: startup-halted — broker unreachable while building/reconciling
+     (journal has broker_unreachable + startup_halted events)
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from ops import (
     build_guarded_paper_broker_from_journal,
     build_guarded_robinhood_broker,
 )
+from ops.broker.base import BrokerError
 from ops.config import OpsConfig, load_config
 from ops.journal import Journal
 from ops.position_guardian import PositionGuardian
@@ -155,6 +158,21 @@ def _emit_halt_events(journal: Journal, result: ReconcileResult) -> None:
     journal.record_event("startup_halted", {"reason": "reconciliation"})
 
 
+def _startup(config: OpsConfig, journal: Journal):
+    """Build the broker, wire the orchestrator/guardian/calendar, and
+    reconcile against broker state — the sequence that must complete
+    before the service starts scheduling any jobs.
+
+    Both broker construction (live mode calls _ensure_live_baseline ->
+    get_cash) and reconcile() talk to the broker and can raise
+    BrokerError when it's unreachable; callers handle that distinctly
+    from a reconciliation diff (see M6)."""
+    broker = _build_broker(config, journal)
+    orchestrator, guardian, calendar = _wire(broker, journal, config)
+    result = reconcile(journal=journal, broker=broker, broker_mode=config.broker_mode)
+    return broker, orchestrator, guardian, calendar, result
+
+
 def _start_full_scheduler(orchestrator: Orchestrator, guardian: PositionGuardian) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
@@ -192,9 +210,17 @@ def run() -> int:
     config = load_config()
     journal = Journal(config.journal_path)
     try:
-        broker = _build_broker(config, journal)
-        orchestrator, guardian, calendar = _wire(broker, journal, config)
-        result = reconcile(journal=journal, broker=broker, broker_mode=config.broker_mode)
+        try:
+            broker, orchestrator, guardian, calendar, result = _startup(config, journal)
+        except BrokerError as exc:
+            journal.record_event("broker_unreachable", {"error": str(exc)})
+            journal.record_event("startup_halted", {"reason": "broker_unreachable"})
+            print(
+                f"Startup halted: broker unreachable ({exc}). "
+                "Check connectivity/credentials and restart.",
+                file=sys.stderr,
+            )
+            return 3
         if result.positions_recovered_without_stops:
             print(
                 "WARNING: "

@@ -54,4 +54,4 @@ filterwarnings = [
 ]
 
 [tool.vercel]
-entrypoint = "app:application"
+entrypoint = "index:application"

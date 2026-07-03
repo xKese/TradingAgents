@@ -1,4 +1,5 @@
 {
+  "buildCommand": "pip install -r requirements-vercel.txt",
   "runtime": "python@3.12",
   "env": {
     "PYTHONUNBUFFERED": "1",

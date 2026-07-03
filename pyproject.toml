@@ -52,6 +52,3 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
-
-[tool.vercel]
-entrypoint = "index:application"

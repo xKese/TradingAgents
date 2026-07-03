@@ -32,12 +32,12 @@ class Order:
     on the wrong side of it. Must be strictly negative when set."""
 
     def __post_init__(self) -> None:
-        if self.notional_dollars < 0:
-            raise ValueError("notional_dollars cannot be negative")
-        if self.side == Side.BUY and self.notional_dollars <= 0:
-            raise ValueError("BUY order requires positive notional_dollars")
-        if self.side == Side.SELL and self.notional_dollars <= 0:
-            raise ValueError("SELL order requires positive notional_dollars")
+        # Every order (BUY or SELL) requires strictly positive notional —
+        # the BUY and SELL branches used to be identical checks; this single
+        # check subsumes both (and the separate `< 0` check, since `<= 0`
+        # already covers negative values).
+        if self.notional_dollars <= 0:
+            raise ValueError("notional_dollars must be positive")
         if self.order_type == OrderType.LIMIT and self.limit_price is None:
             raise ValueError("LIMIT order requires limit_price")
         if self.stop_pct is not None and self.stop_pct >= 0:

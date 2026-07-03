@@ -54,7 +54,7 @@ def test_order_buy_requires_positive_notional():
         )
 
 def test_sell_order_requires_positive_notional():
-    with pytest.raises(ValueError, match="SELL order requires positive notional_dollars"):
+    with pytest.raises(ValueError, match="notional_dollars must be positive"):
         Order(
             client_order_id="s-1",
             symbol="AAPL",
@@ -62,6 +62,35 @@ def test_sell_order_requires_positive_notional():
             notional_dollars=Decimal("0"),
             order_type=OrderType.MARKET,
         )
+
+def test_buy_negative_notional_raises():
+    with pytest.raises(ValueError, match="notional_dollars must be positive"):
+        Order(
+            client_order_id="x", symbol="AAPL", side=Side.BUY,
+            notional_dollars=Decimal("-5"), order_type=OrderType.MARKET,
+        )
+
+def test_sell_negative_notional_raises():
+    with pytest.raises(ValueError, match="notional_dollars must be positive"):
+        Order(
+            client_order_id="x", symbol="AAPL", side=Side.SELL,
+            notional_dollars=Decimal("-5"), order_type=OrderType.MARKET,
+        )
+
+def test_valid_buy_order_still_constructs():
+    o = Order(
+        client_order_id="c1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("25"), order_type=OrderType.MARKET,
+        stop_pct=Decimal("-0.08"),
+    )
+    assert o.notional_dollars == Decimal("25")
+
+def test_valid_sell_order_still_constructs():
+    o = Order(
+        client_order_id="c1", symbol="AAPL", side=Side.SELL,
+        notional_dollars=Decimal("25"), order_type=OrderType.MARKET,
+    )
+    assert o.notional_dollars == Decimal("25")
 
 def test_position_value():
     p = Position(

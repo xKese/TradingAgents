@@ -23,6 +23,18 @@ def _env_bool(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_smtp_port(port_raw: str | None) -> int:
+    """Parse OPS_SMTP_PORT, matching the named-variable error message
+    pattern used by ops/config.py::_env_int, so a non-numeric value fails
+    with a clear message instead of a bare int() ValueError."""
+    if not port_raw:
+        return 587
+    try:
+        return int(port_raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid value for 'OPS_SMTP_PORT': {port_raw!r}") from exc
+
+
 def load_notify_config() -> NotifyConfig:
     port_raw = os.environ.get("OPS_SMTP_PORT")
     return NotifyConfig(
@@ -30,7 +42,7 @@ def load_notify_config() -> NotifyConfig:
         pushover_user_key=os.environ.get("OPS_PUSHOVER_USER_KEY"),
         pushover_app_token=os.environ.get("OPS_PUSHOVER_APP_TOKEN"),
         smtp_host=os.environ.get("OPS_SMTP_HOST"),
-        smtp_port=int(port_raw) if port_raw else 587,
+        smtp_port=_env_smtp_port(port_raw),
         smtp_user=os.environ.get("OPS_SMTP_USER"),
         smtp_password=os.environ.get("OPS_SMTP_PASSWORD"),
         smtp_from=os.environ.get("OPS_SMTP_FROM"),

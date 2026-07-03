@@ -1,3 +1,5 @@
+import pytest
+
 from ops.notify.config import NotifyConfig, load_notify_config
 
 
@@ -27,3 +29,9 @@ def test_load_defaults_when_unset(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     c = load_notify_config()
     assert c.notify_enabled is False and c.smtp_host is None
+
+
+def test_non_numeric_smtp_port_raises_with_var_name(monkeypatch):
+    monkeypatch.setenv("OPS_SMTP_PORT", "not-a-port")
+    with pytest.raises(ValueError, match="OPS_SMTP_PORT"):
+        load_notify_config()

@@ -158,6 +158,7 @@ class PositionGuardian:
             ))
         self._update_blind_streak(total=len(positions), failures=quote_failures)
         self._maybe_trip_kill_switch()
+        self._maybe_trip_daily_halt()
         return actions
 
     def _update_blind_streak(self, *, total: int, failures: int) -> None:
@@ -243,3 +244,45 @@ class PositionGuardian:
                         "kill_switch_close_failed",
                         {"symbol": pos.symbol, "error": f"{type(exc).__name__}: {exc}"},
                     )
+
+    def _maybe_trip_daily_halt(self) -> None:
+        """Computed in the same pass as the weekly kill switch, mirroring its
+        snapshot-freshness rule exactly (same UTC day-boundary convention —
+        see M7 for the future ET migration of both together). Unlike the
+        kill switch, a daily halt never closes positions: it only stops new
+        BUYs, which the orchestrator's has_event_today('daily_halt')
+        short-circuit and DailyDrawdownRule (order-boundary backstop) already
+        enforce."""
+        from datetime import datetime, timezone
+
+        if self._journal.has_event_today("daily_halt"):
+            return
+        now = datetime.now(timezone.utc)
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        snap = self._journal.get_latest_equity_snapshot(
+            kind="open_day", since=start_of_day)
+        if snap is None or snap.equity <= 0:
+            # No baseline yet today: record one now (mirrors the weekly
+            # kill-switch fallback) and measure from here on subsequent
+            # passes instead of comparing against a missing/stale snapshot.
+            self._journal.record_equity_snapshot(
+                kind="open_day",
+                equity=self._broker.get_equity(),
+                cash=self._broker.get_cash(),
+                note="guardian baseline",
+            )
+            return
+        equity_now = self._broker.get_equity()
+        daily_pct = (equity_now - snap.equity) / snap.equity
+        if daily_pct > self._cfg.daily_drawdown_pct:
+            return
+        self._journal.record_event(
+            "daily_halt",
+            {
+                "mode": self._broker_mode,
+                "equity_now": str(equity_now),
+                "equity_open_day": str(snap.equity),
+                "pct": str(daily_pct),
+                "threshold": str(self._cfg.daily_drawdown_pct),
+            },
+        )

@@ -721,3 +721,76 @@ def test_kill_switch_paper_close_resumes_after_restart(tmp_path):
     assert guarded.get_positions() == [], "remaining positions must be swept"
     kill_events = [e for e in j.read_events() if e["kind"] == "kill_switch"]
     assert len(kill_events) == 1, "no duplicate kill_switch event"
+
+
+# --- daily halt: computed in the same pass as the weekly kill switch --------
+
+
+def _daily_halt_stack(tmp_path, *, drop_price):
+    """500 starting cash, one AAPL position bought at $10 (5 shares, notional
+    $50, cash 450). The stop is set absurdly loose (-99%, absolute stop
+    $0.10) so the ordinary per-position stop never interferes — only the
+    portfolio-level daily-halt check is exercised. An open_day baseline of
+    $500 is recorded 'now' (today), matching the freshness convention
+    _maybe_trip_kill_switch uses for open_week. `drop_price` sets AAPL's
+    quote so total equity = 450 + 5*drop_price."""
+    from datetime import datetime, timezone
+
+    j = Journal(str(tmp_path / "j.sqlite"))
+    cfg = OpsConfig()  # daily_drawdown_pct = -0.07
+    quotes = _MutableQuotes()
+    quotes.set("AAPL", Decimal("10"))
+    broker = build_guarded_paper_broker(
+        config=cfg, journal=j, quote_source=quotes.get,
+        starting_cash=Decimal("500"),
+        start_of_day_equity=lambda: Decimal("500"),
+        start_of_week_equity=lambda: Decimal("500"),
+    )
+    broker.place_order(Order(
+        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
+        stop_pct=Decimal("-0.99"),
+    ))
+    j.record_equity_snapshot(
+        kind="open_day", equity=Decimal("500"), cash=Decimal("500"),
+        at=datetime.now(timezone.utc),
+    )
+    quotes.set("AAPL", drop_price)
+    guardian = PositionGuardian(
+        broker=broker, quote_source=quotes.get, config=cfg,
+        journal=j, broker_mode="paper",
+    )
+    return j, broker, guardian
+
+
+def test_daily_halt_trips_at_exactly_threshold(tmp_path):
+    """equity 450 + 5*3 = 465, pct = (465-500)/500 = -0.07 exactly ==
+    daily_drawdown_pct. Must record daily_halt."""
+    j, broker, guardian = _daily_halt_stack(tmp_path, drop_price=Decimal("3"))
+    guardian.check_stops_once()
+    events = j.read_events()
+    halts = [e for e in events if e["kind"] == "daily_halt"]
+    assert len(halts) == 1
+    assert halts[0]["payload"]["pct"] == "-0.07"
+    # No position closing — daily halt only blocks new BUYs elsewhere.
+    assert len(broker.get_positions()) == 1
+
+
+def test_daily_halt_not_tripped_just_above_threshold(tmp_path):
+    """equity 450 + 5*3.1 = 465.5, pct = -0.069, ABOVE (less negative than)
+    the -0.07 threshold. Must NOT record daily_halt."""
+    j, broker, guardian = _daily_halt_stack(tmp_path, drop_price=Decimal("3.1"))
+    guardian.check_stops_once()
+    events = j.read_events()
+    assert not any(e["kind"] == "daily_halt" for e in events)
+
+
+def test_daily_halt_idempotent_within_day(tmp_path):
+    """A second guardian pass the same day, still past threshold, must not
+    duplicate the daily_halt event."""
+    j, broker, guardian = _daily_halt_stack(tmp_path, drop_price=Decimal("3"))
+    guardian.check_stops_once()
+    guardian.check_stops_once()
+    events = j.read_events()
+    halts = [e for e in events if e["kind"] == "daily_halt"]
+    assert len(halts) == 1

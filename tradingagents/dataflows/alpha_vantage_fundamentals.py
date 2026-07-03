@@ -1,21 +1,40 @@
+import json
+
 from .alpha_vantage_common import _make_api_request
 
 
 def _filter_reports_by_date(result, curr_date: str):
     """Filter annualReports/quarterlyReports to exclude entries after curr_date.
 
-    Prevents look-ahead bias by removing fiscal periods that end after
-    the simulation's current date.
+    Prevents look-ahead bias by removing fiscal periods that end after the
+    simulation's current date. ``_make_api_request`` returns the payload as a
+    JSON *string*, so parse it before filtering and re-serialize on the way out
+    (callers expect a str). Bodies that aren't JSON objects pass through
+    unchanged.
     """
-    if not curr_date or not isinstance(result, dict):
+    if not curr_date:
         return result
+
+    parsed = result
+    reserialize = False
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except (json.JSONDecodeError, ValueError):
+            return result
+        reserialize = True
+
+    if not isinstance(parsed, dict):
+        return result
+
     for key in ("annualReports", "quarterlyReports"):
-        if key in result:
-            result[key] = [
-                r for r in result[key]
+        if key in parsed:
+            parsed[key] = [
+                r for r in parsed[key]
                 if r.get("fiscalDateEnding", "") <= curr_date
             ]
-    return result
+
+    return json.dumps(parsed) if reserialize else parsed
 
 
 def get_fundamentals(ticker: str, curr_date: str = None) -> str:

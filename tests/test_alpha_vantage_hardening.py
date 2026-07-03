@@ -52,3 +52,26 @@ def test_invalid_key_not_mislabeled_as_rate_limit(monkeypatch):
     with pytest.raises(av.AlphaVantageRateLimitError):  # sanity: rate-limit path still distinct
         monkeypatch.setattr(av.requests, "get", _patched_get('{"Note": "API call frequency is 5 calls per minute."}'))
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+
+
+@pytest.mark.unit
+def test_fundamentals_filter_drops_future_fiscal_periods(monkeypatch):
+    # The look-ahead filter must actually run. _make_api_request returns a JSON
+    # *string*, so a filter guarded on isinstance(result, dict) never fires and
+    # future fiscal periods leak into a historical run. Regression for the #475
+    # look-ahead fix, which silently no-op'd on the str return.
+    import json
+
+    import tradingagents.dataflows.alpha_vantage_fundamentals as avf
+
+    body = json.dumps({
+        "symbol": "AAPL",
+        "annualReports": [
+            {"fiscalDateEnding": "2025-12-31"},  # after curr_date -> must drop
+            {"fiscalDateEnding": "2023-12-31"},  # before          -> must keep
+        ],
+    })
+    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+    out = avf.get_balance_sheet("AAPL", curr_date="2024-01-01")
+    dates = [r["fiscalDateEnding"] for r in json.loads(out)["annualReports"]]
+    assert dates == ["2023-12-31"]

@@ -1,2 +1,0 @@
-# Minimal requirements for Vercel deployment
-# The index.py WSGI app only needs Python stdlib

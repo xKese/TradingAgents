@@ -54,3 +54,20 @@ logs/
 CHANGELOG.md
 LICENSE
 README.md
+
+# Python package / framework triggers — the Vercel deployment only ships the
+# lightweight api/ serverless function. Excluding these keeps Vercel in
+# zero-config function mode (framework: null) and prevents it from trying to
+# pip-install the full trading framework (langchain, backtrader, yfinance, ...),
+# which would exceed the serverless size limit.
+main.py
+pyproject.toml
+requirements.txt
+requirements-vercel.txt
+uv.lock
+index.py
+
+# Application source is not needed by the health function and only bloats the build
+tradingagents/
+cli/
+scripts/

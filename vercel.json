@@ -1,6 +1,7 @@
 {
+  "framework": null,
   "functions": {
-    "api/*.py": {
+    "api/health.py": {
       "memory": 1024,
       "maxDuration": 60
     }

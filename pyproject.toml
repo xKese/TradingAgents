@@ -52,3 +52,6 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.vercel]
+entrypoint = "cli.main:app"

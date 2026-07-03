@@ -38,6 +38,21 @@ def run():
     sys.exit(_run())
 
 
+@cli.command("notify-once")
+@click.option("--journal", "journal_path", default="ops_journal.sqlite",
+              type=click.Path(dir_okay=False), help="SQLite journal path")
+def notify_once(journal_path: str) -> None:
+    """Dispatch any pending journal events to notification transports once."""
+    from ops.main import _build_dispatcher
+
+    journal = Journal(journal_path)
+    try:
+        n = _build_dispatcher(journal).dispatch_once()
+        click.echo(f"dispatched {n} message(s)")
+    finally:
+        journal.close()
+
+
 @cli.command("decide-once")
 @click.option("--date", "as_of", required=True,
               type=click.DateTime(formats=["%Y-%m-%d"]),

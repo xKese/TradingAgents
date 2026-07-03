@@ -27,6 +27,12 @@ from ops import (
 from ops.broker.base import BrokerError
 from ops.config import OpsConfig, load_config
 from ops.journal import Journal
+from ops.live_gate import record_flip_marker
+from ops.notify.config import load_notify_config
+from ops.notify.dispatcher import NotifyDispatcher
+from ops.notify.email import build_email_transport
+from ops.notify.push import build_push_transport
+from ops.notify.summary import emit_daily_summary
 from ops.position_guardian import PositionGuardian
 from ops.reconcile import ReconcileResult, emit_reconcile_events, reconcile
 from ops.scheduler.market_calendar import MarketCalendar
@@ -141,6 +147,10 @@ def _build_broker(config: OpsConfig, journal: Journal):
             start_of_day_equity=_sod, start_of_week_equity=_sow,
         )
         _ensure_live_baseline(journal, broker)
+        # Startup is single-threaded here, so recording the flip marker
+        # right after the live baseline (and before any scheduled job can
+        # run) is race-free.
+        record_flip_marker(journal)
         return broker
     _ensure_paper_seed(journal, config)
     return build_guarded_paper_broker_from_journal(
@@ -193,7 +203,45 @@ def _startup(config: OpsConfig, journal: Journal):
     return broker, orchestrator, guardian, calendar, result
 
 
-def _start_full_scheduler(orchestrator: Orchestrator, guardian: PositionGuardian) -> BackgroundScheduler:
+def _build_dispatcher(journal: Journal) -> NotifyDispatcher:
+    """Assemble the notify dispatcher from environment-configured transports.
+    Transports with missing credentials come back disabled (they no-op on
+    send), so this is safe to call unconditionally in both paper and live
+    mode — no crash, no accidental delivery without creds."""
+    cfg = load_notify_config()
+    transports = {
+        "push": build_push_transport(cfg),
+        "email": build_email_transport(cfg),
+    }
+    return NotifyDispatcher(journal, transports)
+
+
+def _notify_tick(dispatcher) -> None:
+    """Scheduler-safe: a transport/network failure must never kill the
+    APScheduler job, or all future notifications (and the guardian/
+    orchestrator jobs sharing the scheduler) would be at risk."""
+    try:
+        dispatcher.dispatch_once()
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+        print(f"notify tick error: {exc}", file=sys.stderr)
+
+
+def _daily_summary_tick(journal: Journal, broker) -> None:
+    """Scheduler-safe wrapper around emit_daily_summary: a broker/journal
+    error is recorded as an event rather than raised, since raising would
+    kill the daily_summary APScheduler job."""
+    try:
+        emit_daily_summary(journal, broker)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+        journal.record_event(
+            "daily_summary_error", {"error": f"{type(exc).__name__}: {exc}"},
+        )
+
+
+def _start_full_scheduler(
+    orchestrator: Orchestrator, guardian: PositionGuardian,
+    dispatcher: NotifyDispatcher, journal: Journal, broker,
+) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
         orchestrator.tick,
@@ -205,16 +253,33 @@ def _start_full_scheduler(orchestrator: Orchestrator, guardian: PositionGuardian
         IntervalTrigger(seconds=60),
         id="guardian_poll", max_instances=1, misfire_grace_time=15,
     )
+    sched.add_job(
+        lambda: _notify_tick(dispatcher),
+        IntervalTrigger(seconds=20),
+        id="notify_poll", max_instances=1, misfire_grace_time=15,
+    )
+    sched.add_job(
+        lambda: _daily_summary_tick(journal, broker),
+        CronTrigger(hour=16, minute=5, day_of_week="mon-fri"),
+        id="daily_summary", max_instances=1, misfire_grace_time=300,
+    )
     sched.start()
     return sched
 
 
-def _start_guardian_only(guardian: PositionGuardian) -> BackgroundScheduler:
+def _start_guardian_only(
+    guardian: PositionGuardian, dispatcher: NotifyDispatcher,
+) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
         guardian.check_stops_once,
         IntervalTrigger(seconds=60),
         id="guardian_poll", max_instances=1, misfire_grace_time=15,
+    )
+    sched.add_job(
+        lambda: _notify_tick(dispatcher),
+        IntervalTrigger(seconds=20),
+        id="notify_poll", max_instances=1, misfire_grace_time=15,
     )
     sched.start()
     return sched
@@ -250,6 +315,7 @@ def run() -> int:
                 f"fallback: {result.positions_recovered_without_stops}",
                 file=sys.stderr,
             )
+        dispatcher = _build_dispatcher(journal)
         if result.diffs:
             _emit_halt_events(journal, result)
             print(
@@ -257,11 +323,11 @@ def run() -> int:
                 "Guardian continues. Investigate journal 'inconsistency' events.",
                 file=sys.stderr,
             )
-            sched = _start_guardian_only(guardian)
+            sched = _start_guardian_only(guardian, dispatcher)
             _run_until_signal()
             sched.shutdown(wait=True)
             return 2
-        sched = _start_full_scheduler(orchestrator, guardian)
+        sched = _start_full_scheduler(orchestrator, guardian, dispatcher, journal, broker)
         _run_until_signal()
         sched.shutdown(wait=True)
         return 0

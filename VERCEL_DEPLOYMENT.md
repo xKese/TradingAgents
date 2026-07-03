@@ -1,185 +1,106 @@
 # Vercel Deployment Guide
 
-This guide covers deploying the TradingAgents framework to Vercel.
+This repo is deployed to Vercel as a **lightweight API surface**, not as the full
+trading engine. This document explains what is deployed, why, and how to operate it.
 
-## Prerequisites
+## What gets deployed
 
-- Vercel account (https://vercel.com)
-- Vercel CLI installed: `npm i -g vercel`
-- Git repository pushed to GitHub
+Vercel ships only:
 
-## Environment Variables
+- `public/index.html` — a static landing/status page served at `/`
+- `api/health.py` — a stdlib-only Python serverless function served at `/api/health`
 
-Before deploying, configure the following environment variables in Vercel:
+Everything else (the `tradingagents/` package, `cli/`, `scripts/`, `main.py`,
+`pyproject.toml`, `requirements.txt`, `uv.lock`) is excluded from the Vercel build
+via `.vercelignore`.
 
-### LLM Provider Keys (choose at least one)
+### Why the full framework is not deployed
 
-- `OPENAI_API_KEY` - For GPT-5.x models
-- `GOOGLE_API_KEY` - For Gemini 3.x models
-- `ANTHROPIC_API_KEY` - For Claude 4.x models
-- `XAI_API_KEY` - For Grok models
-- `DEEPSEEK_API_KEY` - For DeepSeek models
-- `DASHSCOPE_API_KEY` - For Qwen models
-- `ZHIPU_API_KEY` - For GLM models
-- `MINIMAX_API_KEY` - For MiniMax models
-- `OPENROUTER_API_KEY` - For OpenRouter API access
+The TradingAgents engine is **not suitable for serverless**:
 
-### Optional Configuration
+- **Size:** its dependency set (langchain, backtrader, yfinance, pandas, multiple
+  provider SDKs) far exceeds Vercel's 250 MB unzipped serverless function limit.
+- **Runtime:** a single `propagate()` run drives multi-round LLM debates that take
+  minutes — well beyond serverless execution windows, and not a fit for a
+  request/response function.
 
-- `TRADINGAGENTS_LLM_PROVIDER` - Default LLM provider (e.g., `openai`, `anthropic`, `google`)
-- `TRADINGAGENTS_DEEP_THINK_LLM` - Deep thinking model (default: provider-dependent)
-- `TRADINGAGENTS_QUICK_THINK_LLM` - Quick thinking model (default: provider-dependent)
-- `TRADINGAGENTS_OUTPUT_LANGUAGE` - Output language (default: `English`)
-- `TRADINGAGENTS_MAX_DEBATE_ROUNDS` - Maximum debate rounds (default: `1`)
-- `TRADINGAGENTS_MAX_RISK_ROUNDS` - Maximum risk assessment rounds (default: `1`)
-- `TRADINGAGENTS_TEMPERATURE` - LLM sampling temperature (default: provider-dependent)
-- `TRADINGAGENTS_CHECKPOINT_ENABLED` - Enable LangGraph checkpointing (default: `false`)
+The engine is meant to run as a long-lived process. Use the provided `Dockerfile` /
+`docker-compose.yml` (or any always-on host) for the actual trading workloads. Vercel
+here provides a public health/status surface only.
 
-## Deployment Steps
+## Configuration
 
-### 1. Push to GitHub
+`vercel.json`:
 
-Ensure your code is pushed to a GitHub repository:
-
-```bash
-git push origin claude/vercel-deploy-prep-xhq4u6
+```json
+{
+  "framework": null,
+  "functions": {
+    "api/health.py": { "memory": 1024, "maxDuration": 60 }
+  }
+}
 ```
 
-### 2. Connect to Vercel
+- `"framework": null` disables Vercel's Python-framework single-entrypoint detection
+  (which otherwise trips over the root `main.py` script). This keeps the project in
+  zero-config serverless-function mode where `api/*.py` files with a `handler` are
+  deployed automatically.
+- No `buildCommand` and no build-time `pip install` — the health function needs only
+  the Python standard library, so there is nothing to install.
 
-Option A: Web Dashboard
-1. Go to https://vercel.com/dashboard
-2. Click "Add New..." → "Project"
-3. Select your GitHub repository
-4. Configure environment variables
-5. Deploy
+## Endpoints
 
-Option B: Vercel CLI
-```bash
-vercel
-```
+### `GET /` — Landing page
+Static HTML status page.
 
-### 3. Configure Environment Variables
-
-In Vercel Dashboard:
-1. Go to Settings → Environment Variables
-2. Add all required API keys
-3. Select environments (Production, Preview, Development)
-
-### 4. Deploy
-
-```bash
-vercel --prod
-```
-
-## API Endpoints
-
-Once deployed, the following endpoints are available:
-
-### Health Check
-```
-GET /api/health
-```
-
-Response:
+### `GET /api/health` — Health check
 ```json
 {
   "status": "healthy",
   "service": "TradingAgents",
-  "version": "0.2.5"
+  "version": "0.2.5",
+  "timestamp": "2026-07-03T16:29:00.000000"
 }
 ```
 
-## Serverless Function Specifications
+## Deployment Protection
 
-- **Runtime**: Python 3.12
-- **Memory**: 3008 MB (3 GB)
-- **Max Duration**: 900 seconds (15 minutes)
-- **Cold Start**: Optimized with pip caching
+By default, Vercel preview (and optionally production) deployments are gated behind
+**Vercel Authentication**. Anonymous requests receive a `302` redirect to
+`vercel.com/sso-api`. This is expected and is not an application error.
 
-## Deployment Considerations
+To make `/api/health` publicly reachable (e.g. for an external uptime monitor):
 
-### Size Optimization
+1. Vercel Dashboard → project **strattonoak** → **Settings → Deployment Protection**
+2. Either disable Vercel Authentication, or add a **Protection Bypass** for the
+   `/api/health` path / for automation.
 
-The `.vercelignore` file excludes:
-- Test files and directories
-- Documentation and markdown files
-- Docker files
-- Development dependencies
-- IDE configuration files
-- Cache and log files
+## Environment Variables
 
-This reduces deployment size from ~500MB to ~100-150MB.
+The health function does not read any secrets. The following are configured on the
+project for when real, engine-backed endpoints are added later (they are **not** used
+by anything currently deployed):
 
-### Dependencies
+- `ANTHROPIC_API_KEY`
+- `ALPACA_API_KEY`
+- `ALPACA_SECRET_KEY`
+- `ALPACA_PAPER`
 
-All dependencies are installed from `pyproject.toml` during the build phase:
-- LangChain and integrations
-- Backtrader for backtesting
-- Financial data providers (yfinance, stockstats)
-- Supporting libraries (pandas, requests, etc.)
+> Security: any key that was ever shared in plaintext (chat, commits, screenshots)
+> should be rotated in the provider dashboard and only re-entered via Vercel's
+> encrypted Environment Variables UI.
 
-### Performance Tips
+## Local check
 
-1. **Cold Start Optimization**: The first request may take 30-60 seconds
-2. **Caching**: Vercel automatically caches pip dependencies
-3. **Concurrency**: Serverless functions can be concurrent but share state via Redis (if configured)
-4. **Timeouts**: Long-running analysis may hit the 15-minute limit
-
-## Redis Support
-
-For state persistence across requests, configure a Redis instance:
+The health handler is a standard `BaseHTTPRequestHandler`; you can sanity-check the
+module imports and parses with:
 
 ```bash
-# Set the Redis URL in environment variables
-REDIS_URL=redis://user:password@host:port
+python -c "import ast; ast.parse(open('api/health.py').read())"
 ```
 
-Then enable checkpointing in your config:
-```
-TRADINGAGENTS_CHECKPOINT_ENABLED=true
-```
+## Redeploying
 
-## Monitoring and Logs
-
-View deployment logs in the Vercel Dashboard:
-1. Go to Deployments
-2. Select a deployment
-3. View Real-time Logs
-
-## Troubleshooting
-
-### Build Failures
-
-Check logs for common issues:
-- Missing API keys in environment variables
-- Incompatible Python versions
-- Missing build dependencies
-
-### Runtime Errors
-
-1. Check serverless function logs
-2. Verify API keys are correctly set
-3. Check function memory allocation
-4. Ensure timeout is sufficient for your workload
-
-### Performance Issues
-
-1. Monitor function duration
-2. Check for cold starts
-3. Optimize dependency imports
-4. Consider using Regional Deployment
-
-## Scaling
-
-Vercel automatically scales serverless functions. For high-traffic scenarios:
-- Use concurrent requests carefully (stateful apps)
-- Consider using Redis for distributed state
-- Monitor usage in the Vercel Dashboard
-- Upgrade plan if needed for higher concurrency
-
-## Further Reading
-
-- [Vercel Python Runtime Docs](https://vercel.com/docs/functions/serverless-functions/python)
-- [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables)
-- [TradingAgents README](./README.md)
+Pushes to the branch trigger a Vercel deployment automatically. Deployment status,
+build logs, and runtime logs are available in the Vercel Dashboard under the
+**strattonoak** project.

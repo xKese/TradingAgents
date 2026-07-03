@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS orders (
     notional_dollars TEXT NOT NULL,
     stop_loss_price TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_coid ON orders(client_order_id);
 
 CREATE TABLE IF NOT EXISTS fills (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

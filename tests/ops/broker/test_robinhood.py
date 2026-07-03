@@ -390,9 +390,9 @@ def _ack(status, *, quantity=None, fill_price=None):
     )
 
 
-def _buy_order():
+def _buy_order(client_order_id="b-1"):
     return Order(
-        client_order_id="b-1", symbol="AAPL", side=Side.BUY,
+        client_order_id=client_order_id, symbol="AAPL", side=Side.BUY,
         notional_dollars=Decimal("50"), order_type=OrderType.MARKET,
         stop_pct=Decimal("-0.08"),
     )
@@ -455,13 +455,13 @@ def test_filled_ack_without_price_or_qty_raises(journal):
     client = _CannedAckClient(_ack("filled", quantity=Decimal("5"), fill_price=None))
     broker = RobinhoodBroker(client=client, journal=journal)
     with pytest.raises(BrokerError):
-        broker.place_order(_buy_order())
+        broker.place_order(_buy_order(client_order_id="b-1"))
     assert journal.read_fills() == []
 
     client = _CannedAckClient(_ack("filled", quantity=None, fill_price=Decimal("10")))
     broker = RobinhoodBroker(client=client, journal=journal)
     with pytest.raises(BrokerError):
-        broker.place_order(_buy_order())
+        broker.place_order(_buy_order(client_order_id="b-2"))
     assert journal.read_fills() == []
 
 

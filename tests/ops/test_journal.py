@@ -270,6 +270,25 @@ def test_cash_adjustment_roundtrip(tmp_path):
     assert adjs[1]["at"].tzinfo is not None
 
 
+def test_duplicate_client_order_id_raises_integrity_error(tmp_path):
+    """M3: client_order_id is meant to be a unique idempotency key. A second
+    order row with the same client_order_id must be a write-time error, not
+    silent replay corruption (journal replay keys fills/orders by
+    client_order_id — last write wins on a collision)."""
+    import sqlite3
+
+    j = Journal(str(tmp_path / "j.sqlite"))
+    j.record_order(
+        client_order_id="dupe-1", symbol="AAPL", side="BUY",
+        notional_dollars=Decimal("25.00"), stop_loss_price=None,
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        j.record_order(
+            client_order_id="dupe-1", symbol="MSFT", side="BUY",
+            notional_dollars=Decimal("30.00"), stop_loss_price=None,
+        )
+
+
 def test_cash_adjustment_migrates_existing_db(tmp_path):
     """A journal created before cash_adjustments existed must gain the table
     on reopen (same defensive-migration pattern as the other tables)."""

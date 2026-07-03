@@ -16,6 +16,19 @@ _DEFAULT_DENY_LIST = frozenset({
     "TMF", "TMV", "QLD", "QID",
 })
 
+def _default_journal_path() -> str:
+    """Default journal location: ${XDG_STATE_HOME:-~/.local/state}/tradingagents/ops_journal.sqlite.
+
+    Computed fresh on every OpsConfig() construction (not a module-level
+    constant) so tests can monkeypatch XDG_STATE_HOME and so the resolved
+    path always reflects the current environment. A CWD-relative default
+    (the old behavior) silently creates a fresh journal — and fresh paper
+    account — whenever `ops run` is launched from the wrong directory.
+    """
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(os.path.expanduser(base), "tradingagents", "ops_journal.sqlite")
+
+
 # Symbols in this set are a FULL contractual blackout: buy AND sell are
 # rejected. This is a strict subset of deny_list. Everything else in
 # deny_list (the leveraged ETFs) is BUY-denied but SELL-allowed — selling
@@ -37,7 +50,7 @@ class OpsConfig:
     daily_drawdown_pct: Decimal = Decimal("-0.07")
     weekly_drawdown_pct: Decimal = Decimal("-0.15")
     per_position_stop_pct: Decimal = Decimal("-0.08")
-    journal_path: str = "ops_journal.sqlite"
+    journal_path: str = field(default_factory=_default_journal_path)
     starting_cash: Decimal = Decimal("250")
 
     def __post_init__(self) -> None:

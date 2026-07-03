@@ -9,6 +9,7 @@ scheduler drains in-flight jobs, journal closes cleanly. Exit codes:
 """
 from __future__ import annotations
 
+import os
 import signal
 import sys
 import threading
@@ -37,6 +38,25 @@ _shutdown_event = threading.Event()
 
 def _shutdown_handler(signum, frame) -> None:
     _shutdown_event.set()
+
+
+def _resolve_and_announce_journal_path(config: OpsConfig) -> str:
+    """Resolve config.journal_path to an absolute path, print it to stdout,
+    and warn on stderr when this run is about to create a brand-new journal
+    file (the path didn't exist before open). A CWD-relative journal_path
+    used to silently create a fresh journal — and fresh paper account —
+    whenever `ops run` launched from the wrong directory; printing the
+    resolved path makes that immediately visible (L4)."""
+    resolved = os.path.abspath(os.path.expanduser(config.journal_path))
+    is_new = not os.path.exists(resolved)
+    print(f"Journal: {resolved}")
+    if is_new:
+        print(
+            f"WARNING: journal file does not exist yet — creating a new one "
+            f"at {resolved}",
+            file=sys.stderr,
+        )
+    return resolved
 
 
 def _start_of_day_equity(journal: Journal) -> Decimal:
@@ -208,7 +228,8 @@ def run() -> int:
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
     config = load_config()
-    journal = Journal(config.journal_path)
+    journal_path = _resolve_and_announce_journal_path(config)
+    journal = Journal(journal_path)
     try:
         try:
             broker, orchestrator, guardian, calendar, result = _startup(config, journal)

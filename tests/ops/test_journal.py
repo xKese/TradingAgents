@@ -6,6 +6,18 @@ import pytest
 from ops.journal import Journal
 
 
+def test_journal_creates_missing_parent_directories(tmp_path):
+    """The default journal_path now lives under an XDG state directory that
+    may not exist yet on first run (e.g. ~/.local/state/tradingagents/).
+    Journal must create it on open rather than raising sqlite3.OperationalError."""
+    nested = tmp_path / "state" / "tradingagents" / "ops_journal.sqlite"
+    assert not nested.parent.exists()
+    j = Journal(str(nested))
+    assert nested.parent.exists()
+    j.record_event("test_kind", {"ok": True})
+    j.close()
+
+
 def test_journal_records_and_reads_event(tmp_path):
     j = Journal(str(tmp_path / "j.sqlite"))
     j.record_event("test_kind", {"foo": "bar", "n": 1})

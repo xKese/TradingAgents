@@ -212,6 +212,45 @@ def test_start_of_day_equity_uses_fresh_snapshot(tmp_path):
     assert _start_of_week_equity(j) == Decimal("310")
 
 
+def test_resolve_and_announce_journal_path_prints_absolute_path(tmp_path, capsys):
+    from ops.main import _resolve_and_announce_journal_path
+
+    cfg = OpsConfig(journal_path=str(tmp_path / "sub" / "j.sqlite"))
+    resolved = _resolve_and_announce_journal_path(cfg)
+    assert resolved == str(tmp_path / "sub" / "j.sqlite")
+    captured = capsys.readouterr()
+    assert resolved in captured.out
+
+
+def test_resolve_and_announce_journal_path_expands_relative_and_tilde(monkeypatch, tmp_path, capsys):
+    from ops.main import _resolve_and_announce_journal_path
+
+    monkeypatch.chdir(tmp_path)
+    cfg = OpsConfig(journal_path="relative.sqlite")
+    resolved = _resolve_and_announce_journal_path(cfg)
+    assert resolved == str(tmp_path / "relative.sqlite")
+
+
+def test_resolve_and_announce_journal_path_warns_on_new_file(tmp_path, capsys):
+    from ops.main import _resolve_and_announce_journal_path
+
+    cfg = OpsConfig(journal_path=str(tmp_path / "brand_new.sqlite"))
+    _resolve_and_announce_journal_path(cfg)
+    captured = capsys.readouterr()
+    assert "new" in captured.err.lower()
+
+
+def test_resolve_and_announce_journal_path_no_warning_when_file_exists(tmp_path, capsys):
+    from ops.main import _resolve_and_announce_journal_path
+
+    existing = tmp_path / "existing.sqlite"
+    existing.write_bytes(b"")
+    cfg = OpsConfig(journal_path=str(existing))
+    _resolve_and_announce_journal_path(cfg)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
 def test_run_exits_3_and_journals_on_broker_unreachable(monkeypatch, tmp_path, capsys):
     """M6: a broker that can't be reached at startup (build or reconcile)
     must halt loudly — exit 3, both broker_unreachable and startup_halted

@@ -11,6 +11,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from ops.trading_time import trading_day_start, trading_week_start
@@ -108,6 +109,14 @@ class Journal:
         # it while delegating to inner broker + journal writes) wrapping
         # (Journal._lock inner) — never the reverse. See ops/broker/guarded.py.
         self._lock = threading.Lock()
+        # Create the parent directory on open (not at import time) — the
+        # default journal_path now lives under an XDG state directory
+        # (~/.local/state/tradingagents/) that may not exist yet on first
+        # run. A relative/CWD path has no parent to create (Path("x").parent
+        # == Path(".")), so this is a harmless no-op in that case.
+        parent = Path(path).parent
+        if str(parent) not in ("", "."):
+            parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")

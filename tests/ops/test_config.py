@@ -71,6 +71,28 @@ def test_starting_cash_default_and_env(monkeypatch):
     assert load_config().starting_cash == Decimal("500")
 
 
+def test_journal_path_defaults_to_xdg_state_home_when_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("OPS_JOURNAL_PATH", raising=False)
+    cfg = OpsConfig()
+    assert cfg.journal_path == str(tmp_path / "state" / "tradingagents" / "ops_journal.sqlite")
+
+
+def test_journal_path_defaults_to_local_state_home_when_xdg_unset(monkeypatch):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    cfg = OpsConfig()
+    assert cfg.journal_path == os.path.expanduser(
+        "~/.local/state/tradingagents/ops_journal.sqlite"
+    )
+
+
+def test_journal_path_env_override_still_wins(monkeypatch, tmp_path):
+    override = str(tmp_path / "custom.sqlite")
+    monkeypatch.setenv("OPS_JOURNAL_PATH", override)
+    cfg = load_config()
+    assert cfg.journal_path == override
+
+
 def test_starting_cash_must_be_positive():
     from decimal import Decimal
 

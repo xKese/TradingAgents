@@ -221,3 +221,14 @@ __marimo__/
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
 reports/
+
+# Next.js
+/.next/
+/out/
+.next-env.d.ts
+
+# Build output
+/build/
+
+# Cache
+.swc

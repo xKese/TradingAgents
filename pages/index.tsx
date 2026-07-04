@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Head from 'next/head'
-import AnalysisForm from '@/components/AnalysisForm'
-import ResultsPanel from '@/components/ResultsPanel'
+import AnalysisForm from '../components/AnalysisForm'
+import ResultsPanel from '../components/ResultsPanel'
 
 export default function Dashboard() {
   const [results, setResults] = useState<any>(null)

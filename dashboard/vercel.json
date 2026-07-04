@@ -1,9 +1,0 @@
-{
-  "name": "strattonoak-dashboard",
-  "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "env": {
-    "BACKEND_URL": "@backend-api-url",
-    "NEXT_PUBLIC_API_URL": "@backend-api-url"
-  }
-}

@@ -1,7 +1,7 @@
 {
-  "name": "strattonoak-dashboard",
-  "version": "0.1.0",
-  "private": true,
+  "name": "strattonoak",
+  "version": "0.2.5",
+  "description": "StrattonOak: Multi-Agents LLM Financial Trading Framework + Dashboard",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

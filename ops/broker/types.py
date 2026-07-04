@@ -50,12 +50,26 @@ class Position:
     quantity: Decimal
     avg_entry_price: Decimal
     stop_loss_price: Decimal | None = None
+    shares_available_for_sells: Decimal | None = None
+    """Currently-sellable share count (live only). None means "no
+    distinction" — paper never sets this, so sellable == quantity there.
+    A concrete value (RobinhoodBroker.get_positions) may be less than
+    quantity when shares are held/unsettled. Use sellable_quantity rather
+    than reading this field directly."""
 
     def market_value(self, current_price: Decimal) -> Decimal:
         return self.quantity * current_price
 
     def unrealized_pct(self, current_price: Decimal) -> Decimal:
         return (current_price - self.avg_entry_price) / self.avg_entry_price
+
+    @property
+    def sellable_quantity(self) -> Decimal:
+        return (
+            self.shares_available_for_sells
+            if self.shares_available_for_sells is not None
+            else self.quantity
+        )
 
 
 @dataclass(frozen=True)

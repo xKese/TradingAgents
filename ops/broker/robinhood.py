@@ -62,6 +62,7 @@ class RobinhoodBroker(Broker):
             result.append(Position(
                 symbol=p.symbol, quantity=p.quantity,
                 avg_entry_price=p.avg_price, stop_loss_price=stop,
+                shares_available_for_sells=p.shares_available_for_sells,
             ))
         return result
 
@@ -100,12 +101,18 @@ class RobinhoodBroker(Broker):
         existing = next((p for p in positions if p.symbol == symbol), None)
         if existing is None:
             raise NoSuchPosition(f"no position in {symbol}")
+        sellable = existing.shares_available_for_sells
+        if sellable <= 0:
+            raise NoSuchPosition(
+                f"no sellable shares in {symbol} "
+                f"(quantity={existing.quantity}, shares_available_for_sells={sellable})"
+            )
         client_order_id = client_order_id or f"close-{symbol}-{uuid.uuid4().hex[:8]}"
         try:
             quote = self._client.get_quote(symbol)
         except MCPUnavailable as exc:
             raise BrokerError(f"mcp unavailable: {exc}") from exc
-        notional = existing.quantity * quote
+        notional = sellable * quote
         self._journal.record_order(
             client_order_id=client_order_id, symbol=symbol, side=Side.SELL.value,
             notional_dollars=notional, stop_loss_price=None,
@@ -113,7 +120,7 @@ class RobinhoodBroker(Broker):
         try:
             ack = self._client.place_equity_order(
                 symbol=symbol, side=Side.SELL,
-                notional=None, quantity=existing.quantity,
+                notional=None, quantity=sellable,
                 order_type=OrderType.MARKET, limit_price=None,
                 client_order_id=client_order_id,
             )

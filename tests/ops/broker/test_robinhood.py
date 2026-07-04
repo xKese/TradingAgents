@@ -163,6 +163,37 @@ def test_place_order_sell_calls_mcp(fake_client, journal):
     assert fake_client.placed[0].notional == Decimal("50")
 
 
+def test_close_position_sells_sellable_amount_not_total_quantity(fake_client, journal):
+    """Live semantics: some shares may be held/unsettled. quantity=5 but
+    only 3 are currently sellable — close_position must sell exactly the
+    sellable amount, not the full quantity (which RH would reject/oversell)."""
+    fake_client.set_quote("AAPL", Decimal("10"))
+    fake_client.seed_position(
+        "AAPL", Decimal("5"), Decimal("10"),
+        shares_available_for_sells=Decimal("3"),
+    )
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    fill = broker.close_position("AAPL")
+    assert fill.quantity == Decimal("3")
+    ack = fake_client.placed[-1]
+    assert ack.quantity == Decimal("3")
+    assert ack.notional is None
+
+
+def test_close_position_raises_when_nothing_sellable(fake_client, journal):
+    """shares_available_for_sells == 0 → nothing sellable; must raise rather
+    than place a zero-quantity (or worse, oversell) order."""
+    fake_client.set_quote("AAPL", Decimal("10"))
+    fake_client.seed_position(
+        "AAPL", Decimal("5"), Decimal("10"),
+        shares_available_for_sells=Decimal("0"),
+    )
+    broker = RobinhoodBroker(client=fake_client, journal=journal)
+    with pytest.raises(BrokerError):
+        broker.close_position("AAPL")
+    assert len(fake_client.placed) == 0
+
+
 def test_close_position_missing_raises(fake_client, journal):
     broker = RobinhoodBroker(client=fake_client, journal=journal)
     with pytest.raises(NoSuchPosition):

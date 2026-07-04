@@ -98,7 +98,7 @@ class LongOnlyRule(Rule):
         quote = ctx.broker.get_quote(symbol)
         sell_qty = ctx.order.notional_dollars / quote
         held = next(
-            (p.quantity for p in ctx.broker.get_positions() if p.symbol.upper() == symbol),
+            (p.sellable_quantity for p in ctx.broker.get_positions() if p.symbol.upper() == symbol),
             Decimal("0"),
         )
         if sell_qty > held + _SELL_QTY_EPSILON:

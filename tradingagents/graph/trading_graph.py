@@ -456,11 +456,15 @@ class TradingAgentsGraph:
 
         log_path = directory / f"full_states_log_{trade_date}.json"
         with open(log_path, "w", encoding="utf-8") as f:
+<<<<<<< HEAD
             json.dump(self.log_states_dict[str(trade_date)], f, indent=4,ensure_ascii=False)
         
         md_path = directory / f"full_states_log_{trade_date}.md"
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(self._render_state_markdown(trade_date, final_state))
+=======
+            json.dump(self.log_states_dict[str(trade_date)], f, indent=4, ensure_ascii=False)
+>>>>>>> 4b59496595ed673734246a9d388a2090fdfb8d42
 
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""

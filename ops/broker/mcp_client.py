@@ -10,11 +10,20 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import socket
 import threading
+import webbrowser
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Coroutine, Protocol, runtime_checkable
+from urllib.parse import parse_qs, urlparse
+
+from mcp import ClientSession
+from mcp.client.auth import OAuthClientProvider, TokenStorage
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 
 from ops.broker.types import OrderType, Side
 
@@ -110,6 +119,152 @@ def _read_token(path: Path) -> dict | None:
         return None
     with path.open() as f:
         return json.load(f)
+
+
+# --- _FileTokenStorage --------------------------------------------------------
+#
+# Implements the real SDK's `mcp.client.auth.TokenStorage` Protocol (verified
+# via `inspect.getsource`: async `get_tokens`/`set_tokens`/`get_client_info`/
+# `set_client_info`, typed `OAuthToken | None` / `OAuthClientInformationFull |
+# None`). Both the bearer token and the dynamic-client-registration info the
+# SDK needs to resume without re-registering are persisted in the *same*
+# on-disk JSON payload the pre-existing `_read_token`/`_write_token` helpers
+# already manage (0600 perms, `OPS_RH_TOKEN_PATH` override), as two top-level
+# keys: `{"token": {...}, "client_info": {...}}`. Either key may be absent.
+#
+# `model_dump(mode="json")` is used (not the default python mode) because
+# `OAuthClientInformationFull` carries pydantic `AnyHttpUrl` fields (e.g.
+# `client_uri`) that `json.dump` cannot serialize directly; `mode="json"`
+# renders them as plain strings, which `model_validate` parses back on read.
+
+
+class _FileTokenStorage(TokenStorage):
+    """`TokenStorage` backed by the token file at `path`."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def get_tokens(self) -> OAuthToken | None:
+        payload = _read_token(self._path)
+        if not payload or "token" not in payload:
+            return None
+        return OAuthToken.model_validate(payload["token"])
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        payload = _read_token(self._path) or {}
+        payload["token"] = tokens.model_dump(mode="json", exclude_none=True)
+        _write_token(self._path, payload)
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        payload = _read_token(self._path)
+        if not payload or "client_info" not in payload:
+            return None
+        return OAuthClientInformationFull.model_validate(payload["client_info"])
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        payload = _read_token(self._path) or {}
+        payload["client_info"] = client_info.model_dump(mode="json", exclude_none=True)
+        _write_token(self._path, payload)
+
+
+# --- OAuth browser + localhost callback ---------------------------------------
+#
+# The SDK's `OAuthClientProvider` only invokes `redirect_handler`/
+# `callback_handler` when an authorization-code grant is actually needed (no
+# cached/refreshable token) — verified by reading
+# `mcp.client.auth.oauth2.OAuthContext._perform_authorization_code_grant`.
+# Construction of `_LocalhostOAuthCallback` below does no I/O; the socket is
+# opened lazily inside `wait_for_callback`, which only ever runs on the
+# worker loop, and only when the SDK decides a fresh grant is required — i.e.
+# never in the default unit-test suite, which fakes out the transport before
+# any real `auth_flow` executes. It is exercised for real only by the opt-in
+# live tests (Task 6).
+#
+# A fixed localhost port is used rather than an OS-assigned ephemeral one so
+# that the redirect_uri baked into the OAuth client metadata (built once, at
+# provider-construction time) doesn't need to know about a socket that isn't
+# bound until later. Dynamic client registration means no external
+# pre-registration of this redirect_uri is required.
+
+_OAUTH_CALLBACK_PORT = 51823
+
+_OAUTH_CALLBACK_RESPONSE_BODY = (
+    b"<html><body>Robinhood MCP authorization complete. You may close this tab.</body></html>"
+)
+
+
+def _parse_oauth_callback_request(request: bytes) -> tuple[str | None, str | None]:
+    """Extract `code` and `state` query params from a raw HTTP GET request.
+
+    Pure/no I/O so it can be unit-tested without a real socket. `request` is
+    the raw bytes read off the accepted connection, e.g.
+    `b"GET /callback?code=abc&state=xyz HTTP/1.1\\r\\n..."`.
+    """
+    request_line = request.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
+    parts = request_line.split(" ")
+    if len(parts) < 2:
+        return None, None
+    query = parse_qs(urlparse(parts[1]).query)
+    code = query.get("code", [None])[0]
+    state = query.get("state", [None])[0]
+    return code, state
+
+
+class _LocalhostOAuthCallback:
+    """Supplies `OAuthClientProvider`'s `redirect_handler`/`callback_handler`.
+
+    `redirect_handler` opens the authorization URL in the user's browser;
+    `callback_handler` accepts exactly one localhost connection carrying the
+    `code`/`state` query params and returns them. Construction is side-effect
+    free; the listening socket is opened only inside `wait_for_callback`.
+    """
+
+    def __init__(self, port: int = _OAUTH_CALLBACK_PORT) -> None:
+        self.port = port
+
+    @property
+    def redirect_uri(self) -> str:
+        return f"http://127.0.0.1:{self.port}/callback"
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        webbrowser.open(authorization_url)
+
+    async def wait_for_callback(self) -> tuple[str, str | None]:
+        loop = asyncio.get_running_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", self.port))
+        sock.listen(1)
+        sock.setblocking(False)
+        try:
+            conn, _addr = await loop.sock_accept(sock)
+            try:
+                data = await loop.sock_recv(conn, 65536)
+                code, state = _parse_oauth_callback_request(data)
+                await loop.sock_sendall(
+                    conn,
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: text/html\r\n"
+                    b"Content-Length: " + str(len(_OAUTH_CALLBACK_RESPONSE_BODY)).encode("ascii") + b"\r\n"
+                    b"Connection: close\r\n\r\n" + _OAUTH_CALLBACK_RESPONSE_BODY,
+                )
+            finally:
+                conn.close()
+        finally:
+            sock.close()
+        if not code:
+            raise MCPUnavailable("OAuth callback did not include an authorization code")
+        return code, state
+
+
+def _oauth_client_metadata(redirect_uri: str) -> OAuthClientMetadata:
+    return OAuthClientMetadata(
+        redirect_uris=[redirect_uri],
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        token_endpoint_auth_method="none",
+        client_name="tradingagents-ops-robinhood-mcp",
+    )
 
 
 # --- _AsyncWorker -------------------------------------------------------------
@@ -222,58 +377,110 @@ class RealRobinhoodMCPClient:
     Routing every call through the same worker thread's loop keeps it all on
     one Task-affine loop. See `_AsyncWorker` for the mechanics.
 
-    `connect()` does not yet open the transport/session (that requires a
-    live OAuth token and network endpoint), so `self._session` remains
-    `None` and `_call_tool` cannot actually be exercised until Task 2's
-    opt-in live tests wire up the transport and OAuth flow end-to-end. The
-    shape here (method signatures, CallToolResult parsing, error mapping,
-    and now the worker-thread transport) is what that wiring will plug into.
+    `connect()` opens the real transport/session: `streamablehttp_client`
+    (auth=`OAuthClientProvider`, backed by `_FileTokenStorage`) then
+    `ClientSession`, both entered via an `AsyncExitStack` on the worker
+    loop and kept open (not exited) for the client's lifetime — `close()`
+    tears them down, on that same loop, before stopping it. OAuth itself
+    (browser flow on first run, cached token thereafter) is handled
+    transparently by `OAuthClientProvider`, not by manual code here — see
+    `_LocalhostOAuthCallback`.
     """
 
-    def __init__(self, *, endpoint: str = _RH_MCP_ENDPOINT, token_path: Path | None = None):
+    def __init__(
+        self,
+        *,
+        endpoint: str = _RH_MCP_ENDPOINT,
+        token_path: Path | None = None,
+        connect_timeout: float = 120.0,
+    ):
         self._endpoint = endpoint
         self._token_path = token_path or _resolve_token_path()
+        self._connect_timeout = connect_timeout
         self._session = None  # populated on connect(); see class docstring
         self._worker: _AsyncWorker | None = None  # started lazily; see connect()
+        self._exit_stack: AsyncExitStack | None = None  # populated on connect()
 
     def connect(self) -> None:
-        """Load (or mint via OAuth) a token, then establish the MCP session.
+        """Establish the MCP session (OAuth + transport + initialize).
 
-        Token load/mint is synchronous and side-effect-scoped to the token
-        file. Establishing the actual MCP session over the SDK's async
-        transport is deferred — see class docstring — so `self._session`
-        stays `None` after this call until that bridging lands.
+        Starts this client's `_AsyncWorker` if needed, then submits a single
+        coroutine — on the worker loop — that assembles
+        `streamablehttp_client(url=..., auth=OAuthClientProvider(...))` and
+        `ClientSession`, entering both via an `AsyncExitStack`. The stack is
+        *not* exited here: the transport/session must stay bound to the same
+        asyncio Task/loop they were entered on (see `_AsyncWorker`'s module
+        note), so they are kept alive on `self._exit_stack` until `close()`
+        tears them down on that same loop.
 
-        Also starts this client's `_AsyncWorker` (one daemon thread + one
-        event loop for the client's lifetime), so every `_call_tool` bridge
-        runs on the same loop instead of spinning up a fresh Task per call.
-        That matters once Task 2 wires up the real async session/transport
-        on the SDK — those need to stay bound to a single loop (see
-        `_AsyncWorker`'s module note).
+        `OAuthClientProvider`'s `redirect_handler`/`callback_handler` (see
+        `_LocalhostOAuthCallback`) run the browser-based authorization-code
+        grant transparently, but only if the cached token in
+        `_FileTokenStorage` is absent/unrefreshable — there is no separate
+        manual flow.
+
+        Any transport/handshake failure (auth error, connection refused,
+        timeout, a rejected `initialize()`) is mapped to `MCPUnavailable`;
+        partial progress (e.g. transport opened but `initialize()` failed) is
+        torn down via the same `AsyncExitStack` before re-raising, so no
+        connection is leaked.
+
+        Idempotent: a second call while already connected is a no-op.
         """
-        token = _read_token(self._token_path)
-        if token is None:
-            token = self._run_oauth_browser_flow()
-            _write_token(self._token_path, token)
         if self._worker is None:
             self._worker = _AsyncWorker()
             self._worker.start()
-        # Establishing self._session requires entering the mcp SDK's async
-        # transport/session context managers (streamablehttp_client +
-        # ClientSession), which is out of scope for this task — see the
-        # class docstring. Left as None; wired in Task 2.
+        if self._session is not None:
+            return
+
+        async def _connect() -> None:
+            callback = _LocalhostOAuthCallback()
+            provider = OAuthClientProvider(
+                server_url=self._endpoint,
+                client_metadata=_oauth_client_metadata(callback.redirect_uri),
+                storage=_FileTokenStorage(self._token_path),
+                redirect_handler=callback.redirect_handler,
+                callback_handler=callback.wait_for_callback,
+            )
+            stack = AsyncExitStack()
+            try:
+                read, write, _get_session_id = await stack.enter_async_context(
+                    streamablehttp_client(url=self._endpoint, auth=provider)
+                )
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+            except Exception:
+                await stack.aclose()
+                raise
+            self._exit_stack = stack
+            self._session = session
+
+        try:
+            self._worker.submit(_connect(), timeout=self._connect_timeout)
+        except MCPUnavailable:
+            raise
+        except Exception as exc:
+            raise MCPUnavailable(f"MCP handshake failed: {exc}") from exc
 
     def close(self) -> None:
-        """Stop this client's owned worker thread/loop, if one was started."""
+        """Tear down the MCP session, then stop the worker thread/loop.
+
+        Order matters: `self._exit_stack` (the transport + session's async
+        context managers) is closed via a coroutine submitted to the worker
+        — i.e. run on the same loop/thread they were entered on — BEFORE the
+        worker is stopped. Closing them after the loop stops would either
+        hang (nothing left to run the coroutine) or silently leak the
+        connection. Idempotent; safe if `connect()` was never called.
+        """
+        if self._worker is not None and self._exit_stack is not None:
+            stack, self._exit_stack = self._exit_stack, None
+            self._session = None
+            # Best-effort teardown; still proceed to stop the worker either way.
+            with suppress(MCPUnavailable):
+                self._worker.submit(stack.aclose(), timeout=self._connect_timeout)
         if self._worker is not None:
             self._worker.stop()
             self._worker = None
-
-    def _run_oauth_browser_flow(self) -> dict:
-        raise NotImplementedError(
-            "OAuth browser flow — implemented against `mcp` SDK's OAuth helper "
-            "(mcp.client.auth) as part of Task 12's opt-in live tests."
-        )
 
     def _call_tool(self, name: str, arguments: dict, *, timeout: float = 30.0) -> dict:
         """Sync bridge to the SDK's async `ClientSession.call_tool`.

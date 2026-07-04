@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import webbrowser
 
+import anyio
 import pytest
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
@@ -298,15 +299,103 @@ def test_close_tears_down_session_and_transport_before_stopping_worker(monkeypat
 
     client.close()
 
-    # If close() stopped the worker before submitting the teardown coroutine,
-    # the submit would raise MCPUnavailable and these would stay False.
+    # If close() stopped the worker before signaling _serve()'s shutdown
+    # event and waiting for it to finish, these would stay False.
     assert session.exited is True
     assert transport.exited is True
     assert client._worker is None
-    assert client._exit_stack is None
+    assert client._lifetime is None
 
 
 def test_close_is_idempotent_and_safe_without_connect(tmp_path):
     client = RealRobinhoodMCPClient(token_path=tmp_path / "token.json")
     client.close()
     client.close()
+
+
+# --- Task-affinity regression (MCP-T2 Finding 1) ----------------------------
+#
+# The fakes above (`_FakeTransportCM`/`_FakeClientSession`) don't create real
+# anyio task groups, so they can't catch a connect/close design that splits
+# entering and exiting a cancel scope across two different asyncio Tasks —
+# anyio only raises when a *real* task-affine cancel scope is exited from a
+# Task other than the one that entered it. `_TaskAffineCM` below enters a
+# real `anyio.create_task_group()` in `__aenter__` and exits it in
+# `__aexit__`, reproducing that constraint. Verified against real anyio in a
+# standalone scratch script: the old connect()-submits-one-coroutine /
+# close()-submits-a-second-coroutine shape raises
+# `RuntimeError("Attempted to exit cancel scope in a different task than it
+# was entered in")` on close(); the single-Task `_serve()` design does not.
+
+
+class _TaskAffineCM:
+    """Enters/exits a real anyio cancel scope — task-affine like the SDK's."""
+
+    def __init__(self) -> None:
+        self._tg = None
+
+    async def __aenter__(self):
+        self._tg = anyio.create_task_group()
+        await self._tg.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return await self._tg.__aexit__(*exc_info)
+
+
+class _TaskAffineTransportCM(_TaskAffineCM):
+    """Stand-in for `streamablehttp_client(...)`, task-affine like the real one."""
+
+    def __init__(self, *, url, auth) -> None:
+        super().__init__()
+        self.url = url
+        self.auth = auth
+
+    async def __aenter__(self):
+        await super().__aenter__()
+        return ("READ", "WRITE", lambda: "session-id")
+
+
+class _TaskAffineSession(_TaskAffineCM):
+    """Stand-in for `mcp.ClientSession`, task-affine like the real one."""
+
+    def __init__(self, read, write) -> None:
+        super().__init__()
+        self.read = read
+        self.write = write
+
+    async def __aenter__(self):
+        await super().__aenter__()
+        return self
+
+    async def initialize(self) -> None:
+        pass
+
+
+def test_connect_then_close_survives_real_anyio_task_affinity(monkeypatch, tmp_path):
+    """Regression for the connect/close-split-across-Tasks bug.
+
+    Under the old design, connect() entered these CMs on one asyncio Task
+    (submitted via `_worker.submit`) and close() exited them on a second,
+    different Task — anyio's real cancel-scope task-affinity check turns
+    that into an uncaught RuntimeError, which `close()`'s
+    `suppress(MCPUnavailable)` does not catch, so `self._worker.stop()` is
+    never reached (leaked daemon thread). The fix runs the whole connection
+    lifetime — enter through exit — on a single long-lived Task, so this
+    must complete cleanly and leave the worker thread stopped.
+    """
+    monkeypatch.setattr(
+        mcp_client, "streamablehttp_client",
+        lambda *, url, auth: _TaskAffineTransportCM(url=url, auth=auth),
+    )
+    monkeypatch.setattr(mcp_client, "ClientSession", _TaskAffineSession)
+
+    client = RealRobinhoodMCPClient(token_path=tmp_path / "token.json")
+    client.connect()
+    worker_thread = client._worker._thread
+
+    client.close()
+
+    assert worker_thread is not None
+    assert not worker_thread.is_alive()
+    assert client._session is None

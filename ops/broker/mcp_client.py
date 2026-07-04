@@ -13,7 +13,6 @@ import os
 import socket
 import threading
 import webbrowser
-from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -285,11 +284,22 @@ class _AsyncWorker:
     """Owns one asyncio event loop on one daemon thread, for a client's lifetime.
 
     Sync callers submit coroutines (created on the calling thread, but never
-    awaited there) via `submit()`; they are scheduled onto the worker loop
-    with `asyncio.run_coroutine_threadsafe` and actually run on the worker
-    thread. This keeps every coroutine that ever touches the MCP session
-    bound to a single loop/thread, which is required for the SDK's anyio-based
-    transports (see module note above).
+    awaited there) via `submit()` (blocks for the result) or `spawn()` (fires
+    the coroutine as a Task on the worker loop and returns immediately); they
+    are scheduled onto the worker loop with `asyncio.run_coroutine_threadsafe`
+    and actually run on the worker thread. This keeps every coroutine that
+    ever touches the MCP session bound to a single loop/thread, which is
+    required for the SDK's anyio-based transports (see module note above).
+
+    Task affinity, not just loop affinity: anyio's cancel scopes (used by the
+    SDK's transports/`ClientSession`) additionally require that the *same
+    asyncio Task* that entered an async context manager's cancel scope is the
+    one that exits it — a coroutine that enters such a CM must not `return`
+    (ending its Task) and have a *different* submitted coroutine exit it
+    later, even on the same loop. `spawn()` exists so a caller can start one
+    long-lived Task (`RealRobinhoodMCPClient._serve`) that enters AND exits
+    the session's CMs itself, rather than splitting that across two
+    `submit()` calls (see `_serve`'s docstring for the full story).
     """
 
     def __init__(self) -> None:
@@ -334,6 +344,32 @@ class _AsyncWorker:
             fut.cancel()
             raise MCPUnavailable(f"MCP call timed out after {timeout}s") from None
 
+    def spawn(self, coro: Coroutine) -> concurrent.futures.Future:
+        """Schedule `coro` on the worker loop and return its Future immediately.
+
+        Unlike `submit()`, this never blocks on the result — for a coroutine
+        whose lifetime is intentionally longer than the calling thread's need
+        for a return value (e.g. `RealRobinhoodMCPClient._serve`, which owns
+        the MCP session for the client's entire lifetime on a single Task; see
+        that method's docstring for why that Task-affinity matters).
+        """
+        if self._loop is None or self._thread is None or not self._thread.is_alive():
+            coro.close()  # avoid a "coroutine was never awaited" warning
+            raise MCPUnavailable("MCP worker is not running")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+    def call_soon_threadsafe(self, callback) -> None:
+        """Run `callback()` on the worker loop's thread, if the loop is alive.
+
+        Used to signal an `asyncio.Event` created on the worker loop (e.g.
+        `_serve`'s shutdown event) from a different thread: `Event.set()`
+        wakes waiter Futures that are bound to the loop that created them, so
+        it must actually run on that loop's thread, not just be called from
+        anywhere.
+        """
+        if self._loop is not None and self._thread is not None and self._thread.is_alive():
+            self._loop.call_soon_threadsafe(callback)
+
     def stop(self) -> None:
         """Stop the loop and join the thread. Idempotent; safe if never started."""
         if self._loop is not None and self._thread is not None and self._thread.is_alive():
@@ -377,14 +413,31 @@ class RealRobinhoodMCPClient:
     Routing every call through the same worker thread's loop keeps it all on
     one Task-affine loop. See `_AsyncWorker` for the mechanics.
 
-    `connect()` opens the real transport/session: `streamablehttp_client`
-    (auth=`OAuthClientProvider`, backed by `_FileTokenStorage`) then
-    `ClientSession`, both entered via an `AsyncExitStack` on the worker
-    loop and kept open (not exited) for the client's lifetime — `close()`
-    tears them down, on that same loop, before stopping it. OAuth itself
-    (browser flow on first run, cached token thereafter) is handled
-    transparently by `OAuthClientProvider`, not by manual code here — see
-    `_LocalhostOAuthCallback`.
+    `connect()`/`close()` and Task affinity: it is not enough for the
+    transport/session to merely run on the worker's *loop* — anyio's cancel
+    scopes additionally require the CM that entered a scope to be *exited by
+    that same asyncio Task*. An earlier version of this class violated that:
+    `connect()` submitted one coroutine that entered the CMs and returned
+    (ending its Task), and `close()` later submitted a *second*, different
+    coroutine to exit them — anyio raises `RuntimeError("Attempted to exit
+    cancel scope in a different task than it was entered in")` in that
+    shape, which isn't even a `MCPUnavailable`/`Exception`-shaped failure the
+    rest of the code was prepared to suppress, so `close()` could return
+    without ever reaching `self._worker.stop()` (a leaked daemon thread).
+
+    The fix: `_serve()` is one coroutine that owns the entire connection
+    lifetime — enter through exit — on a single long-lived Task, spawned via
+    `_AsyncWorker.spawn()` (fire-and-forget; `connect()` does not block on
+    its result). It enters `streamablehttp_client` (auth=`OAuthClientProvider`,
+    backed by `_FileTokenStorage`) and `ClientSession`, calls `initialize()`,
+    publishes `self._session` and unblocks the waiting `connect()` call via a
+    `threading.Event`, then blocks itself — on that SAME Task — on an
+    `asyncio.Event` until `close()` signals it (via `call_soon_threadsafe`,
+    since the event's waiters are Futures bound to the worker loop's
+    thread). Only then do the CMs exit, still on the Task that entered them.
+    OAuth itself (browser flow on first run, cached token thereafter) is
+    handled transparently by `OAuthClientProvider`, not by manual code here —
+    see `_LocalhostOAuthCallback`.
     """
 
     def __init__(
@@ -397,43 +450,36 @@ class RealRobinhoodMCPClient:
         self._endpoint = endpoint
         self._token_path = token_path or _resolve_token_path()
         self._connect_timeout = connect_timeout
-        self._session = None  # populated on connect(); see class docstring
+        self._session = None  # populated by _serve(); see class docstring
         self._worker: _AsyncWorker | None = None  # started lazily; see connect()
-        self._exit_stack: AsyncExitStack | None = None  # populated on connect()
+        self._lifetime: concurrent.futures.Future | None = None  # _serve()'s Future; see connect()
+        self._ready: threading.Event | None = None  # signalled by _serve() once live or failed
+        self._shutdown_event: asyncio.Event | None = None  # created by _serve(); set by close()
+        self._connect_error: BaseException | None = None  # set by _serve() on failure
 
-    def connect(self) -> None:
-        """Establish the MCP session (OAuth + transport + initialize).
+    async def _serve(self) -> None:
+        """Own the MCP session's entire lifetime on a single asyncio Task.
 
-        Starts this client's `_AsyncWorker` if needed, then submits a single
-        coroutine — on the worker loop — that assembles
-        `streamablehttp_client(url=..., auth=OAuthClientProvider(...))` and
-        `ClientSession`, entering both via an `AsyncExitStack`. The stack is
-        *not* exited here: the transport/session must stay bound to the same
-        asyncio Task/loop they were entered on (see `_AsyncWorker`'s module
-        note), so they are kept alive on `self._exit_stack` until `close()`
-        tears them down on that same loop.
+        Enters the transport + `ClientSession` CMs, initializes the session,
+        publishes it (`self._session`) and unblocks `connect()` (via
+        `self._ready`), then blocks on `self._shutdown_event` — on THIS SAME
+        Task — until `close()` signals it. The CMs exit only after that wait
+        returns, still on this Task: that's what satisfies anyio's cancel-
+        scope task affinity (see class docstring, "Task affinity").
 
-        `OAuthClientProvider`'s `redirect_handler`/`callback_handler` (see
-        `_LocalhostOAuthCallback`) run the browser-based authorization-code
-        grant transparently, but only if the cached token in
-        `_FileTokenStorage` is absent/unrefreshable — there is no separate
-        manual flow.
-
-        Any transport/handshake failure (auth error, connection refused,
-        timeout, a rejected `initialize()`) is mapped to `MCPUnavailable`;
-        partial progress (e.g. transport opened but `initialize()` failed) is
-        torn down via the same `AsyncExitStack` before re-raising, so no
-        connection is leaked.
-
-        Idempotent: a second call while already connected is a no-op.
+        `except BaseException` (not `Exception`) is required, not stylistic:
+        `asyncio.CancelledError` derives from `BaseException`, and this Task
+        can be cancelled (e.g. `connect()` timing out and cancelling
+        `self._lifetime` before `self._ready` ever fires). An `except
+        Exception` here would let a cancellation skip straight past this
+        handler — no `_connect_error` recorded, `self._ready` never set, and
+        `connect()`'s waiter would block for the full timeout instead of
+        observing the failure. Catching `BaseException` guarantees the
+        waiter is always unblocked and `finally` always runs.
         """
-        if self._worker is None:
-            self._worker = _AsyncWorker()
-            self._worker.start()
-        if self._session is not None:
-            return
-
-        async def _connect() -> None:
+        shutdown_event = asyncio.Event()
+        self._shutdown_event = shutdown_event
+        try:
             callback = _LocalhostOAuthCallback()
             provider = OAuthClientProvider(
                 server_url=self._endpoint,
@@ -442,45 +488,108 @@ class RealRobinhoodMCPClient:
                 redirect_handler=callback.redirect_handler,
                 callback_handler=callback.wait_for_callback,
             )
-            stack = AsyncExitStack()
-            try:
-                read, write, _get_session_id = await stack.enter_async_context(
-                    streamablehttp_client(url=self._endpoint, auth=provider)
-                )
-                session = await stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-            except Exception:
-                await stack.aclose()
-                raise
-            self._exit_stack = stack
-            self._session = session
-
-        try:
-            self._worker.submit(_connect(), timeout=self._connect_timeout)
-        except MCPUnavailable:
+            async with streamablehttp_client(url=self._endpoint, auth=provider) as (
+                read, write, _get_session_id,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    self._session = session
+                    self._ready.set()
+                    await shutdown_event.wait()
+        except BaseException as exc:
+            self._connect_error = exc
+            self._ready.set()
             raise
-        except Exception as exc:
-            raise MCPUnavailable(f"MCP handshake failed: {exc}") from exc
+        finally:
+            self._session = None
+
+    def connect(self) -> None:
+        """Establish the MCP session (OAuth + transport + initialize).
+
+        Starts this client's `_AsyncWorker` if needed, then spawns `_serve()`
+        as a single long-lived Task on the worker loop (`_AsyncWorker.spawn`
+        — fire-and-hold, not blocking on the coroutine's result) and waits,
+        on a `threading.Event`, for `_serve()` to signal either "session
+        live" or "failed". See `_serve`'s docstring for why the whole
+        connection lifetime must run on one Task.
+
+        `OAuthClientProvider`'s `redirect_handler`/`callback_handler` (see
+        `_LocalhostOAuthCallback`) run the browser-based authorization-code
+        grant transparently, but only if the cached token in
+        `_FileTokenStorage` is absent/unrefreshable — there is no separate
+        manual flow.
+
+        Any transport/handshake failure (auth error, connection refused,
+        timeout, a rejected `initialize()`) is mapped to `MCPUnavailable`; a
+        connect that never signals readiness within `connect_timeout` cancels
+        the `_serve()` Task and also raises `MCPUnavailable`. Either way, no
+        connection is leaked: `_serve`'s `except BaseException`/`finally`
+        (Finding 2) guarantee cleanup runs even on that cancellation.
+
+        Idempotent: a second call while already connected is a no-op.
+        """
+        if self._worker is None:
+            self._worker = _AsyncWorker()
+            self._worker.start()
+        if self._session is not None:
+            return  # already connected
+
+        self._ready = threading.Event()
+        self._connect_error = None
+        self._shutdown_event = None
+        self._lifetime = self._worker.spawn(self._serve())
+
+        became_ready = self._ready.wait(timeout=self._connect_timeout)
+
+        if not became_ready:
+            self._lifetime.cancel()
+            raise MCPUnavailable(f"MCP connect timed out after {self._connect_timeout}s")
+
+        error = self._connect_error
+        if error is None and self._lifetime.done():
+            error = self._lifetime.exception()
+        if error is not None:
+            raise MCPUnavailable(f"MCP handshake failed: {error}") from error
+
+        if self._session is None:
+            # Defensive: _ready only fires once _serve() has either published
+            # a live session or recorded _connect_error — this should be
+            # unreachable, but never return claiming success without one.
+            raise MCPUnavailable("MCP connect failed: session was not established")
 
     def close(self) -> None:
         """Tear down the MCP session, then stop the worker thread/loop.
 
-        Order matters: `self._exit_stack` (the transport + session's async
-        context managers) is closed via a coroutine submitted to the worker
-        — i.e. run on the same loop/thread they were entered on — BEFORE the
-        worker is stopped. Closing them after the loop stops would either
-        hang (nothing left to run the coroutine) or silently leak the
-        connection. Idempotent; safe if `connect()` was never called.
+        Signals `_serve`'s shutdown event via `_AsyncWorker.call_soon_threadsafe`
+        (required because `asyncio.Event.set()` wakes waiter Futures bound to
+        the worker loop's thread) and waits for the `_serve()` Task to finish.
+        The transport/session CMs exit inside `_serve`, on the SAME Task that
+        entered them — no cross-task cancel-scope violation (Finding 1).
+
+        The worker is stopped in a `finally` so it is *always* reached, even
+        if waiting on `_serve()`'s result raises (e.g. it was already
+        cancelled, or raised for some other reason) — a connect()'d client
+        must never leak its daemon thread. Idempotent; safe if `connect()`
+        was never called.
         """
-        if self._worker is not None and self._exit_stack is not None:
-            stack, self._exit_stack = self._exit_stack, None
+        if self._worker is None:
+            return
+        try:
+            if self._lifetime is not None:
+                if self._shutdown_event is not None:
+                    self._worker.call_soon_threadsafe(self._shutdown_event.set)
+                try:
+                    self._lifetime.result(timeout=self._connect_timeout)
+                except BaseException:
+                    pass  # best-effort teardown; still stop the worker below
+        finally:
             self._session = None
-            # Best-effort teardown; still proceed to stop the worker either way.
-            with suppress(MCPUnavailable):
-                self._worker.submit(stack.aclose(), timeout=self._connect_timeout)
-        if self._worker is not None:
-            self._worker.stop()
-            self._worker = None
+            self._lifetime = None
+            self._shutdown_event = None
+            self._ready = None
+            self._connect_error = None
+            worker, self._worker = self._worker, None
+            worker.stop()
 
     def _call_tool(self, name: str, arguments: dict, *, timeout: float = 30.0) -> dict:
         """Sync bridge to the SDK's async `ClientSession.call_tool`.

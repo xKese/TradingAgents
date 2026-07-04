@@ -25,6 +25,22 @@ _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 
 
+def _stocktwits_symbol(ticker: str) -> str:
+    """Map a Yahoo-style crypto pair to StockTwits' crypto convention.
+
+    The pipeline normalizes crypto to Yahoo's ``<BASE>-USD`` form, but
+    StockTwits lists crypto as ``<BASE>.X`` (``BTC-USD`` 404s, ``BTC.X``
+    resolves to Bitcoin on exchange CRYPTO). Equity tickers pass through
+    unchanged.
+    """
+    from .symbol_utils import _CRYPTO_BASES
+
+    base, sep, quote = ticker.upper().partition("-")
+    if sep and quote == "USD" and base in _CRYPTO_BASES:
+        return f"{base}.X"
+    return ticker.upper()
+
+
 def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
@@ -33,7 +49,7 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     symbol has no messages, or the response shape is unexpected — the
     caller never has to special-case None or exceptions.
     """
-    url = _API.format(ticker=ticker.upper())
+    url = _API.format(ticker=_stocktwits_symbol(ticker))
     req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
     try:
         with urlopen(req, timeout=timeout) as resp:

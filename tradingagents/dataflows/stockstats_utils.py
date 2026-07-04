@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 MAX_OHLCV_STALE_DAYS = 10
 
 
-def yf_retry(func, max_retries=3, base_delay=2.0):
+def yf_retry(func, max_retries=5, base_delay=10.0):
     """Execute a yfinance call with exponential backoff on rate limits.
 
     yfinance raises YFRateLimitError on HTTP 429 responses but does not

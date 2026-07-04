@@ -19,6 +19,8 @@ import json
 import logging
 from urllib.request import Request, urlopen
 
+from .symbol_utils import _CRYPTO_BASES
+
 logger = logging.getLogger(__name__)
 
 _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
@@ -33,8 +35,6 @@ def _stocktwits_symbol(ticker: str) -> str:
     resolves to Bitcoin on exchange CRYPTO). Equity tickers pass through
     unchanged.
     """
-    from .symbol_utils import _CRYPTO_BASES
-
     base, sep, quote = ticker.upper().partition("-")
     if sep and quote == "USD" and base in _CRYPTO_BASES:
         return f"{base}.X"

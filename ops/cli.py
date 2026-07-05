@@ -22,7 +22,8 @@ from ops.pipeline_adapter import (
 from ops.position_guardian import PositionGuardian
 from ops.quotes import make_yfinance_quote_source
 from ops.strategy.post_earnings_momentum import PostEarningsMomentumStrategy
-from ops.universe import build_universe
+from ops.universe import Candidate, build_universe
+from ops.universe.earnings import EarningsHit
 
 
 @click.group()
@@ -36,6 +37,50 @@ def run():
     import sys
     from ops.main import run as _run
     sys.exit(_run())
+
+
+@cli.command("install-service")
+@click.option("--output", "output_path",
+              default="~/Library/LaunchAgents/com.tradingagents.ops.plist",
+              show_default=True, type=click.Path(dir_okay=False),
+              help="Where to write the rendered launchd plist")
+@click.option("--log-dir", "log_dir",
+              default="~/.local/state/tradingagents/logs", show_default=True,
+              help="Directory for the service's stdout/stderr logs")
+def install_service(output_path: str, log_dir: str) -> None:
+    """Render the launchd agent plist and print the load command.
+
+    Writes the file only — never invokes launchctl. Loading the agent
+    stays an explicit user action, so a supervisor is never installed as
+    a side effect of running a command."""
+    import os
+    import sys
+    from pathlib import Path
+
+    from ops.deploy import render_launchd_plist
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    log_dir = os.path.abspath(os.path.expanduser(log_dir))
+    rendered = render_launchd_plist(
+        repo_root=repo_root,
+        venv_python=sys.executable,
+        log_dir=log_dir,
+    )
+    output = Path(os.path.abspath(os.path.expanduser(output_path)))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    output.write_text(rendered)
+    click.echo(f"Wrote {output}")
+    click.echo(f"Logs will go to {log_dir}/")
+    click.echo("To load the service (not done automatically), run:")
+    click.echo(f"  launchctl bootstrap gui/$(id -u) {output}")
+    click.echo("To unload it later:")
+    click.echo(f"  launchctl bootout gui/$(id -u) {output}")
+    click.echo(
+        "NOTE: launchd cannot start jobs on a sleeping laptop. Consider a "
+        "wake schedule (your call to apply):\n"
+        "  sudo pmset repeat wakeorpoweron MTWRF 09:20:00"
+    )
 
 
 @cli.command("notify-once")
@@ -55,6 +100,28 @@ def notify_once(journal_path: str | None) -> None:
         journal.close()
 
 
+@cli.command("status")
+@click.option("--journal", "journal_path", default=None,
+              type=click.Path(dir_okay=False),
+              help="SQLite journal path (default: the configured ops journal path)")
+def status(journal_path: str | None) -> None:
+    """Print a journal-only snapshot of the trading system.
+
+    Reads ONLY the journal (WAL concurrent reads) — no broker, no MCP,
+    no quotes — so it is always safe to run beside the live service and
+    works when the broker is unreachable. Positions/cash are the journal
+    replay ("journal view"); reconciliation is what compares that to
+    live truth."""
+    from ops.status import build_status, format_status
+
+    journal_path = journal_path or load_config().journal_path
+    journal = Journal(journal_path)
+    try:
+        click.echo(format_status(build_status(journal, load_config())))
+    finally:
+        journal.close()
+
+
 @cli.command("decide-once")
 @click.option("--date", "as_of", required=True,
               type=click.DateTime(formats=["%Y-%m-%d"]),
@@ -68,12 +135,18 @@ def notify_once(journal_path: str | None) -> None:
               help="Use a stub pipeline (no LLM calls) — defaults to HOLD")
 @click.option("--stub-pipeline-buy", multiple=True,
               help="Symbol(s) the stub pipeline should label BUY. Implies --stub-pipeline.")
+@click.option("--force-candidate", "force_candidates", multiple=True,
+              help="Smoke-testing only: inject SYMBOL into the candidate list at its "
+                   "real quote, bypassing the earnings/liquidity universe filters. "
+                   "Guardrails still apply — a deny-listed symbol is REJECTED at the "
+                   "broker boundary, which is the point of forcing it.")
 def decide_once(
     as_of: datetime,
     journal_path: str | None,
     starting_cash: str,
     stub_pipeline: bool,
     stub_pipeline_buy: tuple[str, ...],
+    force_candidates: tuple[str, ...],
 ) -> None:
     """Run a single decision/fill/stop-check pass."""
     asof_date = as_of.date()
@@ -99,6 +172,31 @@ def decide_once(
                    f"{c.earnings.eps_estimate})")
     click.echo("")
 
+    # Quote source — uses yfinance with 60s TTL
+    quote_source = make_yfinance_quote_source()
+
+    # Forced candidates (smoke testing): bypass the universe filters, never
+    # the guardrails — a deny-listed forced symbol must be REJECTED below.
+    present = {c.symbol for c in candidates}
+    for sym in force_candidates:
+        sym = sym.upper()
+        if sym in present:
+            continue
+        price = quote_source(sym)
+        candidates.append(Candidate(
+            symbol=sym,
+            earnings=EarningsHit(
+                symbol=sym, report_date=asof_date,
+                eps_actual=Decimal("0"), eps_estimate=Decimal("0"),
+                revenue_actual=None, revenue_estimate=None,
+                eps_beat=False, revenue_beat=None,
+            ),
+            last_price=price,
+            avg_dollar_volume_20d=Decimal("0"),
+        ))
+        present.add(sym)
+        click.echo(f"## Forced candidate (smoke): {sym} @ ${price}")
+
     if not candidates:
         click.echo("0 candidates → 0 BUY orders. Guardian: skipped.")
         return
@@ -109,9 +207,6 @@ def decide_once(
         pipeline = StubPipelineAdapter(decisions)
     else:
         pipeline = TradingAgentsPipelineAdapter()
-
-    # Quote source — uses yfinance with 60s TTL
-    quote_source = make_yfinance_quote_source()
 
     # Broker
     guarded = build_guarded_paper_broker(

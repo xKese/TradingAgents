@@ -99,3 +99,30 @@ def test_position_value():
     )
     assert p.market_value(Decimal("210")) == Decimal("105.0")
     assert p.unrealized_pct(Decimal("210")) == Decimal("0.05")
+
+
+def test_position_shares_available_for_sells_defaults_to_none():
+    """Paper positions never set this field — must default to None so
+    every existing Position(...) construction stays valid."""
+    p = Position(
+        symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+    )
+    assert p.shares_available_for_sells is None
+
+
+def test_sellable_quantity_falls_back_to_quantity_when_none():
+    """None means 'no distinction' (paper) — sellable == quantity."""
+    p = Position(
+        symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+    )
+    assert p.sellable_quantity == Decimal("5")
+
+
+def test_sellable_quantity_uses_field_when_set():
+    """A concrete value (live) is the real sellable amount, which may be
+    less than total quantity (held/unsettled shares)."""
+    p = Position(
+        symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+        shares_available_for_sells=Decimal("3"),
+    )
+    assert p.sellable_quantity == Decimal("3")

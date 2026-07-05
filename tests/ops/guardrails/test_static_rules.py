@@ -142,6 +142,66 @@ def test_long_only_rejects_sell_with_no_position():
     order = _sell("AAPL", notional_dollars=Decimal("50"))
     assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is False
 
+def test_long_only_rejects_sell_exceeding_sellable_when_shares_held():
+    """Live-style: shares_available_for_sells (3) < quantity (5). A SELL for
+    4 shares is within total quantity but exceeds what's actually sellable —
+    must be rejected before it ever reaches RH."""
+    broker = _FakeBroker(
+        positions=[Position(
+            symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+            shares_available_for_sells=Decimal("3"),
+        )],
+        quotes={"AAPL": Decimal("100")},
+    )
+    # notional 400 / quote 100 = 4 shares: > sellable (3), <= quantity (5).
+    order = _sell("AAPL", notional_dollars=Decimal("400"))
+    assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is False
+
+
+def test_long_only_allows_sell_up_to_quantity_when_field_is_none():
+    """Paper-style: shares_available_for_sells is None → sellable_quantity
+    falls back to quantity. The same SELL that a live-held position would
+    reject (4 shares vs 3 sellable) must be ALLOWED here — proves paper
+    behavior is unchanged by this feature."""
+    broker = _FakeBroker(
+        positions=[Position(
+            symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+        )],
+        quotes={"AAPL": Decimal("100")},
+    )
+    order = _sell("AAPL", notional_dollars=Decimal("400"))
+    assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is True
+
+
+def test_long_only_still_rejects_oversell_of_total_quantity_with_sellable_field():
+    """shares_available_for_sells set, but the SELL exceeds even the total
+    quantity — must still be rejected (sellable is a stricter floor, not a
+    looser one)."""
+    broker = _FakeBroker(
+        positions=[Position(
+            symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+            shares_available_for_sells=Decimal("3"),
+        )],
+        quotes={"AAPL": Decimal("100")},
+    )
+    # notional 600 / quote 100 = 6 shares > quantity (5) and sellable (3).
+    order = _sell("AAPL", notional_dollars=Decimal("600"))
+    assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is False
+
+
+def test_long_only_allows_exact_sellable_amount():
+    broker = _FakeBroker(
+        positions=[Position(
+            symbol="AAPL", quantity=Decimal("5"), avg_entry_price=Decimal("100"),
+            shares_available_for_sells=Decimal("3"),
+        )],
+        quotes={"AAPL": Decimal("100")},
+    )
+    # notional 300 / quote 100 = 3 shares == sellable exactly.
+    order = _sell("AAPL", notional_dollars=Decimal("300"))
+    assert LongOnlyRule().check(_ctx(order, broker=broker)).allowed is True
+
+
 def test_long_only_matches_held_position_case_insensitively():
     """A lowercase-symbol SELL order must still match an uppercase-held
     position (and vice versa) — a case mismatch between order.symbol and

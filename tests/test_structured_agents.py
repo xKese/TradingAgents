@@ -367,6 +367,22 @@ def _structured_sentiment_llm(captured: dict, report: SentimentReport | None = N
 
 @pytest.mark.unit
 class TestSentimentAnalystAgent:
+    @pytest.fixture(autouse=True)
+    def _no_network_sentiment_sources(self, monkeypatch):
+        """These tests exercise the analyst's structured-output plumbing;
+        the StockTwits/Reddit fetches inside create_sentiment_analyst are
+        live network calls and must be faked — under Reddit 429s (and their
+        backoff sleeps) they stall the whole default suite for minutes."""
+        import tradingagents.agents.analysts.sentiment_analyst as sa
+        monkeypatch.setattr(
+            sa, "fetch_stocktwits_messages",
+            lambda ticker, limit=30: "StockTwits: 75% bullish (canned)",
+        )
+        monkeypatch.setattr(
+            sa, "fetch_reddit_posts",
+            lambda ticker: "Reddit: upbeat (canned)",
+        )
+
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
         report = SentimentReport(

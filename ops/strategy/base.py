@@ -27,4 +27,5 @@ class Strategy(Protocol):
         pipeline: PipelineAdapter,
         current_equity: Decimal,
         asof_date: date,
+        live_max_position_cap: Decimal | None = None,
     ) -> list[StrategyOrder]: ...

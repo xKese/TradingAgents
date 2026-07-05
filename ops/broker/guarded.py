@@ -23,6 +23,13 @@ rule reads never re-enter this lock either. That keeps the only lock
 nesting order in the system as GuardedBroker._lock (outer) wrapping
 Journal._lock (inner) — Journal never calls back into GuardedBroker — so
 there is no cycle and no deadlock.
+
+Live-mode latency (M6, documented decision): for the Robinhood inner
+broker, place_order holds `_lock` through the fill-poll window
+(`RealRobinhoodMCPClient._await_fill`, bounded at 30s), during which the
+guardian cannot read positions. That bound — not a submit/await lock
+split — is the deliberate mitigation; see the lock-scope note in
+docs/superpowers/specs/2026-07-04-tradingagents-mcp-live-design.md.
 """
 from __future__ import annotations
 
@@ -62,6 +69,7 @@ class GuardedBroker(Broker):
                 "price": str(fill.price),
                 "filled_at": fill.filled_at.isoformat(),
                 "context": context,
+                "broker_mode": self._config.broker_mode,
             },
         )
 

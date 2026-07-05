@@ -45,8 +45,11 @@ class PostEarningsMomentumStrategy:
         pipeline: PipelineAdapter,
         current_equity: Decimal,
         asof_date: date,
+        live_max_position_cap: Decimal | None = None,
     ) -> list[StrategyOrder]:
         notional = _quantize_money(current_equity * self._cfg.per_position_cap_pct)
+        if live_max_position_cap is not None:
+            notional = min(notional, live_max_position_cap)
         if notional < self._cfg.per_trade_dollar_floor:
             return []
         out: list[StrategyOrder] = []

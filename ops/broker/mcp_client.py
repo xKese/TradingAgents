@@ -15,10 +15,11 @@ import threading
 import time
 import uuid
 import webbrowser
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Coroutine, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlparse
 
 from mcp import ClientSession
@@ -216,9 +217,9 @@ class _LocalhostOAuthCallback:
     """Supplies `OAuthClientProvider`'s `redirect_handler`/`callback_handler`.
 
     `redirect_handler` opens the authorization URL in the user's browser;
-    `callback_handler` accepts exactly one localhost connection carrying the
-    `code`/`state` query params and returns them. Construction is side-effect
-    free; the listening socket is opened only inside `wait_for_callback`.
+    `callback_handler` accepts localhost connections until one carries the
+    `code` query param and returns it. Construction is side-effect free; the
+    listening socket is opened only inside `wait_for_callback`.
     """
 
     def __init__(self, port: int = _OAUTH_CALLBACK_PORT) -> None:
@@ -232,31 +233,46 @@ class _LocalhostOAuthCallback:
         webbrowser.open(authorization_url)
 
     async def wait_for_callback(self) -> tuple[str, str | None]:
+        """Accept connections until one carries an authorization code.
+
+        Browsers open speculative connections and probe /favicon.ico after a
+        redirect; a single-accept server that trusts its first connection
+        fails the whole OAuth flow on such a stray (L1). Requests without a
+        `code` get a 404 and the server keeps listening. The loop has no
+        timeout of its own — the SDK awaits this coroutine on the worker
+        loop, and `connect()`'s connect_timeout bounds the overall wait.
+        """
         loop = asyncio.get_running_loop()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", self.port))
-        sock.listen(1)
+        sock.listen(5)
         sock.setblocking(False)
         try:
-            conn, _addr = await loop.sock_accept(sock)
-            try:
-                data = await loop.sock_recv(conn, 65536)
-                code, state = _parse_oauth_callback_request(data)
-                await loop.sock_sendall(
-                    conn,
-                    b"HTTP/1.1 200 OK\r\n"
-                    b"Content-Type: text/html\r\n"
-                    b"Content-Length: " + str(len(_OAUTH_CALLBACK_RESPONSE_BODY)).encode("ascii") + b"\r\n"
-                    b"Connection: close\r\n\r\n" + _OAUTH_CALLBACK_RESPONSE_BODY,
-                )
-            finally:
-                conn.close()
+            while True:
+                conn, _addr = await loop.sock_accept(sock)
+                try:
+                    data = await loop.sock_recv(conn, 65536)
+                    code, state = _parse_oauth_callback_request(data)
+                    if code:
+                        await loop.sock_sendall(
+                            conn,
+                            b"HTTP/1.1 200 OK\r\n"
+                            b"Content-Type: text/html\r\n"
+                            b"Content-Length: " + str(len(_OAUTH_CALLBACK_RESPONSE_BODY)).encode("ascii") + b"\r\n"
+                            b"Connection: close\r\n\r\n" + _OAUTH_CALLBACK_RESPONSE_BODY,
+                        )
+                        return code, state
+                    await loop.sock_sendall(
+                        conn,
+                        b"HTTP/1.1 404 Not Found\r\n"
+                        b"Content-Length: 0\r\n"
+                        b"Connection: close\r\n\r\n",
+                    )
+                finally:
+                    conn.close()
         finally:
             sock.close()
-        if not code:
-            raise MCPUnavailable("OAuth callback did not include an authorization code")
-        return code, state
 
 
 def _oauth_client_metadata(redirect_uri: str) -> OAuthClientMetadata:
@@ -472,6 +488,7 @@ class RealRobinhoodMCPClient:
         self._shutdown_event: asyncio.Event | None = None  # created by _serve(); set by close()
         self._connect_error: BaseException | None = None  # set by _serve() on failure
         self._account_number: str | None = None  # resolved lazily; see _resolve_account()
+        self._connect_lock = threading.RLock()  # reentrant: connect() calls close() inside lock (C2)
 
     async def _serve(self) -> None:
         """Own the MCP session's entire lifetime on a single asyncio Task.
@@ -506,12 +523,11 @@ class RealRobinhoodMCPClient:
             )
             async with streamablehttp_client(url=self._endpoint, auth=provider) as (
                 read, write, _get_session_id,
-            ):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    self._session = session
-                    self._ready.set()
-                    await shutdown_event.wait()
+            ), ClientSession(read, write) as session:
+                await session.initialize()
+                self._session = session
+                self._ready.set()
+                await shutdown_event.wait()
         except BaseException as exc:
             self._connect_error = exc
             self._ready.set()
@@ -547,36 +563,44 @@ class RealRobinhoodMCPClient:
         call is safe to retry: it rebuilds the worker from scratch.
 
         Idempotent: a second call while already connected is a no-op.
+
+        Thread-safe: uses double-checked locking so concurrent calls are
+        serialized only on the first connect/close; subsequent calls take
+        the fast path without holding the lock (C2).
         """
-        if self._worker is None:
-            self._worker = _AsyncWorker()
-            self._worker.start()
+        # Fast path: already connected — no lock needed.
         if self._session is not None:
-            return  # already connected
+            return
+        with self._connect_lock:
+            # Double-check inside the lock.
+            if self._session is not None:
+                return
+            if self._worker is None:
+                self._worker = _AsyncWorker()
+                self._worker.start()
+            self._ready = threading.Event()
+            self._connect_error = None
+            self._shutdown_event = None
+            self._lifetime = self._worker.spawn(self._serve())
 
-        self._ready = threading.Event()
-        self._connect_error = None
-        self._shutdown_event = None
-        self._lifetime = self._worker.spawn(self._serve())
+            became_ready = self._ready.wait(timeout=self._connect_timeout)
 
-        became_ready = self._ready.wait(timeout=self._connect_timeout)
+            if not became_ready:
+                self._lifetime.cancel()
+                self.close()  # never leak the worker thread; see close()'s contract
+                raise MCPUnavailable(f"MCP connect timed out after {self._connect_timeout}s")
 
-        if not became_ready:
-            self._lifetime.cancel()
-            self.close()  # never leak the worker thread; see close()'s contract
-            raise MCPUnavailable(f"MCP connect timed out after {self._connect_timeout}s")
+            error = self._connect_error
+            if error is None and self._lifetime.done():
+                error = self._lifetime.exception()
+            if error is not None:
+                raise MCPUnavailable(f"MCP handshake failed: {error}") from error
 
-        error = self._connect_error
-        if error is None and self._lifetime.done():
-            error = self._lifetime.exception()
-        if error is not None:
-            raise MCPUnavailable(f"MCP handshake failed: {error}") from error
-
-        if self._session is None:
-            # Defensive: _ready only fires once _serve() has either published
-            # a live session or recorded _connect_error — this should be
-            # unreachable, but never return claiming success without one.
-            raise MCPUnavailable("MCP connect failed: session was not established")
+            if self._session is None:
+                # Defensive: _ready only fires once _serve() has either published
+                # a live session or recorded _connect_error — this should be
+                # unreachable, but never return claiming success without one.
+                raise MCPUnavailable("MCP connect failed: session was not established")
 
     def close(self) -> None:
         """Tear down the MCP session, then stop the worker thread/loop.
@@ -592,25 +616,32 @@ class RealRobinhoodMCPClient:
         cancelled, or raised for some other reason) — a connect()'d client
         must never leak its daemon thread. Idempotent; safe if `connect()`
         was never called.
+
+        Thread-safe: uses the same lock as `connect()` so concurrent
+        connect()/close() calls are serialized (C2).
         """
         if self._worker is None:
             return
-        try:
-            if self._lifetime is not None:
-                if self._shutdown_event is not None:
-                    self._worker.call_soon_threadsafe(self._shutdown_event.set)
-                try:
-                    self._lifetime.result(timeout=self._connect_timeout)
-                except BaseException:
-                    pass  # best-effort teardown; still stop the worker below
-        finally:
-            self._session = None
-            self._lifetime = None
-            self._shutdown_event = None
-            self._ready = None
-            self._connect_error = None
-            worker, self._worker = self._worker, None
-            worker.stop()
+        with self._connect_lock:
+            # Double-check: another thread may have already closed.
+            if self._worker is None:
+                return
+            try:
+                if self._lifetime is not None:
+                    if self._shutdown_event is not None:
+                        self._worker.call_soon_threadsafe(self._shutdown_event.set)
+                    try:
+                        self._lifetime.result(timeout=self._connect_timeout)
+                    except BaseException:
+                        pass  # best-effort teardown; still stop the worker below
+            finally:
+                self._session = None
+                self._lifetime = None
+                self._shutdown_event = None
+                self._ready = None
+                self._connect_error = None
+                worker, self._worker = self._worker, None
+                worker.stop()
 
     def _call_tool(self, name: str, arguments: dict, *, timeout: float = 30.0) -> dict:
         """Sync bridge to the SDK's async `ClientSession.call_tool`.
@@ -634,8 +665,10 @@ class RealRobinhoodMCPClient:
             return {"content": result.content}
 
         if self._worker is None:
-            self._worker = _AsyncWorker()
-            self._worker.start()
+            with self._connect_lock:
+                if self._worker is None:
+                    self._worker = _AsyncWorker()
+                    self._worker.start()
         return self._worker.submit(_call(), timeout=timeout)
 
     # Protocol methods delegate to the MCP session. Each wraps narrowly:

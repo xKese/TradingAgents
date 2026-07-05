@@ -4,27 +4,33 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ops.trading_time import trading_day_start
+from ops.trading_time import TRADING_TZ, trading_day_start
 
 
-def emit_daily_summary(journal, broker, *, now: datetime | None = None) -> bool:
+def emit_daily_summary(journal, broker, calendar=None, *, now: datetime | None = None) -> bool:
     when = now if now is not None else datetime.now(timezone.utc)
+    # Holiday gate: the 16:05 ET cron fires mon-fri regardless of NYSE
+    # holidays. is_trading_day is the right calendar question here —
+    # is_open_now is ALWAYS False at 16:05 (the summary runs after close).
+    if calendar is not None and not calendar.is_trading_day(
+        when.astimezone(TRADING_TZ).date()
+    ):
+        return False
     if journal.has_event_today("daily_summary", now=when):
         return False
 
     equity = broker.get_equity()
     positions = [p for p in broker.get_positions() if p.symbol.upper() != "SPOT"]
-    start = journal.get_latest_equity_snapshot(kind="open_day")
+    # (a) Pass since=trading_day_start to avoid stale baseline from previous day.
+    day_start = trading_day_start(when)
+    start = journal.get_latest_equity_snapshot(kind="open_day", since=day_start)
     day_pnl = (equity - start.equity) if start is not None else None
 
     day_str = when.date().isoformat()
-    # ET trading-day boundary, matching has_event_today's idempotency guard
-    # (M7): a UTC-calendar-date comparison mis-buckets fills recorded in the
-    # UTC-evening/ET-morning gap into the wrong trading day.
-    day_start = trading_day_start(when)
+    # (b) Filter on filled_at instead of at (journal write time).
     fills_today = [
         f for f in journal.read_fills()
-        if f["at"] >= day_start
+        if f["filled_at"] >= day_start
     ]
 
     pnl_txt = f"${day_pnl}" if day_pnl is not None else "n/a"

@@ -239,6 +239,7 @@ def test_guarded_emits_fill_event_on_place(tmp_path):
     assert len(fills) == 1
     p = fills[0]["payload"]
     assert p["symbol"] == "AAPL" and p["side"] == "BUY" and p["context"] == "place"
+    assert p["broker_mode"] == "paper"
     assert Decimal(p["price"]) == Decimal("200")
 
 

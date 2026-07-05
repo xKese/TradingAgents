@@ -233,12 +233,12 @@ def _notify_tick(dispatcher) -> None:
         print(f"notify tick error: {exc}", file=sys.stderr)
 
 
-def _daily_summary_tick(journal: Journal, broker) -> None:
+def _daily_summary_tick(journal: Journal, broker, calendar=None) -> None:
     """Scheduler-safe wrapper around emit_daily_summary: a broker/journal
     error is recorded as an event rather than raised, since raising would
     kill the daily_summary APScheduler job."""
     try:
-        emit_daily_summary(journal, broker)
+        emit_daily_summary(journal, broker, calendar=calendar)
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
         journal.record_event(
             "daily_summary_error", {"error": f"{type(exc).__name__}: {exc}"},
@@ -266,7 +266,7 @@ def _start_full_scheduler(
         id="notify_poll", max_instances=1, misfire_grace_time=15,
     )
     sched.add_job(
-        lambda: _daily_summary_tick(journal, broker),
+        lambda: _daily_summary_tick(journal, broker, calendar=calendar),
         CronTrigger(hour=16, minute=5, day_of_week="mon-fri"),
         id="daily_summary", max_instances=1, misfire_grace_time=300,
     )

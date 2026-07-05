@@ -21,9 +21,32 @@ def test_count_zero_without_marker(tmp_path):
 
 def test_counts_buy_fills_after_marker_only(tmp_path):
     j = Journal(str(tmp_path / "j.sqlite"))
-    j.record_event("fill", {"side": "BUY", "symbol": "PRE"})   # before marker
+    j.record_event("fill", {"side": "BUY", "symbol": "PRE", "broker_mode": "robinhood"})   # before marker
     record_flip_marker(j)
-    j.record_event("fill", {"side": "BUY", "symbol": "AAPL"})
-    j.record_event("fill", {"side": "SELL", "symbol": "AAPL"})  # SELL doesn't count
-    j.record_event("fill", {"side": "BUY", "symbol": "MSFT"})
+    j.record_event("fill", {"side": "BUY", "symbol": "AAPL", "broker_mode": "robinhood"})
+    j.record_event("fill", {"side": "SELL", "symbol": "AAPL", "broker_mode": "robinhood"})  # SELL doesn't count
+    j.record_event("fill", {"side": "BUY", "symbol": "MSFT", "broker_mode": "robinhood"})
     assert count_live_buy_fills(j) == 2
+
+
+def test_only_robinhood_mode_fills_count(tmp_path):
+    """C1: only fills with broker_mode='robinhood' count toward the gate."""
+    j = Journal(str(tmp_path / "j.sqlite"))
+    record_flip_marker(j)
+    # Robinhood fill counts
+    j.record_event("fill", {"side": "BUY", "symbol": "AAPL", "broker_mode": "robinhood"})
+    # Paper fill does NOT count
+    j.record_event("fill", {"side": "BUY", "symbol": "MSFT", "broker_mode": "paper"})
+    # Historical fill without broker_mode does NOT count (fail-safe)
+    j.record_event("fill", {"side": "BUY", "symbol": "GOOG"})
+    assert count_live_buy_fills(j) == 1
+
+
+def test_historical_fills_without_broker_mode_dont_count(tmp_path):
+    """C1: fills written before broker_mode was added to the payload must
+    NOT be counted as live — the gate stays active rather than lifting early."""
+    j = Journal(str(tmp_path / "j.sqlite"))
+    record_flip_marker(j)
+    j.record_event("fill", {"side": "BUY", "symbol": "AAPL"})  # no broker_mode key
+    j.record_event("fill", {"side": "BUY", "symbol": "MSFT"})  # no broker_mode key
+    assert count_live_buy_fills(j) == 0

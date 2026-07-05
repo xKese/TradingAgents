@@ -62,7 +62,19 @@ def render(kind: str, payload: dict) -> NotifyMessage:
                 f"({payload.get('context')})")
     elif kind == "kill_switch":
         title = "KILL SWITCH TRIPPED"
-        body = f"Kill switch: {payload.get('reason', '')}"
+        # Render the actual guardian payload fields (M4): mode, equity, pct, threshold.
+        pct = payload.get("pct", payload.get("drawdown_pct", ""))
+        threshold = payload.get("threshold", "")
+        equity_now = payload.get("equity_now", "")
+        equity_ref = payload.get("equity_open_week", payload.get("equity_open_day", ""))
+        mode = payload.get("mode", "")
+        if pct and threshold:
+            body = (f"Weekly drawdown {pct} breached {threshold} "
+                    f"(equity ${equity_now} vs week-open ${equity_ref}); "
+                    f"mode={mode}")
+        else:
+            # Fallback to generic key=value join for unknown payload shapes.
+            body = "; ".join(f"{k}={v}" for k, v in payload.items()) or kind
     elif kind == "daily_summary":
         title = payload.get("headline", "Daily summary")
         body = payload.get("body", str(payload))

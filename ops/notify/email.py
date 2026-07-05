@@ -1,6 +1,11 @@
-"""SMTP email transport (synchronous, stdlib smtplib)."""
+"""SMTP email transport (synchronous, stdlib smtplib).
+
+Transport is STARTTLS-only (port 587). Implicit-TLS port 465 is not
+supported by this implementation.
+"""
 from __future__ import annotations
 
+import ssl
 import smtplib
 from email.message import EmailMessage
 
@@ -29,7 +34,8 @@ class EmailTransport:
         msg["To"] = self._to
         msg.set_content(message.body)
         with smtplib.SMTP(self._host, self._port, timeout=_TIMEOUT) as smtp:
-            smtp.starttls()
+            # M5: verify the server certificate to prevent MITM.
+            smtp.starttls(context=ssl.create_default_context())
             if self._user and self._password:
                 smtp.login(self._user, self._password)
             smtp.send_message(msg)

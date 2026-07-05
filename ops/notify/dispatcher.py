@@ -5,8 +5,8 @@ event, so it is retried on the next call."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 from ops.journal import Journal
 from ops.notify.policy import POLICY, PolicyEntry, render
@@ -14,9 +14,25 @@ from ops.notify.transport import Transport
 
 logger = logging.getLogger("ops.notify")
 
+# Maximum consecutive transport-failure retries per event before giving up.
+_MAX_TRANSPORT_RETRIES = 10
+
+# First-enable fast-forward (M2): on a consumer's FIRST-ever dispatch,
+# events older than this are skipped instead of notified. A journal that
+# predates the dispatcher deployment may hold weeks of history, and
+# replaying it as pushes is a storm — but recent events (a startup_halted
+# journaled moments before the first tick) must still be delivered, so AGE
+# is the discriminator, never event count.
+_FAST_FORWARD_MAX_AGE_S = 3600.0
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class RenderError(Exception):
+    """Raised when render() fails (KeyError, TypeError, etc.). The original
+    exception is chained as __cause__."""
 
 
 class NotifyDispatcher:
@@ -35,18 +51,44 @@ class NotifyDispatcher:
         self._policy = policy if policy is not None else POLICY
         self._now = now if now is not None else _utcnow
         self._last_sent: dict[str, datetime] = {}
+        # Consecutive transport-failure count per event id.
+        self._fail_counts: dict[int, int] = {}
 
     def dispatch_once(self) -> int:
         cursor = self._journal.get_cursor(self._consumer)
+        # First-enable fast-forward (M2): no cursor row yet means this
+        # consumer has never dispatched. Skip past everything older than
+        # the age cutoff; anything newer is dispatched normally below in
+        # this same tick.
+        if not self._journal.has_cursor(self._consumer):
+            cutoff = self._now() - timedelta(seconds=_FAST_FORWARD_MAX_AGE_S)
+            stale_id = self._journal.last_event_id_before(cutoff)
+            if stale_id is not None and stale_id > cursor:
+                self._journal.set_cursor(self._consumer, stale_id)
+                self._journal.record_event(
+                    "notify_cursor_initialized",
+                    {"consumer": self._consumer, "skipped_through": stale_id},
+                )
+                cursor = stale_id
         sent = 0
         for ev in self._journal.read_events_since(cursor):
             try:
                 sent += self._handle(ev)
+            except RenderError as exc:
+                # Compute-time failure: advance cursor, journal once. The
+                # original exception rides on __cause__ (see _handle).
+                cause_name = type(exc.__cause__).__name__ if exc.__cause__ else "unknown"
+                self._journal.record_event(
+                    "notify_render_error",
+                    {"event_id": ev["id"], "kind": ev["kind"],
+                     "error_type": cause_name},
+                )
+                logger.warning(
+                    "notify render error at event %s (%s): %s",
+                    ev["id"], ev["kind"], cause_name,
+                )
+                self._journal.set_cursor(self._consumer, ev["id"])
             except Exception as exc:  # transport failure — hold the cursor
-                # Do NOT journal str(exc): transport exceptions from
-                # smtplib/requests can embed credentials and hostnames. Only
-                # the exception type name (plus event id/kind) is safe to
-                # persist in the durable, potentially-shared journal.
                 self._journal.record_event(
                     "notify_dispatch_error",
                     {"event_id": ev["id"], "kind": ev["kind"],
@@ -56,8 +98,24 @@ class NotifyDispatcher:
                     "notify dispatch failed at event %s (%s): %s",
                     ev["id"], type(exc).__name__, exc,
                 )
+                # Bounded retry: after N consecutive failures, skip.
+                self._fail_counts[ev["id"]] = self._fail_counts.get(ev["id"], 0) + 1
+                if self._fail_counts[ev["id"]] >= _MAX_TRANSPORT_RETRIES:
+                    self._journal.record_event(
+                        "notify_event_skipped",
+                        {"event_id": ev["id"], "kind": ev["kind"],
+                         "consecutive_failures": self._fail_counts[ev["id"]]},
+                    )
+                    logger.warning(
+                        "notify event %s (%s) skipped after %d consecutive failures",
+                        ev["id"], ev["kind"], self._fail_counts[ev["id"]],
+                    )
+                    del self._fail_counts[ev["id"]]
+                    self._journal.set_cursor(self._consumer, ev["id"])
                 break
             self._journal.set_cursor(self._consumer, ev["id"])
+            # Reset fail count on success.
+            self._fail_counts.pop(ev["id"], None)
         return sent
 
     def _handle(self, ev: dict) -> int:
@@ -70,7 +128,10 @@ class NotifyDispatcher:
             now = self._now()
             if last is not None and (now - last).total_seconds() < entry.cooldown_seconds:
                 return 0  # suppressed; cursor still advances
-        message = render(ev["kind"], ev["payload"])
+        try:
+            message = render(ev["kind"], ev["payload"])
+        except Exception as exc:
+            raise RenderError() from exc
         sent = 0
         for channel in entry.channels:
             transport = self._transports.get(channel)

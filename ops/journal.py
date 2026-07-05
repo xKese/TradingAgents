@@ -6,6 +6,7 @@ in the system MUST land here before any other side effect.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -80,7 +81,12 @@ def _now_iso() -> str:
 def _to_iso(dt: datetime) -> str:
     if dt.tzinfo is None:
         raise ValueError("naive datetimes are not allowed in the journal")
-    return dt.isoformat()
+    # Normalize to UTC: journal queries compare ISO strings
+    # lexicographically, which is only correct when every stored and
+    # compared timestamp carries the same (+00:00) offset. An ET-aware
+    # datetime stored with -04:00 would sort below same-day UTC strings
+    # and silently corrupt >= comparisons (L3).
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _from_iso(s: str) -> datetime:
@@ -179,6 +185,61 @@ class Journal:
                 (consumer,),
             ).fetchone()
         return int(row[0]) if row is not None else 0
+
+    def has_cursor(self, consumer: str) -> bool:
+        """Return True if a cursor row exists for `consumer`.
+
+        Distinguishes "no cursor row yet" from a legitimately-persisted 0 —
+        the dispatcher's first-enable fast-forward must only fire for a
+        consumer that has never run."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM dispatch_cursors WHERE consumer = ?",
+                (consumer,),
+            ).fetchone()
+        return row is not None
+
+    def first_event_at(self, kind: str) -> datetime | None:
+        """Timestamp of the earliest event of `kind`, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT at FROM events WHERE kind = ? ORDER BY id LIMIT 1",
+                (kind,),
+            ).fetchone()
+        return _from_iso(row[0]) if row is not None else None
+
+    def count_events(
+        self, kind: str, *, since: datetime | None = None,
+        payload_equals: dict[str, str] | None = None,
+    ) -> int:
+        """COUNT of events of `kind`, optionally at >= `since` and with
+        JSON payload fields equal to `payload_equals` values (via
+        json_extract — no Python-side full-table scan). Payload keys are
+        interpolated into the json path, so they are restricted to
+        identifier-shaped strings; values are bound parameters."""
+        sql = "SELECT COUNT(*) FROM events WHERE kind = ?"
+        params: list[Any] = [kind]
+        if since is not None:
+            sql += " AND at >= ?"
+            params.append(_to_iso(since))
+        for key, val in (payload_equals or {}).items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError(f"unsafe payload key for count_events: {key!r}")
+            sql += f" AND json_extract(payload, '$.{key}') = ?"
+            params.append(val)
+        with self._lock:
+            row = self._conn.execute(sql, params).fetchone()
+        return int(row[0])
+
+    def last_event_id_before(self, at: datetime) -> int | None:
+        """Highest event id strictly older than `at`, or None if there is
+        none. Used by the notify dispatcher's first-enable fast-forward to
+        skip a stale backlog without swallowing recent events."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(id) FROM events WHERE at < ?", (_to_iso(at),)
+            ).fetchone()
+        return row[0] if row[0] is not None else None
 
     def set_cursor(self, consumer: str, last_event_id: int) -> None:
         with self._lock:

@@ -11,25 +11,29 @@ MARKER_KIND = "broker_mode_live"
 
 
 def record_flip_marker(journal: Journal) -> bool:
-    if any(e["kind"] == MARKER_KIND for e in journal.read_events()):
+    if journal.first_event_at(MARKER_KIND) is not None:
         return False
     journal.record_event(MARKER_KIND, {"note": "paper->robinhood flip"})
     return True
 
 
 def flip_epoch(journal: Journal) -> datetime | None:
-    markers = [e for e in journal.read_events() if e["kind"] == MARKER_KIND]
-    return markers[0]["at"] if markers else None
+    return journal.first_event_at(MARKER_KIND)
 
 
 def count_live_buy_fills(journal: Journal) -> int:
+    """Count BUY fills after the flip marker that occurred in live mode.
+
+    Historical fills (without a ``broker_mode`` key) are excluded —
+    fail-safe: the gate stays active rather than lifting early. Runs as a
+    single SQL COUNT (L2) — this is evaluated on every BUY through the
+    rule chain, and a Python-side scan of the whole events table would
+    creep quadratic as the journal grows.
+    """
     epoch = flip_epoch(journal)
     if epoch is None:
         return 0
-    return sum(
-        1
-        for e in journal.read_events()
-        if e["kind"] == "fill"
-        and e["at"] >= epoch
-        and e["payload"].get("side") == "BUY"
+    return journal.count_events(
+        "fill", since=epoch,
+        payload_equals={"side": "BUY", "broker_mode": "robinhood"},
     )

@@ -399,3 +399,49 @@ def test_connect_then_close_survives_real_anyio_task_affinity(monkeypatch, tmp_p
     assert worker_thread is not None
     assert not worker_thread.is_alive()
     assert client._session is None
+
+
+# --- L1: callback server survives stray connections -------------------------
+
+
+def _free_port() -> int:
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def test_wait_for_callback_survives_stray_connection_before_real_callback():
+    """L1: browsers open speculative connections and probe /favicon.ico; a
+    single-accept server that trusts the first connection fails the whole
+    OAuth flow on such a stray. The server must respond 404 to requests
+    without a code and keep listening until the real callback arrives."""
+    import asyncio
+
+    from ops.broker.mcp_client import _LocalhostOAuthCallback
+
+    port = _free_port()
+    cb = _LocalhostOAuthCallback(port=port)
+
+    async def _http_get(path: str) -> bytes:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+        await writer.drain()
+        data = await reader.read(1024)
+        writer.close()
+        return data
+
+    async def scenario():
+        task = asyncio.ensure_future(cb.wait_for_callback())
+        await asyncio.sleep(0.05)  # let the server bind + listen
+        stray = await _http_get("/favicon.ico")          # no code param
+        real = await _http_get("/callback?code=abc&state=xyz")
+        code, state = await asyncio.wait_for(task, timeout=2)
+        return code, state, stray, real
+
+    code, state, stray, real = asyncio.run(scenario())
+    assert (code, state) == ("abc", "xyz")
+    assert b"404" in stray
+    assert b"200" in real

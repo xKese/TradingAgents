@@ -108,3 +108,46 @@ def test_client_order_id_distinct_across_ticks_for_same_symbol_and_date():
     assert id1 != id2
     assert id1.startswith("pem-2026-06-30-AAPL-")
     assert id2.startswith("pem-2026-06-30-AAPL-")
+
+
+def test_live_max_position_cap_clamps_notional():
+    """C1: when live_max_position_cap is set, notional is clamped to it."""
+    cfg = OpsConfig()  # 10% cap = $25 at $250 equity
+    strat = PostEarningsMomentumStrategy(config=cfg)
+    pipe = StubPipelineAdapter({"AAPL": PipelineDecision.BUY})
+    orders = strat.propose_orders(
+        candidates=[_candidate("AAPL")], pipeline=pipe,
+        current_equity=Decimal("250"), asof_date=date(2026, 6, 30),
+        live_max_position_cap=Decimal("10"),
+    )
+    assert len(orders) == 1
+    assert orders[0].order.notional_dollars == Decimal("10.00")
+
+
+def test_live_max_position_cap_no_effect_when_higher():
+    """C1: when live_max_position_cap is higher than the normal notional,
+    the normal notional is used."""
+    cfg = OpsConfig()  # 10% cap = $25 at $250 equity
+    strat = PostEarningsMomentumStrategy(config=cfg)
+    pipe = StubPipelineAdapter({"AAPL": PipelineDecision.BUY})
+    orders = strat.propose_orders(
+        candidates=[_candidate("AAPL")], pipeline=pipe,
+        current_equity=Decimal("250"), asof_date=date(2026, 6, 30),
+        live_max_position_cap=Decimal("100"),
+    )
+    assert len(orders) == 1
+    assert orders[0].order.notional_dollars == Decimal("25.00")
+
+
+def test_live_max_position_cap_none_uses_normal_notional():
+    """C1: when live_max_position_cap is None, normal sizing is used."""
+    cfg = OpsConfig()
+    strat = PostEarningsMomentumStrategy(config=cfg)
+    pipe = StubPipelineAdapter({"AAPL": PipelineDecision.BUY})
+    orders = strat.propose_orders(
+        candidates=[_candidate("AAPL")], pipeline=pipe,
+        current_equity=Decimal("250"), asof_date=date(2026, 6, 30),
+        live_max_position_cap=None,
+    )
+    assert len(orders) == 1
+    assert orders[0].order.notional_dollars == Decimal("25.00")

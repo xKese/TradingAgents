@@ -58,3 +58,28 @@ def test_render_scrubs_spot_from_title_and_body():
                                      "body": "SPOT is up, unrelated to SPOTIFY"})
     assert msg2.title == "[redacted] ripped today"
     assert msg2.body == "[redacted] is up, unrelated to SPOTIFY"
+
+
+def test_render_kill_switch_with_guardian_payload(tmp_path):
+    """M4: render a real guardian-shaped kill_switch payload → body contains
+    pct, threshold, and both equity figures."""
+    from pathlib import Path
+    msg = render("kill_switch", {
+        "mode": "robinhood",
+        "equity_now": "220",
+        "equity_open_week": "250",
+        "pct": "-0.12",
+        "threshold": "-0.15",
+    })
+    assert "KILL" in msg.title
+    assert "-0.12" in msg.body
+    assert "-0.15" in msg.body
+    assert "220" in msg.body
+    assert "250" in msg.body
+    assert "robinhood" in msg.body
+
+
+def test_render_kill_switch_non_empty_for_empty_payload():
+    """M4: body is non-empty for a payload with no keys at all."""
+    msg = render("kill_switch", {})
+    assert len(msg.body) > 0

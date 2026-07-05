@@ -1,3 +1,4 @@
+import ssl
 from unittest.mock import MagicMock
 from ops.notify.config import NotifyConfig
 from ops.notify.transport import NotifyMessage
@@ -26,7 +27,12 @@ def test_sends_via_smtp(monkeypatch):
 
     t.send(NotifyMessage(title="Daily", body="summary"))
     smtp_cls.assert_called_once_with("smtp.example.com", 587, timeout=20)
-    smtp_instance.starttls.assert_called_once()
+    # M5: starttls must be called with an SSL context that verifies.
+    call_args = smtp_instance.starttls.call_args
+    assert call_args is not None
+    context = call_args[1]["context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
     smtp_instance.login.assert_called_once_with("u", "p")
     sent_msg = smtp_instance.send_message.call_args[0][0]
     assert sent_msg["Subject"] == "Daily"

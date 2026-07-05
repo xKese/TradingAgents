@@ -315,3 +315,76 @@ def test_cash_adjustment_migrates_existing_db(tmp_path):
     j = Journal(path)
     j.record_cash_adjustment(kind="seed", amount=Decimal("250"))
     assert j.read_cash_adjustments()[0]["amount"] == Decimal("250")
+
+
+def test_to_iso_normalizes_non_utc_offsets_for_string_comparison(tmp_path):
+    """L3: journal queries compare ISO strings lexicographically, which only
+    works if every stored/compared timestamp has the same UTC offset. An
+    ET-aware datetime passed as `at=` must be normalized to UTC, not stored
+    with its -04:00 offset (which sorts before any +00:00 string of the
+    same day and silently corrupts >= comparisons)."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from zoneinfo import ZoneInfo
+
+    j = Journal(str(tmp_path / "j.sqlite"))
+    # 09:30 ET == 13:30 UTC on 2026-07-06 (EDT)
+    et = datetime(2026, 7, 6, 9, 30, tzinfo=ZoneInfo("America/New_York"))
+    j.record_equity_snapshot(kind="open_day", equity=Decimal("250"),
+                             cash=Decimal("250"), at=et)
+    # A since= of 13:00 UTC is BEFORE the snapshot instant; the snapshot
+    # must be found. (With offset-preserving storage, "…T09:30:00-04:00"
+    # compares lexicographically below "…T13:00:00+00:00" and is missed.)
+    since = datetime(2026, 7, 6, 13, 0, tzinfo=timezone.utc)
+    snap = j.get_latest_equity_snapshot(kind="open_day", since=since)
+    assert snap is not None
+    assert snap.equity == Decimal("250")
+    # And a since= AFTER the instant must exclude it.
+    after = datetime(2026, 7, 6, 14, 0, tzinfo=timezone.utc)
+    assert j.get_latest_equity_snapshot(kind="open_day", since=after) is None
+
+
+def test_last_event_id_before(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    j = Journal(str(tmp_path / "j.sqlite"))
+    assert j.last_event_id_before(datetime.now(timezone.utc)) is None
+    j.record_event("a", {})
+    j.record_event("b", {})
+    future = datetime.now(timezone.utc) + timedelta(seconds=1)
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    assert j.last_event_id_before(future) == 2
+    assert j.last_event_id_before(past) is None
+
+
+def test_first_event_at_and_count_events(tmp_path):
+    """L2: SQL-side event lookups for the live gate — no full-table scan +
+    JSON parse per rule evaluation."""
+    from datetime import timedelta
+    from decimal import Decimal  # noqa: F401 - parity with sibling tests
+    j = Journal(str(tmp_path / "j.sqlite"))
+    assert j.first_event_at("broker_mode_live") is None
+    j.record_event("broker_mode_live", {"note": "flip"})
+    epoch = j.first_event_at("broker_mode_live")
+    assert epoch is not None and epoch.tzinfo is not None
+
+    j.record_event("fill", {"side": "BUY", "broker_mode": "robinhood"})
+    j.record_event("fill", {"side": "SELL", "broker_mode": "robinhood"})
+    j.record_event("fill", {"side": "BUY", "broker_mode": "paper"})
+    j.record_event("fill", {"side": "BUY"})  # historical: no broker_mode
+
+    assert j.count_events(
+        "fill", since=epoch,
+        payload_equals={"side": "BUY", "broker_mode": "robinhood"},
+    ) == 1
+    assert j.count_events("fill", since=epoch) == 4
+    assert j.count_events(
+        "fill", since=epoch + timedelta(days=1),
+        payload_equals={"side": "BUY"},
+    ) == 0
+
+
+def test_count_events_rejects_unsafe_payload_keys(tmp_path):
+    import pytest
+    j = Journal(str(tmp_path / "j.sqlite"))
+    with pytest.raises(ValueError):
+        j.count_events("fill", payload_equals={"side') OR 1=1 --": "BUY"})

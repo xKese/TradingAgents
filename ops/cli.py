@@ -83,6 +83,45 @@ def install_service(output_path: str, log_dir: str) -> None:
     )
 
 
+@cli.command("install-screen-service")
+@click.option("--output", "output_path",
+              default="~/Library/LaunchAgents/com.tradingagents.screen.plist",
+              show_default=True, type=click.Path(dir_okay=False),
+              help="Where to write the rendered screen launchd plist")
+@click.option("--log-dir", "log_dir",
+              default="~/.local/state/tradingagents/logs", show_default=True,
+              help="Directory for the screen job's stdout/stderr logs")
+def install_screen_service(output_path: str, log_dir: str) -> None:
+    """Render the weekly screen launchd plist and print the load command.
+
+    Writes the file only — never invokes launchctl."""
+    import os
+    import sys
+    from pathlib import Path
+
+    from ops.deploy import render_screen_plist
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    log_dir = os.path.abspath(os.path.expanduser(log_dir))
+    sec_edgar = os.environ.get("SEC_EDGAR_USER_AGENT", "")
+    rendered = render_screen_plist(
+        python_path=sys.executable,
+        repo_dir=repo_root,
+        log_dir=log_dir,
+        sec_edgar_user_agent=sec_edgar,
+    )
+    output = Path(os.path.abspath(os.path.expanduser(output_path)))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    output.write_text(rendered)
+    click.echo(f"Wrote {output}")
+    click.echo(f"Logs will go to {log_dir}/")
+    click.echo("To load the screen job (not done automatically), run:")
+    click.echo(f"  launchctl bootstrap gui/$(id -u) {output}")
+    click.echo("To unload it later:")
+    click.echo(f"  launchctl bootout gui/$(id -u) {output}")
+
+
 @cli.command("notify-once")
 @click.option("--journal", "journal_path", default=None,
               type=click.Path(dir_okay=False),

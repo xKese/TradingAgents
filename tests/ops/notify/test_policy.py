@@ -149,6 +149,7 @@ SAMPLE_BUILDER_ARGS: dict[str, dict] = {
     events.KIND_BROKER_UNREACHABLE: dict(error_type="MCPUnavailable"),
     events.KIND_ORCHESTRATOR_TICK_ERROR: dict(error="ValueError: boom"),
     events.KIND_GUARDIAN_CHECK_ERROR: dict(error="ValueError: boom"),
+    events.KIND_EXIT_CHECK_ERROR: dict(error="ValueError: boom"),
     events.KIND_QUOTE_UNAVAILABLE: dict(
         symbol="AAPL", context="guardian_stop_check",
         error="no data for AAPL",

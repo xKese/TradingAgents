@@ -43,10 +43,10 @@ class OpsConfig:
     broker_mode: str = "paper"  # "paper" or "robinhood"
     deny_list: frozenset[str] = field(default_factory=lambda: _DEFAULT_DENY_LIST)  # Not env-overridable; extend via code
     full_blackout_symbols: frozenset[str] = field(default_factory=lambda: _FULL_BLACKOUT_SYMBOLS)  # Not env-overridable; extend via code
-    per_position_cap_pct: Decimal = Decimal("0.10")
+    per_position_cap_pct: Decimal = Decimal("0.12")
     per_trade_dollar_floor: Decimal = Decimal("5")
-    max_open_positions: int = 5
-    cash_reserve_pct: Decimal = Decimal("0.20")
+    max_open_positions: int = 7
+    cash_reserve_pct: Decimal = Decimal("0.16")
     daily_drawdown_pct: Decimal = Decimal("-0.07")
     weekly_drawdown_pct: Decimal = Decimal("-0.15")
     per_position_stop_pct: Decimal = Decimal("-0.08")
@@ -54,6 +54,8 @@ class OpsConfig:
     starting_cash: Decimal = Decimal("250")
     live_max_position: Decimal = Decimal("10")
     live_fill_gate_count: int = 20
+    # Cost dial: max full-pipeline (LLM) analyses per day; risk is capped separately.
+    daily_analysis_budget: int = 8
 
     def __post_init__(self) -> None:
         # Drawdown and per-position-stop percentages must be negative — a
@@ -78,6 +80,10 @@ class OpsConfig:
         if self.max_open_positions <= 0:
             raise ValueError(
                 f"max_open_positions must be > 0, got {self.max_open_positions}"
+            )
+        if self.daily_analysis_budget <= 0:
+            raise ValueError(
+                f"daily_analysis_budget must be > 0, got {self.daily_analysis_budget}"
             )
         if self.broker_mode not in ("paper", "robinhood"):
             raise ValueError(
@@ -166,5 +172,9 @@ def load_config() -> OpsConfig:
     live_fill_gate_count = _env_int("OPS_LIVE_FILL_GATE_COUNT")
     if live_fill_gate_count is not None:
         kwargs["live_fill_gate_count"] = live_fill_gate_count
+
+    daily_analysis_budget = _env_int("OPS_DAILY_ANALYSIS_BUDGET")
+    if daily_analysis_budget is not None:
+        kwargs["daily_analysis_budget"] = daily_analysis_budget
 
     return OpsConfig(**kwargs)

@@ -15,10 +15,10 @@ def test_default_config_matches_spec():
         "SOXL", "SOXS", "LABU", "LABD", "TNA", "TZA",
         "TMF", "TMV", "QLD", "QID",
     }
-    assert cfg.per_position_cap_pct == Decimal("0.10")
+    assert cfg.per_position_cap_pct == Decimal("0.12")
     assert cfg.per_trade_dollar_floor == Decimal("5")
-    assert cfg.max_open_positions == 5
-    assert cfg.cash_reserve_pct == Decimal("0.20")
+    assert cfg.max_open_positions == 7
+    assert cfg.cash_reserve_pct == Decimal("0.16")
     assert cfg.daily_drawdown_pct == Decimal("-0.07")
     assert cfg.weekly_drawdown_pct == Decimal("-0.15")
     assert cfg.per_position_stop_pct == Decimal("-0.08")
@@ -114,3 +114,26 @@ def test_live_gate_from_env(monkeypatch):
     monkeypatch.setenv("OPS_LIVE_FILL_GATE_COUNT", "30")
     c = load_config()
     assert c.live_max_position == Decimal("8") and c.live_fill_gate_count == 30
+
+
+def test_envelope_rev2_defaults_and_derived_concurrency():
+    cfg = OpsConfig()
+    assert cfg.max_open_positions == 7
+    assert cfg.per_position_cap_pct == Decimal("0.12")
+    assert cfg.cash_reserve_pct == Decimal("0.16")
+    # Neither dial is cosmetic: derived effective concurrency equals the cap.
+    deployable = Decimal("1") - cfg.cash_reserve_pct
+    assert min(cfg.max_open_positions,
+               int(deployable / cfg.per_position_cap_pct)) == 7
+    # Safety rails unchanged.
+    assert cfg.per_position_stop_pct == Decimal("-0.08")
+    assert cfg.daily_drawdown_pct == Decimal("-0.07")
+    assert cfg.weekly_drawdown_pct == Decimal("-0.15")
+
+
+def test_daily_analysis_budget_default_env_and_validation(monkeypatch):
+    assert OpsConfig().daily_analysis_budget == 8
+    monkeypatch.setenv("OPS_DAILY_ANALYSIS_BUDGET", "3")
+    assert load_config().daily_analysis_budget == 3
+    with pytest.raises(ValueError):
+        OpsConfig(daily_analysis_budget=0)

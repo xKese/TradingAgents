@@ -5,7 +5,7 @@ from ops.broker.types import Side, OrderType
 from ops.config import OpsConfig
 from ops.pipeline_adapter import PipelineDecision, StubPipelineAdapter
 from ops.strategy.post_earnings_momentum import PostEarningsMomentumStrategy
-from ops.universe import Candidate
+from ops.universe import Candidate, CandidateSource
 from ops.universe.earnings import EarningsHit
 
 
@@ -17,7 +17,7 @@ def _candidate(sym, price="200"):
         eps_beat=True, revenue_beat=True,
     )
     return Candidate(
-        symbol=sym, earnings=hit,
+        symbol=sym, source=CandidateSource.EARNINGS, earnings=hit,
         last_price=Decimal(price), avg_dollar_volume_20d=Decimal("100000000"),
     )
 

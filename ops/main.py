@@ -255,14 +255,14 @@ def _wire(broker, journal: Journal, config: OpsConfig, *, backend=None):
     """
     from ops.pipeline_adapter import TradingAgentsPipelineAdapter
     from ops.strategy.post_earnings_momentum import PostEarningsMomentumStrategy
-    from ops.universe import build_universe
+    from ops.universe.composite import build_composite_universe
 
     if backend is None:
         backend = build_managed_backend(load_managed_backend_config())
     calendar = MarketCalendar()
     orchestrator = Orchestrator(
         broker=broker,
-        universe_builder=build_universe,
+        universe_builder=build_composite_universe,
         strategy=PostEarningsMomentumStrategy(config=config),
         pipeline_adapter=TradingAgentsPipelineAdapter(backend=backend),
         calendar=calendar, journal=journal, config=config,

@@ -46,20 +46,24 @@ class Orchestrator:
         fresh_candidates = [c for c in candidates if c.symbol not in held]
         current_equity = self._broker.get_equity()
         live_cap = self._compute_live_cap()
-        proposals = self._strategy.propose_orders(
-            candidates=fresh_candidates,
-            pipeline=self._pipeline_adapter,
-            current_equity=current_equity,
-            asof_date=asof_date,
-            live_max_position_cap=live_cap,
-        )
-        for proposal in proposals:
-            try:
-                self._broker.place_order(proposal.order)
-            except OrderRejected:
-                continue
-            except BrokerError:
-                break
+        # Bracket the analysis batch: a managed local model backend (e.g. ds4)
+        # is torn down when the session exits, freeing its resident memory
+        # between ticks. Bringing it up is lazy inside propagate().
+        with self._pipeline_adapter.session():
+            proposals = self._strategy.propose_orders(
+                candidates=fresh_candidates,
+                pipeline=self._pipeline_adapter,
+                current_equity=current_equity,
+                asof_date=asof_date,
+                live_max_position_cap=live_cap,
+            )
+            for proposal in proposals:
+                try:
+                    self._broker.place_order(proposal.order)
+                except OrderRejected:
+                    continue
+                except BrokerError:
+                    break
 
     def _compute_live_cap(self) -> Decimal | None:
         """Return the live-gate position cap, or None when the gate is inactive.

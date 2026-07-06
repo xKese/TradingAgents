@@ -64,6 +64,17 @@ class Orchestrator:
                 continue
             except BrokerError:
                 break
+            cand = proposal.candidate
+            self._journal.record_event(
+                events.KIND_POSITION_OPENED,
+                events.position_opened_payload(
+                    symbol=cand.symbol,
+                    source=cand.source.value,
+                    entry_date=asof_date,
+                    client_order_id=proposal.order.client_order_id,
+                    entry_rank=cand.momentum.rank if cand.momentum else None,
+                ),
+            )
 
     def _compute_live_cap(self) -> Decimal | None:
         """Return the live-gate position cap, or None when the gate is inactive.

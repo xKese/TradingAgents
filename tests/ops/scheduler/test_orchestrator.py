@@ -246,3 +246,75 @@ def test_tick_shortcircuits_on_weekly_kill_switch(tmp_path):
     orch.tick()
     universe.assert_not_called()
     broker.place_order.assert_not_called()
+
+
+def _momentum_candidate(symbol, rank):
+    from ops.universe import Candidate, CandidateSource
+    from ops.universe.momentum import MomentumHit
+
+    hit = MomentumHit(
+        symbol=symbol,
+        asof_date=date(2026, 7, 5),
+        trailing_return_6m=Decimal("0.30"),
+        close=Decimal("120"),
+        sma_200=Decimal("100"),
+        avg_dollar_volume_20d=Decimal("1000000000"),
+        rank=rank,
+    )
+    return Candidate(
+        symbol=symbol,
+        source=CandidateSource.MOMENTUM,
+        last_price=Decimal("120"),
+        avg_dollar_volume_20d=Decimal("1000000000"),
+        momentum=hit,
+    )
+
+
+def _strategy_order_for_candidate(candidate):
+    return StrategyOrder(
+        order=_order(candidate.symbol), reason="test",
+        candidate=candidate, pipeline=MagicMock(),
+    )
+
+
+def test_tick_journals_position_opened_on_successful_buy(tmp_path):
+    from ops.journal import Journal
+    from ops.config import OpsConfig
+    j = Journal(str(tmp_path / "j.sqlite"))
+    broker = _fake_broker()
+    candidate = _momentum_candidate("NVDA", rank=3)
+    orch = Orchestrator(
+        broker=broker,
+        universe_builder=_fake_universe(["NVDA"]),
+        strategy=_fake_strategy([_strategy_order_for_candidate(candidate)]),
+        pipeline_adapter=_fake_pipeline(),
+        calendar=_fake_calendar(is_open=True), journal=j,
+        config=OpsConfig(),
+    )
+    orch.tick()
+    evts = [e for e in j.read_events() if e["kind"] == "position_opened"]
+    assert len(evts) == 1
+    p = evts[0]["payload"]
+    assert p["symbol"] == "NVDA"
+    assert p["source"] == "MOMENTUM"
+    assert p["entry_rank"] == 3
+    assert p["entry_date"] == datetime.now(timezone.utc).date().isoformat()
+
+
+def test_tick_rejected_order_does_not_journal_position_opened(tmp_path):
+    from ops.journal import Journal
+    from ops.config import OpsConfig
+    j = Journal(str(tmp_path / "j.sqlite"))
+    broker = _fake_broker()
+    broker.place_order.side_effect = OrderRejected("Some", "reason")
+    candidate = _momentum_candidate("NVDA", rank=3)
+    orch = Orchestrator(
+        broker=broker,
+        universe_builder=_fake_universe(["NVDA"]),
+        strategy=_fake_strategy([_strategy_order_for_candidate(candidate)]),
+        pipeline_adapter=_fake_pipeline(),
+        calendar=_fake_calendar(is_open=True), journal=j,
+        config=OpsConfig(),
+    )
+    orch.tick()
+    assert all(e["kind"] != "position_opened" for e in j.read_events())

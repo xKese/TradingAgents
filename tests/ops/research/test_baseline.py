@@ -114,3 +114,29 @@ def test_quote_failure_skips_name_and_continues(journal):
     )
     assert summary["buys"] == ["GOOD"]
     assert summary["skipped"] == ["BAD"]
+
+
+def test_same_day_retry_after_quote_failure_does_not_collide(journal):
+    from ops.broker.base import QuoteUnavailable
+
+    quotes_ok = {"flag": False}
+
+    def quotes(symbol):
+        if symbol == "BAD" and not quotes_ok["flag"]:
+            raise QuoteUnavailable("no quote")
+        return Decimal("20")
+
+    broker = PaperBroker(
+        journal=journal, quote_source=quotes, starting_cash=Decimal("100000"),
+    )
+    first = update_baseline_portfolio(
+        broker=broker, journal=journal, passers=["BAD", "GOOD"], asof=ASOF, now=NOW,
+    )
+    assert first["skipped"] == ["BAD"]
+
+    quotes_ok["flag"] = True
+    second = update_baseline_portfolio(
+        broker=broker, journal=journal, passers=["BAD", "GOOD"], asof=ASOF, now=NOW,
+    )
+    assert second["buys"] == ["BAD"]          # GOOD already held, BAD now fills
+    assert second["skipped"] == []

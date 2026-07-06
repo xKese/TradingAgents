@@ -20,6 +20,7 @@ from __future__ import annotations
 import sys
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 from ops import events
 from ops.broker.base import Broker, InsufficientFunds, QuoteUnavailable
@@ -69,8 +70,13 @@ def update_baseline_portfolio(
         notional = min(slice_dollars, broker.get_cash())
         if notional < _MIN_ORDER_DOLLARS:
             break
+        # uuid4-suffixed: client_order_id must be unique per ORDER, not per
+        # (day, symbol) — PaperBroker journals the order row BEFORE quoting,
+        # so a QuoteUnavailable skip leaves an orphan order row and a
+        # same-day retry would collide with the journal's UNIQUE index
+        # (same rationale as ops/strategy/post_earnings_momentum.py).
         order = Order(
-            client_order_id=f"baseline-{asof.isoformat()}-{symbol}",
+            client_order_id=f"baseline-{asof.isoformat()}-{symbol}-{uuid4().hex[:8]}",
             symbol=symbol,
             side=Side.BUY,
             notional_dollars=notional,

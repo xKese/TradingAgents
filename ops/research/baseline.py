@@ -1,0 +1,99 @@
+"""The null-baseline portfolio: equal-weight everything that passes the screen.
+
+This is the control the whole research system is measured against (design
+doc, "the mandatory null baseline"): if the LLM deep-research stages cannot
+beat this dumb portfolio by more than the token bill, they are not adding
+value. It must therefore stay dumb on purpose — no guardrails, no stops, no
+conviction sizing, no discretion. Separate journal DB from the trading
+journal so the control can never contaminate real state.
+
+Policy:
+- exits first: close any position held >= BASELINE_MAX_HOLD_DAYS (matched to
+  the value sleeve's 12-month floor horizon);
+- then buy every passer not currently held at BASELINE_SLICE_PCT of current
+  equity (~equal weight at the target ~25 names), clamped to available cash;
+- re-running on the same day is idempotent because held names are skipped.
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import date, datetime, timezone
+from decimal import Decimal
+
+from ops import events
+from ops.broker.base import Broker, InsufficientFunds, QuoteUnavailable
+from ops.broker.types import Order, OrderType, Side
+from ops.journal import Journal
+
+BASELINE_SLICE_PCT = Decimal("0.04")
+BASELINE_MAX_HOLD_DAYS = 365
+_MIN_ORDER_DOLLARS = Decimal("100")
+
+
+def update_baseline_portfolio(
+    *,
+    broker: Broker,
+    journal: Journal,
+    passers: list[str],
+    asof: date,
+    now: datetime | None = None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    exits: list[str] = []
+    for pos in list(broker.get_positions()):
+        last_buy = journal.last_buy_fill_for(pos.symbol)
+        if last_buy is None:
+            continue
+        held_days = (now - last_buy["filled_at"]).days
+        if held_days < BASELINE_MAX_HOLD_DAYS:
+            continue
+        try:
+            broker.close_position(pos.symbol)
+        except QuoteUnavailable as exc:
+            print(f"[baseline] exit skipped {pos.symbol}: {exc}", file=sys.stderr)
+            continue
+        journal.record_event(
+            events.KIND_BASELINE_EXIT,
+            events.baseline_exit_payload(symbol=pos.symbol, held_days=held_days),
+        )
+        exits.append(pos.symbol)
+
+    held = {p.symbol for p in broker.get_positions()}
+    slice_dollars = broker.get_equity() * BASELINE_SLICE_PCT
+    buys: list[str] = []
+    skipped: list[str] = []
+    for symbol in sorted(dict.fromkeys(passers)):
+        if symbol in held:
+            continue
+        notional = min(slice_dollars, broker.get_cash())
+        if notional < _MIN_ORDER_DOLLARS:
+            break
+        order = Order(
+            client_order_id=f"baseline-{asof.isoformat()}-{symbol}",
+            symbol=symbol,
+            side=Side.BUY,
+            notional_dollars=notional,
+            order_type=OrderType.MARKET,
+        )
+        try:
+            broker.place_order(order)
+        except QuoteUnavailable as exc:
+            print(f"[baseline] buy skipped {symbol}: {exc}", file=sys.stderr)
+            skipped.append(symbol)
+            continue
+        except InsufficientFunds:
+            break
+        buys.append(symbol)
+
+    journal.record_event(
+        events.KIND_BASELINE_SCREEN_RUN,
+        events.baseline_screen_run_payload(
+            asof=asof.isoformat(), passers=len(passers),
+            buys=buys, exits=exits, skipped=skipped, equity=broker.get_equity(),
+        ),
+    )
+    journal.record_equity_snapshot(
+        kind="baseline_run", equity=broker.get_equity(), cash=broker.get_cash(), at=now,
+    )
+    return {"buys": buys, "exits": exits, "skipped": skipped}

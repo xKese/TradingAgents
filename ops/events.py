@@ -78,6 +78,10 @@ KIND_NOTIFY_RENDER_ERROR = "notify_render_error"
 KIND_NOTIFY_DISPATCH_ERROR = "notify_dispatch_error"
 KIND_NOTIFY_EVENT_SKIPPED = "notify_event_skipped"
 
+# Baseline (null-hypothesis) screen portfolio
+KIND_BASELINE_SCREEN_RUN = "baseline_screen_run"
+KIND_BASELINE_EXIT = "baseline_exit"
+
 # Kinds deliberately NOT notified. Everything here is an audit trail the
 # operator reads via `ops status` or sqlite, not a push/email — either
 # because it fires during normal operation (service lifecycle, replay
@@ -98,6 +102,8 @@ AUDIT_ONLY: frozenset[str] = frozenset({
     KIND_NOTIFY_RENDER_ERROR,
     KIND_NOTIFY_DISPATCH_ERROR,
     KIND_NOTIFY_EVENT_SKIPPED,
+    KIND_BASELINE_SCREEN_RUN,
+    KIND_BASELINE_EXIT,
 })
 
 
@@ -371,6 +377,20 @@ def notify_event_skipped_payload(
     }
 
 
+def baseline_screen_run_payload(
+    *, asof: str, passers: int, buys: list[str], exits: list[str],
+    skipped: list[str], equity: Decimal,
+) -> dict[str, Any]:
+    return {
+        "asof": asof, "passers": passers, "buys": buys,
+        "exits": exits, "skipped": skipped, "equity": str(equity),
+    }
+
+
+def baseline_exit_payload(*, symbol: str, held_days: int) -> dict[str, Any]:
+    return {"symbol": symbol, "held_days": held_days}
+
+
 # Kind -> builder registry: the enforcement test walks this to prove every
 # POLICY kind has a builder and every builder's kind has been classified
 # (POLICY or AUDIT_ONLY). Register every new builder here.
@@ -404,4 +424,6 @@ BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     KIND_NOTIFY_RENDER_ERROR: notify_render_error_payload,
     KIND_NOTIFY_DISPATCH_ERROR: notify_dispatch_error_payload,
     KIND_NOTIFY_EVENT_SKIPPED: notify_event_skipped_payload,
+    KIND_BASELINE_SCREEN_RUN: baseline_screen_run_payload,
+    KIND_BASELINE_EXIT: baseline_exit_payload,
 }

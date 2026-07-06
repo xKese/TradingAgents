@@ -16,6 +16,7 @@ from decimal import Decimal
 import yfinance as yf
 
 from ops.universe.earnings import _safe_decimal
+from ops.universe.yf_pacing import call_paced
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,10 @@ class PriceContext:
 def fetch_price_context(symbol: str) -> PriceContext | None:
     """6 years of daily closes; None (with a stderr diagnostic) on any fetch failure."""
     try:
-        hist = yf.Ticker(symbol).history(period="6y", auto_adjust=False)
+        hist = call_paced(
+            lambda: yf.Ticker(symbol).history(period="6y", auto_adjust=False),
+            label="prices",
+        )
     except Exception as exc:
         print(
             f"[prices] skipped {symbol}: {type(exc).__name__}: {exc}",

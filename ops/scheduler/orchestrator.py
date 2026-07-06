@@ -41,8 +41,12 @@ class Orchestrator:
         if self._is_daily_halted() or self._is_weekly_halted():
             return
         asof_date = datetime.now(timezone.utc).date()
-        candidates = self._universe_builder(asof_date=asof_date, config=self._config)
         held = {p.symbol for p in self._broker.get_positions()}
+        free_slots = max(0, self._config.max_open_positions - len(held))
+        candidates = self._universe_builder(
+            asof_date=asof_date, config=self._config,
+            held_symbols=frozenset(held), free_slots=free_slots,
+        )
         fresh_candidates = [c for c in candidates if c.symbol not in held]
         current_equity = self._broker.get_equity()
         live_cap = self._compute_live_cap()

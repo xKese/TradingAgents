@@ -206,6 +206,29 @@ def test_tick_shortcircuits_on_daily_halt(tmp_path):
     broker.place_order.assert_not_called()
 
 
+def test_tick_passes_held_and_free_slots_to_builder(tmp_path):
+    """Orchestrator computes held symbols + remaining slots and hands them
+    to the universe builder (belt-and-suspenders: fresh_candidates filter
+    still applies afterward)."""
+    from ops.journal import Journal
+    from ops.config import OpsConfig
+    j = Journal(str(tmp_path / "j.sqlite"))
+    broker = _fake_broker(
+        positions=[MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT")]
+    )
+    universe = _fake_universe([])
+    orch = Orchestrator(
+        broker=broker, universe_builder=universe,
+        strategy=_fake_strategy([]), pipeline_adapter=_fake_pipeline(),
+        calendar=_fake_calendar(is_open=True), journal=j,
+        config=OpsConfig(),
+    )
+    orch.tick()
+    kwargs = universe.call_args.kwargs
+    assert kwargs["held_symbols"] == frozenset({"AAPL", "MSFT"})
+    assert kwargs["free_slots"] == OpsConfig().max_open_positions - 2
+
+
 def test_tick_shortcircuits_on_weekly_kill_switch(tmp_path):
     from ops.journal import Journal
     from ops.config import OpsConfig

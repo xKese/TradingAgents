@@ -113,6 +113,29 @@ def test_gross_margin_falls_back_to_revenue_minus_cogs():
     ]
 
 
+def test_ebitda_and_fcf_none_when_component_years_misaligned():
+    facts = _facts({
+        "OperatingIncomeLoss": [_row(90, 2024), _row(100, 2025)],
+        "DepreciationDepletionAndAmortization": [_row(20, 2024)],
+        "NetCashProvidedByUsedInOperatingActivities": [_row(110, 2024), _row(115, 2025)],
+        "PaymentsToAcquirePropertyPlantAndEquipment": [_row(30, 2024)],
+    })
+    f = compute_fundamentals("TEST", facts, asof=ASOF)
+    assert f.ebitda is None
+    assert f.fcf is None
+
+
+def test_debt_and_cash_anchor_to_latest_equity_year_not_stale_years():
+    facts = _facts({
+        "StockholdersEquity": [_row(380, 2024, instant=True), _row(400, 2025, instant=True)],
+        "LongTermDebtNoncurrent": [_row(200, 2024, instant=True)],
+        "CashAndCashEquivalentsAtCarryingValue": [_row(80, 2024, instant=True)],
+    })
+    f = compute_fundamentals("TEST", facts, asof=ASOF)
+    assert f.total_debt is None
+    assert f.cash is None
+
+
 def test_eps_history_oldest_first():
     facts = _facts({
         "EarningsPerShareDiluted": [_row("2.5", 2024), _row("3.0", 2025)],

@@ -7,10 +7,13 @@ data wins the whole series (mixing concepts across years would splice
 incompatible definitions).
 
 Missing-data policy: a metric that cannot be computed is None / empty — the
-screener treats missing as a failed bar, never as a pass. The one deliberate
-exception: a company with a balance sheet (equity filed) but no debt concepts
-is treated as debt = 0, because debt-free small caps simply omit the tags and
-returning None would fail the leverage bar for exactly the best names.
+screener treats missing as a failed bar, never as a pass. Composites (EBITDA,
+FCF) require both components to end on the same fiscal year; debt and cash
+are anchored to the latest equity year, so a stale year's figure is never
+reported as current. The one deliberate exception: a company with a balance
+sheet (equity filed) but no debt concepts is treated as debt = 0, because
+debt-free small caps simply omit the tags and returning None would fail the
+leverage bar for exactly the best names.
 """
 
 from __future__ import annotations
@@ -100,6 +103,19 @@ def _latest(points: list[FactPoint]) -> Decimal | None:
     return points[-1].value if points else None
 
 
+def _latest_aligned(
+    a: dict[date, Decimal], b: dict[date, Decimal]
+) -> tuple[Decimal, Decimal] | None:
+    """Latest values of two series, only when both series end on the SAME
+    fiscal year — composites must never splice two reporting periods."""
+    if not a or not b:
+        return None
+    year = max(a)
+    if year != max(b):
+        return None
+    return a[year], b[year]
+
+
 def _debt_by_year(
     facts: dict, *, asof: date, has_balance_sheet: bool
 ) -> dict[date, Decimal]:
@@ -171,11 +187,15 @@ def compute_fundamentals(ticker: str, facts: dict, *, asof: date) -> Fundamental
     ))
 
     ebit = _latest(ebit_pts)
-    da = _latest(annual_series(facts, DA_CONCEPTS, asof=asof))
-    ebitda = ebit + da if ebit is not None and da is not None else None
-    cfo = _latest(annual_series(facts, CFO_CONCEPTS, asof=asof))
-    capex = _latest(annual_series(facts, CAPEX_CONCEPTS, asof=asof))
-    fcf = cfo - capex if cfo is not None and capex is not None else None
+    da_by_year = _by_year(annual_series(facts, DA_CONCEPTS, asof=asof))
+    pair = _latest_aligned(ebit_by_year, da_by_year)
+    ebitda = pair[0] + pair[1] if pair else None
+    cfo_by_year = _by_year(annual_series(facts, CFO_CONCEPTS, asof=asof))
+    capex_by_year = _by_year(annual_series(facts, CAPEX_CONCEPTS, asof=asof))
+    pair = _latest_aligned(cfo_by_year, capex_by_year)
+    fcf = pair[0] - pair[1] if pair else None
+
+    anchor = max(equity_by_year) if equity_by_year else None
 
     eps = tuple(
         YearValue(p.end, p.value)
@@ -187,8 +207,8 @@ def compute_fundamentals(ticker: str, facts: dict, *, asof: date) -> Fundamental
         asof=asof,
         ebit=ebit,
         ebitda=ebitda,
-        total_debt=max(debt_by_year.items())[1] if debt_by_year else None,
-        cash=max(cash_by_year.items())[1] if cash_by_year else None,
+        total_debt=debt_by_year.get(anchor) if anchor is not None else None,
+        cash=cash_by_year.get(anchor) if anchor is not None else None,
         fcf=fcf,
         eps_history=eps,
         roic_history=_roic_history(

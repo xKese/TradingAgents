@@ -88,3 +88,23 @@ def test_record_run_persists_coverage(store):
     store.record_run(asof=ASOF, universe_size=6, results=[_result("AAA")], coverage=coverage)
     run = store.last_run()
     assert run["coverage"] == coverage
+
+
+def test_enqueue_hit_queues_and_dedupes(store):
+    payload = {"symbol": "AAA", "asof": "2026-07-07", "passed": True}
+    hit_id = store.enqueue_hit("AAA", asof=date(2026, 7, 7), payload=payload)
+    assert hit_id is not None
+    hits = store.pending_hits()
+    assert [h["symbol"] for h in hits] == ["AAA"]
+    assert hits[0]["payload"] == payload
+    assert hits[0]["run_id"].startswith("monitor-2026-07-07-")
+    # Second enqueue while pending: dedupe, no new row.
+    assert store.enqueue_hit("AAA", asof=date(2026, 7, 7), payload=payload) is None
+    assert len(store.pending_hits()) == 1
+
+
+def test_enqueue_hit_requeues_after_terminal_status(store):
+    payload = {"symbol": "AAA", "asof": "2026-07-07", "passed": True}
+    hit_id = store.enqueue_hit("AAA", asof=date(2026, 7, 7), payload=payload)
+    store.mark_researched(hit_id)
+    assert store.enqueue_hit("AAA", asof=date(2026, 7, 8), payload=payload) is not None

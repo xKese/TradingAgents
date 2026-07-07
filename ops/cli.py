@@ -130,6 +130,48 @@ def install_screen_service(output_path: str, log_dir: str) -> None:
     _install_plist(rendered, output_path, log_dir)
 
 
+@cli.command("install-research-service")
+@click.option("--output", "output_path",
+              default="~/Library/LaunchAgents/com.tradingagents.research.plist",
+              show_default=True, type=click.Path(dir_okay=False),
+              help="Where to write the rendered research launchd plist")
+@click.option("--log-dir", "log_dir",
+              default="~/.local/state/tradingagents/logs", show_default=True,
+              help="Directory for the research job's stdout/stderr logs")
+def install_research_service(output_path: str, log_dir: str) -> None:
+    """Render the Saturday-12:00 research-drain launchd plist and print the
+    load command. Runs two hours after install-screen-service's Saturday
+    10:00 job, draining the pending-hits queue it fills.
+
+    Writes the file only — never invokes launchctl."""
+    import os
+    import sys
+    from pathlib import Path
+
+    from ops.deploy import render_research_plist
+
+    sec_edgar = os.environ.get("SEC_EDGAR_USER_AGENT", "").strip()
+    if not sec_edgar:
+        # Same guard as install-screen-service: an empty value baked into
+        # the plist makes every Saturday research batch die with
+        # EdgarNotConfiguredError before it can even notify.
+        raise click.ClickException(
+            "SEC_EDGAR_USER_AGENT is not set — the weekly research job would "
+            "fail on every run. Export it first (SEC fair-access format: "
+            "'Name email@example.com'), then re-run."
+        )
+    repo_root = str(Path(__file__).resolve().parents[1])
+    log_dir = os.path.abspath(os.path.expanduser(log_dir))
+    rendered = render_research_plist(
+        python_path=sys.executable,
+        repo_dir=repo_root,
+        log_dir=log_dir,
+        sec_edgar_user_agent=sec_edgar,
+        managed_backend=os.environ.get("OPS_LLM_MANAGED_BACKEND", ""),
+    )
+    _install_plist(rendered, output_path, log_dir)
+
+
 @cli.command("notify-once")
 @click.option("--journal", "journal_path", default=None,
               type=click.Path(dir_okay=False),
@@ -296,7 +338,9 @@ def research_write_off(symbol: str, price: str, note: str | None) -> None:
 @research.command("run")
 @click.option("--max-names", default=3, show_default=True, type=int,
               help="How many pending hits to research this batch (oldest first).")
-def research_run(max_names: int) -> None:
+@click.option("--notify", "do_notify", is_flag=True,
+              help="Send a Pushover summary (or a high-urgency alert on a batch abort).")
+def research_run(max_names: int, do_notify: bool = False) -> None:
     """Deep-research pending screen hits into structured memos (local models)."""
     from ops.llm_backend import build_managed_backend, load_managed_backend_config
     from ops.research.brain import ResearchError, research_hit
@@ -308,6 +352,8 @@ def research_run(max_names: int) -> None:
     store = ScreenStore(config.screen_store_path)
     hits = store.pending_hits()[:max_names]
     if not hits:
+        # A quiet week must not push: no pending hits is a no-op, not a
+        # failure, so notify is skipped entirely here.
         click.echo("no pending hits")
         return
 
@@ -318,48 +364,86 @@ def research_run(max_names: int) -> None:
     # same guard in ops/research/run.py's run_screen().
     from tradingagents.dataflows import edgar
 
-    try:
-        edgar.get_user_agent()
-    except edgar.EdgarNotConfiguredError as exc:
-        click.echo(f"research run: aborted — {exc}", err=True)
-        raise SystemExit(1) from exc
-
-    memo_store = MemoStore(config.memo_store_path)
-    evidence_llm = build_stage_llm(config.research_evidence_model)
-    thesis_llm = build_stage_llm(config.research_thesis_model)
-    backend = build_managed_backend(load_managed_backend_config())
     researched = failed = 0
     try:
-        backend.ensure_up()
-        for hit in hits:
-            try:
-                outcome = research_hit(
-                    hit, evidence_llm=evidence_llm, thesis_llm=thesis_llm,
-                    memo_store=memo_store,
-                )
-            except ResearchError:
-                raise  # configuration problem: abort the whole batch
-            except Exception as exc:
-                store.mark_failed(hit["id"])
-                failed += 1
-                click.echo(f"{hit['symbol']}: FAILED ({type(exc).__name__}: {exc})")
-                continue
-            if outcome.status == "researched":
-                store.mark_researched(hit["id"])
-                researched += 1
-                click.echo(
-                    f"{outcome.symbol}: memo {outcome.memo_id} "
-                    f"({outcome.recommendation}; evidence {outcome.evidence_kept} kept"
-                    f"/{outcome.evidence_dropped} dropped)"
-                )
-            else:
-                store.mark_failed(hit["id"])
-                failed += 1
-                click.echo(f"{outcome.symbol}: FAILED — " + "; ".join(outcome.errors))
-    finally:
-        backend.shutdown()
+        edgar.get_user_agent()
+
+        memo_store = MemoStore(config.memo_store_path)
+        evidence_llm = build_stage_llm(config.research_evidence_model)
+        thesis_llm = build_stage_llm(config.research_thesis_model)
+        backend = build_managed_backend(load_managed_backend_config())
+        try:
+            backend.ensure_up()
+            for hit in hits:
+                try:
+                    outcome = research_hit(
+                        hit, evidence_llm=evidence_llm, thesis_llm=thesis_llm,
+                        memo_store=memo_store,
+                    )
+                except ResearchError:
+                    raise  # configuration problem: abort the whole batch
+                except Exception as exc:
+                    store.mark_failed(hit["id"])
+                    failed += 1
+                    click.echo(f"{hit['symbol']}: FAILED ({type(exc).__name__}: {exc})")
+                    continue
+                if outcome.status == "researched":
+                    store.mark_researched(hit["id"])
+                    researched += 1
+                    click.echo(
+                        f"{outcome.symbol}: memo {outcome.memo_id} "
+                        f"({outcome.recommendation}; evidence {outcome.evidence_kept} kept"
+                        f"/{outcome.evidence_dropped} dropped)"
+                    )
+                else:
+                    store.mark_failed(hit["id"])
+                    failed += 1
+                    click.echo(f"{outcome.symbol}: FAILED — " + "; ".join(outcome.errors))
+        finally:
+            backend.shutdown()
+    except edgar.EdgarNotConfiguredError as exc:
+        # Aborts before the loop even starts — the unattended Saturday job's
+        # only signal is this push, so it must fire here too, not just for
+        # exceptions raised mid-batch below.
+        click.echo(f"research run: aborted — {exc}", err=True)
+        if do_notify:
+            from ops.notify.config import load_notify_config
+            from ops.notify.push import build_push_transport
+            from ops.notify.transport import NotifyMessage
+
+            build_push_transport(load_notify_config()).send(NotifyMessage(
+                title="research run FAILED",
+                body=f"{type(exc).__name__}: {exc}",
+                urgency="high",
+            ))
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        # Any other batch-aborting exception (ResearchError propagated from
+        # the loop, backend.ensure_up() failure, ...) — same signal.
+        if do_notify:
+            from ops.notify.config import load_notify_config
+            from ops.notify.push import build_push_transport
+            from ops.notify.transport import NotifyMessage
+
+            build_push_transport(load_notify_config()).send(NotifyMessage(
+                title="research run FAILED",
+                body=f"{type(exc).__name__}: {exc}",
+                urgency="high",
+            ))
+        raise
     click.echo(f"research run: {researched} researched, {failed} failed, "
                f"{len(store.pending_hits())} still pending")
+    if do_notify:
+        from ops.notify.config import load_notify_config
+        from ops.notify.push import build_push_transport
+        from ops.notify.transport import NotifyMessage
+
+        build_push_transport(load_notify_config()).send(NotifyMessage(
+            title="research run complete",
+            body=(f"{researched} researched, {failed} failed, "
+                  f"{len(store.pending_hits())} still pending"),
+            urgency="normal",
+        ))
     if failed == len(hits):
         raise SystemExit(1)
 

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tradingagents.research</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{VENV_PYTHON}}</string>
+		<string>-m</string>
+		<string>ops.cli</string>
+		<string>research</string>
+		<string>run</string>
+		<string>--max-names</string>
+		<string>3</string>
+		<string>--notify</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>{{REPO_ROOT}}</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>OPS_NOTIFY_ENABLED</key>
+		<string>1</string>
+		<key>SEC_EDGAR_USER_AGENT</key>
+		<string>{{SEC_EDGAR_USER_AGENT}}</string>
+		<key>OPS_LLM_MANAGED_BACKEND</key>
+		<string>{{OPS_LLM_MANAGED_BACKEND}}</string>
+	</dict>
+	<!-- Batch job: NOT a service — no KeepAlive. Saturday 12:00, after the 10:00 screen fills the queue. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>6</integer>
+		<key>Hour</key>
+		<integer>12</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>{{LOG_DIR}}/research.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>{{LOG_DIR}}/research.err.log</string>
+</dict>
+</plist>

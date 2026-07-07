@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -11,6 +12,47 @@ from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
 
 logger = logging.getLogger(__name__)
+
+# Rate-limit waits are budgeted separately from transport retries: a
+# subscription quota window can take an hour to reset, and unattended runs
+# should sleep through it rather than die.
+RATE_LIMIT_MAX_WAITS = int(os.environ.get("TRADINGAGENTS_RATE_LIMIT_MAX_WAITS", "12"))
+RATE_LIMIT_MAX_WAIT_SECONDS = float(
+    os.environ.get("TRADINGAGENTS_RATE_LIMIT_MAX_WAIT_SECONDS", "3600")
+)
+_ESCALATING_WAITS = (60, 120, 300, 600, 900)
+
+_DURATION_RE = re.compile(
+    r"(?:try again|retry|resets?)[^0-9]*"
+    r"(?:(\d+)\s*h(?:ours?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?\s*(?:([\d.]+)\s*s(?:ec(?:onds?)?)?)?",
+    re.IGNORECASE,
+)
+
+
+def _rate_limit_exceptions() -> tuple[type[BaseException], ...]:
+    import openai
+
+    return (openai.RateLimitError,)
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Best-effort extraction of the reset delay from a rate-limit error."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    for key in ("retry-after", "x-ratelimit-reset-after", "x-ratelimit-reset-requests"):
+        value = headers.get(key)
+        if value:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    match = _DURATION_RE.search(str(exc))
+    if match and any(match.groups()):
+        hours, minutes, seconds = match.groups()
+        return (
+            float(hours or 0) * 3600 + float(minutes or 0) * 60 + float(seconds or 0)
+        ) or None
+    return None
 
 
 def _stream_retryable_exceptions() -> tuple[type[BaseException], ...]:
@@ -85,24 +127,51 @@ class OpenAICodexClient(BaseLLMClient):
                     raise _missing_chatgpt_token_error() from exc
 
             def invoke(self, input, config=None, **kwargs):
-                # The SDK's max_retries only covers request setup; a stream
-                # that breaks mid-body raises through invoke and would kill a
-                # long multi-agent run. Retry the whole (stateless) call with
-                # the same budget.
-                retryable = _stream_retryable_exceptions()
-                attempts = max(1, int(getattr(self, "max_retries", None) or 2) + 1)
-                for attempt in range(attempts):
+                # Two failure modes are retried around the whole (stateless)
+                # call, because the SDK's max_retries only covers request
+                # setup:
+                # - transport errors mid-stream (SSE dies half-way), with the
+                #   SDK retry budget and short exponential backoff;
+                # - rate limits / usage caps, with a separate budget and long
+                #   waits (parsed reset delay when available), so unattended
+                #   runs sleep through quota windows instead of dying.
+                transport_retryable = _stream_retryable_exceptions()
+                rate_limited = _rate_limit_exceptions()
+                transport_attempts = max(1, int(getattr(self, "max_retries", None) or 2) + 1)
+                transport_failures = 0
+                rate_limit_waits = 0
+                while True:
                     try:
                         return normalize_content(super().invoke(input, config, **kwargs))
-                    except retryable as exc:
-                        if attempt == attempts - 1:
+                    except rate_limited as exc:
+                        rate_limit_waits += 1
+                        if rate_limit_waits > RATE_LIMIT_MAX_WAITS:
                             raise
-                        delay = min(2 ** attempt, 30)
+                        wait = _retry_after_seconds(exc)
+                        if wait is None:
+                            wait = _ESCALATING_WAITS[
+                                min(rate_limit_waits - 1, len(_ESCALATING_WAITS) - 1)
+                            ]
+                        wait = min(wait + 5, RATE_LIMIT_MAX_WAIT_SECONDS)  # +5s buffer
+                        logger.warning(
+                            "openai_codex rate limited (%s); sleeping %.0fs until reset "
+                            "(wait %d/%d)",
+                            exc,
+                            wait,
+                            rate_limit_waits,
+                            RATE_LIMIT_MAX_WAITS,
+                        )
+                        time.sleep(wait)
+                    except transport_retryable as exc:
+                        transport_failures += 1
+                        if transport_failures >= transport_attempts:
+                            raise
+                        delay = min(2 ** (transport_failures - 1), 30)
                         logger.warning(
                             "openai_codex stream failed mid-call (%s); retry %d/%d in %ds",
                             exc,
-                            attempt + 1,
-                            attempts - 1,
+                            transport_failures,
+                            transport_attempts - 1,
                             delay,
                         )
                         time.sleep(delay)

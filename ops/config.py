@@ -41,6 +41,15 @@ def _default_screen_store_path() -> str:
     return os.path.join(os.path.expanduser(base), "tradingagents", "research_screen.sqlite")
 
 
+def _default_memo_store_path() -> str:
+    from tradingagents.memos.store import default_memo_store_path
+
+    return default_memo_store_path()
+
+
+_DEFAULT_RESEARCH_MODEL = "openai_compatible:deepseek-v4-flash@http://127.0.0.1:8000/v1"
+
+
 # Symbols in this set are a FULL contractual blackout: buy AND sell are
 # rejected. This is a strict subset of deny_list. Everything else in
 # deny_list (the leveraged ETFs) is BUY-denied but SELL-allowed — selling
@@ -69,6 +78,9 @@ class OpsConfig:
     baseline_journal_path: str = field(default_factory=_default_baseline_journal_path)
     baseline_starting_cash: Decimal = Decimal("100000")
     screen_store_path: str = field(default_factory=_default_screen_store_path)
+    memo_store_path: str = field(default_factory=_default_memo_store_path)
+    research_evidence_model: str = _DEFAULT_RESEARCH_MODEL
+    research_thesis_model: str = _DEFAULT_RESEARCH_MODEL
     # Cost dial: max full-pipeline (LLM) analyses per day; risk is capped separately.
     daily_analysis_budget: int = 8
     # Exit engine (spec Component 6). Entry is top-daily_analysis_budget;
@@ -134,6 +146,10 @@ class OpsConfig:
             raise ValueError(
                 f"baseline_starting_cash must be > 0, got {self.baseline_starting_cash}"
             )
+        from ops.research.models import parse_model_spec
+
+        for fname in ("research_evidence_model", "research_thesis_model"):
+            parse_model_spec(getattr(self, fname))  # raises ValueError if malformed
 
 
 def _env_decimal(name: str) -> Decimal | None:
@@ -234,5 +250,17 @@ def load_config() -> OpsConfig:
     stopout_reentry_cooldown_days = _env_int("OPS_STOPOUT_REENTRY_COOLDOWN_DAYS")
     if stopout_reentry_cooldown_days is not None:
         kwargs["stopout_reentry_cooldown_days"] = stopout_reentry_cooldown_days
+
+    memo_store_path = os.environ.get("OPS_MEMO_STORE_PATH")
+    if memo_store_path is not None:
+        kwargs["memo_store_path"] = memo_store_path
+
+    research_evidence_model = os.environ.get("OPS_RESEARCH_EVIDENCE_MODEL")
+    if research_evidence_model is not None:
+        kwargs["research_evidence_model"] = research_evidence_model
+
+    research_thesis_model = os.environ.get("OPS_RESEARCH_THESIS_MODEL")
+    if research_thesis_model is not None:
+        kwargs["research_thesis_model"] = research_thesis_model
 
     return OpsConfig(**kwargs)

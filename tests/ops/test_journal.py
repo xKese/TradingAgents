@@ -211,6 +211,21 @@ def test_has_event_today_false_when_no_event_today(tmp_path):
     assert j.has_event_today("daily_halt", now=now) is False
 
 
+def test_record_event_honors_injected_at(tmp_path):
+    """record_event's optional `at` must be the timestamp actually stored —
+    not just accepted and ignored — so callers with their own clock (e.g.
+    Orchestrator's now_fn) can keep event timestamps consistent with the
+    same-day/same-week gating queries they later run against has_event_today.
+    """
+    j = Journal(str(tmp_path / "j.sqlite"))
+    injected = datetime(2026, 7, 6, 15, 0, tzinfo=timezone.utc)
+    j.record_event("daily_cycle_run", {"asof_date": "2026-07-06"}, at=injected)
+    assert j.has_event_today("daily_cycle_run", now=injected) is True
+    # A query anchored the next day must not see it as "today".
+    next_day = datetime(2026, 7, 7, 15, 0, tzinfo=timezone.utc)
+    assert j.has_event_today("daily_cycle_run", now=next_day) is False
+
+
 def test_has_event_since_last_monday_true(tmp_path):
     j = Journal(str(tmp_path / "j.sqlite"))
     j.record_event("kill_switch", {"reason": "weekly"})

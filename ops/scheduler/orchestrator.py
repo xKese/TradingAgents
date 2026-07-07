@@ -77,6 +77,7 @@ class Orchestrator:
         self._journal.record_event(
             events.KIND_DAILY_CYCLE_RUN,
             events.daily_cycle_run_payload(asof_date=asof_date),
+            at=now,
         )
 
         # Discard fetch counters accumulated outside this cycle so the

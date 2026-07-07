@@ -155,11 +155,14 @@ class Journal:
         instance."""
         return self._path
 
-    def record_event(self, kind: str, payload: dict[str, Any]) -> None:
+    def record_event(
+        self, kind: str, payload: dict[str, Any], *, at: datetime | None = None,
+    ) -> None:
+        ts = _to_iso(at) if at is not None else _now_iso()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO events (at, kind, payload) VALUES (?, ?, ?)",
-                (_now_iso(), kind, json.dumps(payload, default=str)),
+                (ts, kind, json.dumps(payload, default=str)),
             )
 
     def read_events(self) -> list[dict[str, Any]]:

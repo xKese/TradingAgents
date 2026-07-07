@@ -180,3 +180,124 @@ def test_screen_render_xml_escapes_substitutions():
     parsed = plistlib.loads(rendered.encode())
     env = parsed["EnvironmentVariables"]
     assert env["SEC_EDGAR_USER_AGENT"] == "Smith & Co <admin@smith.co>"
+
+
+def test_render_research_plist_substitutes_everything():
+    from ops.deploy import render_research_plist
+
+    rendered = render_research_plist(
+        python_path="/venv/bin/python", repo_dir="/repo", log_dir="/logs",
+        sec_edgar_user_agent="Fred fred@example.com", managed_backend="ds4",
+    )
+    assert "com.tradingagents.research" in rendered
+    assert "research.out.log" in rendered
+    assert "ds4" in rendered
+    assert "{{" not in rendered
+
+
+def _render_research(**overrides):
+    from ops.deploy import render_research_plist
+
+    kwargs = {
+        "python_path": "/Users/alice/Code/TradingAgents/.venv/bin/python",
+        "repo_dir": "/Users/alice/Code/TradingAgents",
+        "log_dir": "/Users/alice/.local/state/tradingagents/logs",
+        "sec_edgar_user_agent": "mail@example.com",
+    }
+    kwargs.update(overrides)
+    return render_research_plist(**kwargs)
+
+
+def test_research_render_has_correct_label():
+    rendered = _render_research()
+    assert "com.tradingagents.research" in rendered
+
+
+def test_research_render_has_start_calendar_interval_saturday_noon():
+    rendered = _render_research()
+    assert "<key>StartCalendarInterval</key>" in rendered
+    assert "<key>Weekday</key>" in rendered
+    assert "<integer>6</integer>" in rendered
+    assert "<key>Hour</key>" in rendered
+    assert "<integer>12</integer>" in rendered
+
+
+def test_research_render_has_no_keepalive():
+    rendered = _render_research()
+    assert "<key>KeepAlive</key>" not in rendered
+
+
+def test_research_render_includes_sec_edgar_and_notify_env():
+    rendered = _render_research()
+    assert "<key>SEC_EDGAR_USER_AGENT</key>" in rendered
+    assert "mail@example.com" in rendered
+    assert "<key>OPS_NOTIFY_ENABLED</key>" in rendered
+
+
+def test_research_render_default_managed_backend_is_empty():
+    rendered = _render_research()
+    assert "<key>OPS_LLM_MANAGED_BACKEND</key>" in rendered
+    import plistlib
+
+    parsed = plistlib.loads(rendered.encode())
+    assert parsed["EnvironmentVariables"]["OPS_LLM_MANAGED_BACKEND"] == ""
+
+
+@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil not available (off-macOS)")
+def test_research_rendered_template_is_valid_plist(tmp_path):
+    plist = tmp_path / "com.tradingagents.research.plist"
+    plist.write_text(_render_research())
+    result = subprocess.run(
+        ["plutil", "-lint", str(plist)], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_install_research_service_writes_rendered_file_and_prints_bootstrap(tmp_path, monkeypatch):
+    output = tmp_path / "LaunchAgents" / "com.tradingagents.research.plist"
+
+    def _no_subprocess(*args, **kwargs):
+        raise AssertionError(f"install-research-service must not spawn processes: {args}")
+
+    monkeypatch.setattr(subprocess, "run", _no_subprocess)
+    monkeypatch.setattr(subprocess, "Popen", _no_subprocess)
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "Test test@example.com")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["install-research-service", "--output", str(output)])
+    assert result.exit_code == 0, result.output
+    rendered = output.read_text()
+    assert "{{" not in rendered
+    assert "com.tradingagents.research" in rendered
+    # Prints (never runs) the load command.
+    assert "launchctl bootstrap" in result.output
+    assert str(output) in result.output
+
+
+def test_install_research_service_refuses_empty_user_agent(tmp_path, monkeypatch):
+    """Same guard as install-screen-service: an unset SEC_EDGAR_USER_AGENT
+    baked into the plist guarantees every Saturday research batch dies
+    before it can even research a single hit."""
+    monkeypatch.delenv("SEC_EDGAR_USER_AGENT", raising=False)
+    output = tmp_path / "com.tradingagents.research.plist"
+    result = CliRunner().invoke(
+        cli, ["install-research-service", "--output", str(output)])
+    assert result.exit_code != 0
+    assert "SEC_EDGAR_USER_AGENT" in result.output
+    assert not output.exists()
+
+
+def test_research_render_xml_escapes_substitutions():
+    import plistlib
+
+    from ops.deploy import render_research_plist
+
+    rendered = render_research_plist(
+        python_path="/x/.venv/bin/python", repo_dir="/x",
+        log_dir="/x/logs",
+        sec_edgar_user_agent="Smith & Co <admin@smith.co>",
+    )
+    assert "Smith &amp; Co &lt;admin@smith.co&gt;" in rendered
+    parsed = plistlib.loads(rendered.encode())
+    env = parsed["EnvironmentVariables"]
+    assert env["SEC_EDGAR_USER_AGENT"] == "Smith & Co <admin@smith.co>"

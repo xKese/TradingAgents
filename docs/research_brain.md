@@ -28,6 +28,7 @@ mdna/risk_factors/business, latest 10-Q mdna, 10-K MD&A YoY diff, one
 trigger filing) -> cited evidence extraction -> bear-case pass -> memo
 emission -> mechanical validation. On ds4 budget tens of minutes per name
 (single-threaded heavy reasoner; watch the ds4 server log for progress).
+Escalation hits from the monitor (re-research on falsifier trip or −30% drawdown) appear in the same pending queue and are researched the same way.
 
 ## Rejection (weak-model guardrails)
 

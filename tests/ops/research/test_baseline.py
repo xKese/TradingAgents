@@ -6,9 +6,10 @@ from decimal import Decimal
 import pytest
 
 from ops import events
+from ops.broker.base import QuoteUnavailable
 from ops.broker.paper import PaperBroker
 from ops.journal import Journal
-from ops.research.baseline import update_baseline_portfolio
+from ops.research.baseline import auto_write_off_delisted, update_baseline_portfolio
 
 pytestmark = pytest.mark.unit
 
@@ -216,3 +217,250 @@ def test_write_off_unknown_symbol_raises(journal):
             journal=journal, symbol="GHOST", price=Decimal("1"),
             starting_cash=Decimal("100000"),
         )
+
+
+def test_quote_failure_journaled_and_writeoff_after_three_runs(tmp_path):
+    """A position that stops quoting is written off on the 3rd consecutive
+    failing run, at the last buy-fill price, with the auto event journaled."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "DEAD": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "DEAD"], asof=date(2026, 6, 20))
+    del quotes["DEAD"]  # delisted between runs
+
+    for i, asof in enumerate([date(2026, 6, 27), date(2026, 7, 4), date(2026, 7, 11)]):
+        writeoffs = auto_write_off_delisted(
+            journal=journal, quote_source=quote_source,
+            starting_cash=Decimal("100000"), asof=asof,
+        )
+        if i < 2:
+            assert writeoffs == []
+            # keep the baseline-run cadence: each cycle records a screen-run event
+            broker = PaperBroker.from_journal(
+                journal=journal, quote_source=quote_source,
+                starting_cash=Decimal("100000"),
+            )
+            update_baseline_portfolio(broker=broker, journal=journal,
+                                      passers=["AAA"], asof=asof)
+    assert [w["symbol"] for w in writeoffs] == ["DEAD"]
+    # Fallback price = last buy fill price for DEAD.
+    last_buy = journal.last_buy_fill_for("DEAD")
+    assert Decimal(writeoffs[0]["price"]) == last_buy["price"]
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count("baseline_quote_failure") == 3
+    assert kinds.count("baseline_auto_writeoff") == 1
+    # The position is gone from a fresh replay.
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    assert "DEAD" not in {p.symbol for p in broker.get_positions()}
+
+
+def test_transient_failure_does_not_write_off(tmp_path):
+    """One failing run followed by a healthy run resets nothing permanent —
+    the streak rule needs failures on EVERY one of the last 3 run asofs."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "FLKY": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "FLKY"], asof=date(2026, 6, 20))
+
+    del quotes["FLKY"]  # fails on run 2
+    assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
+                                   starting_cash=Decimal("100000"),
+                                   asof=date(2026, 6, 27)) == []
+    broker = PaperBroker.from_journal(journal=journal, quote_source=quote_source,
+                                      starting_cash=Decimal("100000"))
+    update_baseline_portfolio(broker=broker, journal=journal, passers=["AAA"],
+                              asof=date(2026, 6, 27))
+
+    quotes["FLKY"] = Decimal("3.5")  # back on run 3: healthy, no failure event
+    assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
+                                   starting_cash=Decimal("100000"),
+                                   asof=date(2026, 7, 4)) == []
+    broker = PaperBroker.from_journal(journal=journal, quote_source=quote_source,
+                                      starting_cash=Decimal("100000"))
+    update_baseline_portfolio(broker=broker, journal=journal, passers=["AAA"],
+                              asof=date(2026, 7, 4))
+
+    del quotes["FLKY"]  # fails again on run 4 — but run 3 was healthy
+    assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
+                                   starting_cash=Decimal("100000"),
+                                   asof=date(2026, 7, 11)) == []
+
+
+def test_outage_guard_skips_writeoff_when_all_positions_fail(tmp_path):
+    """A feed-wide quote outage (every held position fails to quote in the
+    same run) must not be mistaken for mass delisting: the write-off pass
+    is skipped for that run even after 3 consecutive failing runs, though
+    quote-failure events are still journaled (final-review Important-1,
+    incident 2026-07-06 every-fetch-fails mode)."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "BBB": Decimal("20"), "CCC": Decimal("5")}
+
+    def quote_source(symbol):
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "BBB", "CCC"], asof=date(2026, 6, 20))
+
+    def outage_quote_source(symbol):
+        raise QuoteUnavailable(symbol)
+
+    for asof in [date(2026, 6, 27), date(2026, 7, 4), date(2026, 7, 11)]:
+        writeoffs = auto_write_off_delisted(
+            journal=journal, quote_source=outage_quote_source,
+            starting_cash=Decimal("100000"), asof=asof,
+        )
+        assert writeoffs == []
+        # Keep the baseline-run cadence going (mirrors the daemon: the
+        # outage doesn't stop the weekly screen from recording a run).
+        broker = PaperBroker.from_journal(
+            journal=journal, quote_source=outage_quote_source,
+            starting_cash=Decimal("100000"),
+        )
+        update_baseline_portfolio(broker=broker, journal=journal,
+                                  passers=[], asof=asof)
+
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_BASELINE_QUOTE_FAILURE) == 9  # 3 symbols x 3 runs
+    assert kinds.count(events.KIND_BASELINE_AUTO_WRITEOFF) == 0
+    # All three positions must still be present in a fresh replay.
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    assert {p.symbol for p in broker.get_positions()} == {"AAA", "BBB", "CCC"}
+
+
+def test_outage_guard_does_not_block_single_name_delisting(tmp_path):
+    """The outage guard must not swallow a genuine single-name delisting
+    when the rest of a multi-position book still quotes fine — only that
+    one name fails to quote on 3 consecutive runs, so it is a minority
+    (1 of 3), not a majority, and must still be written off
+    (final-review Important-1)."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "BBB": Decimal("20"), "DEAD": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "BBB", "DEAD"], asof=date(2026, 6, 20))
+    del quotes["DEAD"]  # delisted between runs
+
+    writeoffs: list[dict] = []
+    for i, asof in enumerate([date(2026, 6, 27), date(2026, 7, 4), date(2026, 7, 11)]):
+        writeoffs = auto_write_off_delisted(
+            journal=journal, quote_source=quote_source,
+            starting_cash=Decimal("100000"), asof=asof,
+        )
+        if i < 2:
+            assert writeoffs == []
+            broker = PaperBroker.from_journal(
+                journal=journal, quote_source=quote_source,
+                starting_cash=Decimal("100000"),
+            )
+            update_baseline_portfolio(broker=broker, journal=journal,
+                                      passers=["AAA", "BBB"], asof=asof)
+
+    assert [w["symbol"] for w in writeoffs] == ["DEAD"]
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_BASELINE_AUTO_WRITEOFF) == 1
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    assert "DEAD" not in {p.symbol for p in broker.get_positions()}
+
+
+def test_reinvoke_same_asof_does_not_collapse_streak(tmp_path):
+    """A crash-retry (or accidental second run_screen invocation) of
+    auto_write_off_delisted at the SAME asof must not let today's own
+    baseline_screen_run/failure event double as one of the 2 prior-run
+    streak slots — that would collapse the 3-distinct-date requirement to
+    2 and write off a position one run early. Also verifies the re-run
+    does not stack a duplicate baseline_quote_failure event for the same
+    (symbol, asof)."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "DEAD": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "DEAD"], asof=date(2026, 6, 13))
+    del quotes["DEAD"]  # delisted between runs
+
+    # Run 1: failing run at 6/20 — only one prior baseline-run asof (6/13)
+    # exists, so there isn't enough history for a streak yet.
+    writeoffs = auto_write_off_delisted(
+        journal=journal, quote_source=quote_source,
+        starting_cash=Decimal("100000"), asof=date(2026, 6, 20),
+    )
+    assert writeoffs == []
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA"], asof=date(2026, 6, 20))
+
+    # Run 2: failing run at 6/27 — DEAD has no failure event journaled for
+    # 6/13 (the run before it ever failed), so the streak still isn't met.
+    writeoffs = auto_write_off_delisted(
+        journal=journal, quote_source=quote_source,
+        starting_cash=Decimal("100000"), asof=date(2026, 6, 27),
+    )
+    assert writeoffs == []
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA"], asof=date(2026, 6, 27))
+
+    # Crash-retry: re-invoke auto_write_off_delisted at the SAME asof
+    # (6/27). Without the fix, the baseline_screen_run event just recorded
+    # for 6/27 (above) makes today's own date eligible to fill a prior
+    # slot, and the failure event journaled moments earlier satisfies it —
+    # collapsing distinct failing dates {6/20, 6/27} to a false streak.
+    writeoffs = auto_write_off_delisted(
+        journal=journal, quote_source=quote_source,
+        starting_cash=Decimal("100000"), asof=date(2026, 6, 27),
+    )
+    assert writeoffs == []
+
+    failure_events = [
+        e for e in journal.read_events()
+        if e["kind"] == events.KIND_BASELINE_QUOTE_FAILURE
+        and e["payload"]["symbol"] == "DEAD"
+        and e["payload"]["asof"] == date(2026, 6, 27).isoformat()
+    ]
+    assert len(failure_events) == 1

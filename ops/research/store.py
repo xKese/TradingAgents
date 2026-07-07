@@ -97,6 +97,32 @@ class ScreenStore:
                 )
         return run_id
 
+    def enqueue_hit(
+        self, symbol: str, *, asof: date, payload: dict, source: str = "monitor",
+    ) -> int | None:
+        """Queue one ad-hoc research hit (monitoring escalation path).
+
+        Same dedupe rule as record_run: a symbol already pending is not
+        re-queued. The payload must be _screen_summary-compatible — the
+        caller (ops/research/monitor.py) owns that contract.
+        """
+        symbol = symbol.upper()
+        with self._lock, self._connect() as conn:
+            pending = conn.execute(
+                "SELECT 1 FROM screen_hits WHERE symbol = ? AND status = 'pending'",
+                (symbol,),
+            ).fetchone()
+            if pending:
+                return None
+            run_id = f"{source}-{asof.isoformat()}-{uuid4().hex[:8]}"
+            now = _now_iso()
+            cur = conn.execute(
+                "INSERT INTO screen_hits (run_id, symbol, asof, status, payload, created_at)"
+                " VALUES (?, ?, ?, 'pending', ?, ?)",
+                (run_id, symbol, asof.isoformat(), json.dumps(payload), now),
+            )
+            return cur.lastrowid
+
     def pending_hits(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(

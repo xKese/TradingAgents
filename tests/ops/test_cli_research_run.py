@@ -132,3 +132,82 @@ def _all_hits(store):
     with store._connect() as conn:
         rows = conn.execute("SELECT symbol, status FROM screen_hits ORDER BY id").fetchall()
     return [{"symbol": r["symbol"], "status": r["status"]} for r in rows]
+
+
+def test_notify_sends_summary_after_batch(env, monkeypatch):
+    _seed_hits(env, ["AAA"])
+    monkeypatch.setattr(
+        "ops.research.brain.research_hit",
+        lambda hit, **kw: ResearchOutcome(
+            symbol=hit["symbol"], hit_id=hit["id"], status="researched",
+            memo_id="m-AAA", recommendation="buy",
+        ),
+    )
+    sent = []
+
+    class FakeTransport:
+        def send(self, message):
+            sent.append(message)
+
+    monkeypatch.setattr("ops.notify.push.build_push_transport", lambda cfg: FakeTransport())
+    result = CliRunner().invoke(cli_mod.cli, ["research", "run", "--notify"])
+    assert result.exit_code == 0, result.output
+    assert len(sent) == 1
+    assert "1 researched" in sent[0].body
+
+
+def test_notify_silent_when_no_pending_hits(env, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "ops.notify.push.build_push_transport",
+        lambda cfg: type("T", (), {"send": lambda self, m: sent.append(m)})(),
+    )
+    result = CliRunner().invoke(cli_mod.cli, ["research", "run", "--notify"])
+    assert result.exit_code == 0
+    assert sent == []
+
+
+def test_notify_sends_high_urgency_on_batch_failure(env, monkeypatch):
+    _seed_hits(env, ["AAA"])
+
+    def boom(hit, **kw):
+        raise RuntimeError("edgar on fire")
+
+    monkeypatch.setattr("ops.research.brain.research_hit", boom)
+    monkeypatch.setattr(
+        "ops.llm_backend.build_managed_backend",
+        lambda cfg: (_ for _ in ()).throw(RuntimeError("backend unreachable")),
+    )
+    sent = []
+
+    class FakeTransport:
+        def send(self, message):
+            sent.append(message)
+
+    monkeypatch.setattr("ops.notify.push.build_push_transport", lambda cfg: FakeTransport())
+    with pytest.raises(RuntimeError, match="backend unreachable"):
+        CliRunner().invoke(
+            cli_mod.cli, ["research", "run", "--notify"], catch_exceptions=False,
+        )
+    assert len(sent) == 1
+    assert sent[0].title == "research run FAILED"
+    assert sent[0].urgency == "high"
+
+
+def test_notify_not_sent_without_flag(env, monkeypatch):
+    _seed_hits(env, ["AAA"])
+    monkeypatch.setattr(
+        "ops.research.brain.research_hit",
+        lambda hit, **kw: ResearchOutcome(
+            symbol=hit["symbol"], hit_id=hit["id"], status="researched",
+            memo_id="m-AAA", recommendation="buy",
+        ),
+    )
+    sent = []
+    monkeypatch.setattr(
+        "ops.notify.push.build_push_transport",
+        lambda cfg: type("T", (), {"send": lambda self, m: sent.append(m)})(),
+    )
+    result = CliRunner().invoke(cli_mod.cli, ["research", "run"])
+    assert result.exit_code == 0, result.output
+    assert sent == []

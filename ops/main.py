@@ -346,6 +346,32 @@ def _daily_summary_tick(journal: Journal, broker, calendar=None) -> None:
         )
 
 
+def _research_monitor_tick(journal: Journal, config) -> None:
+    """Scheduler-safe wrapper around the Phase C memo monitor: gate on the
+    run-summary event (restart-safe once-per-day, same pattern as the
+    orchestrator's daily_cycle_run), and record errors as events rather than
+    raising — raising would kill the APScheduler job."""
+    try:
+        if journal.has_event_today(events.KIND_RESEARCH_MONITOR_RUN):
+            return
+        from ops.research.monitor import monitor_memos
+        from ops.research.store import ScreenStore
+        from tradingagents.memos.store import MemoStore
+
+        monitor_memos(
+            memo_store=MemoStore(config.memo_store_path),
+            screen_store=ScreenStore(config.screen_store_path),
+            journal=journal,
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+        journal.record_event(
+            events.KIND_RESEARCH_MONITOR_ERROR,
+            events.research_monitor_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
 # Dead-man's switch tuning (A1.3). Staleness is 3x the guardian poll
 # interval: one slow pass must not flap the external check, but a loop
 # that has missed three consecutive polls is wedged and must look dead.
@@ -413,7 +439,7 @@ def _build_heartbeat_job(guardian, journal: Journal):
 def _start_full_scheduler(
     orchestrator: Orchestrator, guardian: PositionGuardian,
     dispatcher: NotifyDispatcher, journal: Journal, broker,
-    calendar=None, heartbeat_job=None,
+    calendar=None, heartbeat_job=None, config=None,
 ) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
@@ -436,6 +462,12 @@ def _start_full_scheduler(
         CronTrigger(hour=16, minute=5, day_of_week="mon-fri"),
         id="daily_summary", max_instances=1, misfire_grace_time=300,
     )
+    if config is not None:
+        sched.add_job(
+            lambda: _research_monitor_tick(journal, config),
+            CronTrigger(hour=16, minute=20, day_of_week="mon-fri"),
+            id="research_monitor", max_instances=1, misfire_grace_time=300,
+        )
     if heartbeat_job is not None:
         sched.add_job(
             heartbeat_job,
@@ -551,7 +583,7 @@ def run() -> int:
             return exit_code
         sched = _start_full_scheduler(
             orchestrator, guardian, dispatcher, journal, broker,
-            calendar=calendar, heartbeat_job=heartbeat_job,
+            calendar=calendar, heartbeat_job=heartbeat_job, config=config,
         )
         _run_until_signal()
         sched.shutdown(wait=True)

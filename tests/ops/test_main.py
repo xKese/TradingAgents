@@ -456,3 +456,53 @@ def test_daily_summary_job_callable_does_not_name_error(tmp_path):
         job.func()  # must not raise NameError
     finally:
         sched.shutdown(wait=False)
+
+
+def test_research_monitor_job_registered_and_callable(tmp_path):
+    """The Phase C monitor job mirrors daily_summary: registered only when a
+    config is supplied, and its callable must be invokable with no args."""
+    from unittest.mock import MagicMock
+    from ops.main import _start_full_scheduler
+
+    journal = MagicMock()
+    journal.has_event_today.return_value = True  # monitor idempotent no-op
+    config = MagicMock()
+    sched = _start_full_scheduler(
+        MagicMock(), MagicMock(), MagicMock(), journal, MagicMock(), config=config,
+    )
+    try:
+        job = sched.get_job("research_monitor")
+        assert job is not None
+        job.func()  # gate returns early; must not raise
+    finally:
+        sched.shutdown(wait=False)
+
+
+def test_research_monitor_job_absent_without_config():
+    from unittest.mock import MagicMock
+    from ops.main import _start_full_scheduler
+
+    sched = _start_full_scheduler(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+    )
+    try:
+        assert sched.get_job("research_monitor") is None
+    finally:
+        sched.shutdown(wait=False)
+
+
+def test_research_monitor_tick_records_error_instead_of_raising(tmp_path):
+    from unittest.mock import MagicMock
+    from ops import events
+    from ops.main import _research_monitor_tick
+
+    journal = MagicMock()
+    journal.has_event_today.return_value = False
+    config = MagicMock()
+    config.memo_store_path = str(tmp_path / "nope" / "memos.sqlite")
+    # Force a failure inside: monitor_memos will blow up on a MagicMock path
+    # or the stores will; either way the tick must swallow and journal it.
+    config.screen_store_path = object()  # guaranteed TypeError downstream
+    _research_monitor_tick(journal, config)  # must not raise
+    kinds = [c.args[0] for c in journal.record_event.call_args_list]
+    assert events.KIND_RESEARCH_MONITOR_ERROR in kinds

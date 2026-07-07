@@ -358,6 +358,35 @@ def research_run(max_names: int) -> None:
         raise SystemExit(1)
 
 
+@research.command("monitor")
+def research_monitor() -> None:
+    """Run the daily memo monitor once (falsifiers, drawdown, resolution due)."""
+    from ops.journal import Journal
+    from ops.research.monitor import monitor_memos
+    from ops.research.store import ScreenStore
+    from tradingagents.memos.store import MemoStore
+
+    config = load_config()
+    with Journal(config.journal_path) as journal:
+        from ops import events as ops_events
+
+        if journal.has_event_today(ops_events.KIND_RESEARCH_MONITOR_RUN):
+            click.echo("note: a monitor run was already recorded today; running again")
+        outcome = monitor_memos(
+            memo_store=MemoStore(config.memo_store_path),
+            screen_store=ScreenStore(config.screen_store_path),
+            journal=journal,
+        )
+    click.echo(
+        f"monitor {outcome.asof}: {outcome.memos_checked} memos, "
+        f"{outcome.falsifiers_evaluated} falsifiers ({outcome.tripped} tripped, "
+        f"{outcome.unevaluable} unevaluable), {outcome.escalations} escalations, "
+        f"{outcome.resolution_due} due for resolution, {outcome.catalyst_due} catalysts due"
+    )
+    for err in outcome.errors:
+        click.echo(f"  error: {err}")
+
+
 @cli.command("decide-once")
 @click.option("--date", "as_of", required=True,
               type=click.DateTime(formats=["%Y-%m-%d"]),

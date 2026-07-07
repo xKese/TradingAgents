@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import Any
 
 from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
+
+logger = logging.getLogger(__name__)
+
+
+def _stream_retryable_exceptions() -> tuple[type[BaseException], ...]:
+    """Transport failures that can hit mid-stream, after the SDK's own
+    ``max_retries`` no longer applies (the request succeeded; the SSE stream
+    died halfway). Chat completions are stateless, so re-invoking is safe.
+    """
+    import httpx
+
+    exceptions: list[type[BaseException]] = [httpx.TransportError]
+    try:
+        import openai
+
+        exceptions += [openai.APIConnectionError, openai.APITimeoutError]
+    except ImportError:
+        pass
+    return tuple(exceptions)
 
 _PASSTHROUGH_KWARGS = (
     "timeout",
@@ -64,7 +85,27 @@ class OpenAICodexClient(BaseLLMClient):
                     raise _missing_chatgpt_token_error() from exc
 
             def invoke(self, input, config=None, **kwargs):
-                return normalize_content(super().invoke(input, config, **kwargs))
+                # The SDK's max_retries only covers request setup; a stream
+                # that breaks mid-body raises through invoke and would kill a
+                # long multi-agent run. Retry the whole (stateless) call with
+                # the same budget.
+                retryable = _stream_retryable_exceptions()
+                attempts = max(1, int(getattr(self, "max_retries", None) or 2) + 1)
+                for attempt in range(attempts):
+                    try:
+                        return normalize_content(super().invoke(input, config, **kwargs))
+                    except retryable as exc:
+                        if attempt == attempts - 1:
+                            raise
+                        delay = min(2 ** attempt, 30)
+                        logger.warning(
+                            "openai_codex stream failed mid-call (%s); retry %d/%d in %ds",
+                            exc,
+                            attempt + 1,
+                            attempts - 1,
+                            delay,
+                        )
+                        time.sleep(delay)
 
         llm_kwargs: dict[str, Any] = {
             "model": self.model,

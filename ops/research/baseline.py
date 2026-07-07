@@ -30,6 +30,7 @@ from ops.journal import Journal
 BASELINE_SLICE_PCT = Decimal("0.04")
 BASELINE_MAX_HOLD_DAYS = 365
 _MIN_ORDER_DOLLARS = Decimal("100")
+DELIST_WRITEOFF_RUNS = 3
 
 
 def _equity_with_fallback(broker: Broker, journal: Journal) -> Decimal:
@@ -129,6 +130,29 @@ def update_baseline_portfolio(
     return {"buys": buys, "exits": exits, "skipped": skipped}
 
 
+def _journal_synthetic_sell(
+    journal: Journal,
+    position,
+    price: Decimal,
+    *,
+    now: datetime,
+    coid_prefix: str,
+) -> None:
+    """Journal a SELL order+fill for `position` directly (no broker quote
+    involved) — the shared core behind manual write-off and the automated
+    delisted write-off. Replay reconstructs the cash from these two rows."""
+    proceeds = position.quantity * price
+    coid = f"{coid_prefix}-{now.date().isoformat()}-{position.symbol}-{uuid4().hex[:8]}"
+    journal.record_order(
+        client_order_id=coid, symbol=position.symbol, side=Side.SELL.value,
+        notional_dollars=proceeds, stop_loss_price=None,
+    )
+    journal.record_fill(
+        order_id=str(uuid4()), client_order_id=coid, symbol=position.symbol,
+        side=Side.SELL.value, quantity=position.quantity, price=price, filled_at=now,
+    )
+
+
 def write_off_position(
     *,
     journal: Journal,
@@ -152,17 +176,8 @@ def write_off_position(
     position = next((p for p in broker.get_positions() if p.symbol == symbol.upper()), None)
     if position is None:
         raise NoSuchPosition(f"no baseline position in {symbol!r}")
-    proceeds = position.quantity * price
     now = datetime.now(timezone.utc)
-    coid = f"baseline-writeoff-{now.date().isoformat()}-{symbol.upper()}-{uuid4().hex[:8]}"
-    journal.record_order(
-        client_order_id=coid, symbol=symbol.upper(), side=Side.SELL.value,
-        notional_dollars=proceeds, stop_loss_price=None,
-    )
-    journal.record_fill(
-        order_id=str(uuid4()), client_order_id=coid, symbol=symbol.upper(),
-        side=Side.SELL.value, quantity=position.quantity, price=price, filled_at=now,
-    )
+    _journal_synthetic_sell(journal, position, price, now=now, coid_prefix="baseline-writeoff")
     journal.record_event(
         events.KIND_BASELINE_WRITEOFF,
         events.baseline_writeoff_payload(
@@ -171,9 +186,84 @@ def write_off_position(
     )
     return {
         "symbol": symbol.upper(), "quantity": str(position.quantity),
-        "price": str(price), "proceeds": str(proceeds),
+        "price": str(price), "proceeds": str(position.quantity * price),
     }
 
 
 def _no_quotes(symbol: str) -> Decimal:
     raise AssertionError("write-off must never quote")
+
+
+def auto_write_off_delisted(
+    *,
+    journal: Journal,
+    quote_source,
+    starting_cash: Decimal,
+    asof: date,
+    now: datetime | None = None,
+) -> list[dict]:
+    """Write off positions that failed to quote on DELIST_WRITEOFF_RUNS
+    consecutive baseline runs (spec Phase C). Consecutiveness is derived
+    from the journal — a failure event per failing run asof, checked against
+    the last N-1 baseline_screen_run asofs — so there is no counter state to
+    lose. Runs BEFORE the main baseline broker is built: the replay after
+    this call no longer contains the dead position.
+    """
+    from ops.broker.paper import PaperBroker
+
+    now = now or datetime.now(timezone.utc)
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=starting_cash,
+    )
+    failing: list = []
+    for pos in broker.get_positions():
+        try:
+            broker.get_quote(pos.symbol)
+        except QuoteUnavailable as exc:
+            journal.record_event(
+                events.KIND_BASELINE_QUOTE_FAILURE,
+                events.baseline_quote_failure_payload(
+                    symbol=pos.symbol, asof=asof.isoformat(), error=str(exc),
+                ),
+            )
+            failing.append(pos)
+
+    if not failing:
+        return []
+    run_asofs = [
+        e["payload"]["asof"]
+        for e in journal.read_events()
+        if e["kind"] == events.KIND_BASELINE_SCREEN_RUN
+    ]
+    prior = list(dict.fromkeys(run_asofs))[-(DELIST_WRITEOFF_RUNS - 1):]
+    if len(prior) < DELIST_WRITEOFF_RUNS - 1:
+        return []  # not enough baseline-run history for a streak
+
+    written_off: list[dict] = []
+    for pos in failing:
+        streak = all(
+            journal.count_events(
+                events.KIND_BASELINE_QUOTE_FAILURE,
+                payload_equals={"symbol": pos.symbol, "asof": prior_asof},
+            ) > 0
+            for prior_asof in prior
+        )
+        if not streak:
+            continue
+        last_buy = journal.last_buy_fill_for(pos.symbol)
+        price = last_buy["price"] if last_buy is not None else pos.avg_entry_price
+        _journal_synthetic_sell(journal, pos, price, now=now,
+                                coid_prefix="baseline-auto-writeoff")
+        journal.record_event(
+            events.KIND_BASELINE_AUTO_WRITEOFF,
+            events.baseline_auto_writeoff_payload(
+                symbol=pos.symbol, quantity=str(pos.quantity), price=str(price),
+                failing_runs=DELIST_WRITEOFF_RUNS,
+                note=f"quote failures on {DELIST_WRITEOFF_RUNS} consecutive baseline runs",
+            ),
+        )
+        written_off.append({
+            "symbol": pos.symbol, "quantity": str(pos.quantity),
+            "price": str(price), "failing_runs": DELIST_WRITEOFF_RUNS,
+        })
+    return written_off

@@ -6,9 +6,10 @@ from decimal import Decimal
 import pytest
 
 from ops import events
+from ops.broker.base import QuoteUnavailable
 from ops.broker.paper import PaperBroker
 from ops.journal import Journal
-from ops.research.baseline import update_baseline_portfolio
+from ops.research.baseline import auto_write_off_delisted, update_baseline_portfolio
 
 pytestmark = pytest.mark.unit
 
@@ -216,3 +217,90 @@ def test_write_off_unknown_symbol_raises(journal):
             journal=journal, symbol="GHOST", price=Decimal("1"),
             starting_cash=Decimal("100000"),
         )
+
+
+def test_quote_failure_journaled_and_writeoff_after_three_runs(tmp_path):
+    """A position that stops quoting is written off on the 3rd consecutive
+    failing run, at the last buy-fill price, with the auto event journaled."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "DEAD": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "DEAD"], asof=date(2026, 6, 20))
+    del quotes["DEAD"]  # delisted between runs
+
+    for i, asof in enumerate([date(2026, 6, 27), date(2026, 7, 4), date(2026, 7, 11)]):
+        writeoffs = auto_write_off_delisted(
+            journal=journal, quote_source=quote_source,
+            starting_cash=Decimal("100000"), asof=asof,
+        )
+        if i < 2:
+            assert writeoffs == []
+            # keep the baseline-run cadence: each cycle records a screen-run event
+            broker = PaperBroker.from_journal(
+                journal=journal, quote_source=quote_source,
+                starting_cash=Decimal("100000"),
+            )
+            update_baseline_portfolio(broker=broker, journal=journal,
+                                      passers=["AAA"], asof=asof)
+    assert [w["symbol"] for w in writeoffs] == ["DEAD"]
+    # Fallback price = last buy fill price for DEAD.
+    last_buy = journal.last_buy_fill_for("DEAD")
+    assert Decimal(writeoffs[0]["price"]) == last_buy["price"]
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count("baseline_quote_failure") == 3
+    assert kinds.count("baseline_auto_writeoff") == 1
+    # The position is gone from a fresh replay.
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    assert "DEAD" not in {p.symbol for p in broker.get_positions()}
+
+
+def test_transient_failure_does_not_write_off(tmp_path):
+    """One failing run followed by a healthy run resets nothing permanent —
+    the streak rule needs failures on EVERY one of the last 3 run asofs."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "FLKY": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "FLKY"], asof=date(2026, 6, 20))
+
+    del quotes["FLKY"]  # fails on run 2
+    assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
+                                   starting_cash=Decimal("100000"),
+                                   asof=date(2026, 6, 27)) == []
+    broker = PaperBroker.from_journal(journal=journal, quote_source=quote_source,
+                                      starting_cash=Decimal("100000"))
+    update_baseline_portfolio(broker=broker, journal=journal, passers=["AAA"],
+                              asof=date(2026, 6, 27))
+
+    quotes["FLKY"] = Decimal("3.5")  # back on run 3: healthy, no failure event
+    assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
+                                   starting_cash=Decimal("100000"),
+                                   asof=date(2026, 7, 4)) == []
+    broker = PaperBroker.from_journal(journal=journal, quote_source=quote_source,
+                                      starting_cash=Decimal("100000"))
+    update_baseline_portfolio(broker=broker, journal=journal, passers=["AAA"],
+                              asof=date(2026, 7, 4))
+
+    del quotes["FLKY"]  # fails again on run 4 — but run 3 was healthy
+    assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
+                                   starting_cash=Decimal("100000"),
+                                   asof=date(2026, 7, 11)) == []

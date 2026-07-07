@@ -15,7 +15,7 @@ from ops.broker.paper import PaperBroker
 from ops.config import OpsConfig
 from ops.journal import Journal
 from ops.quotes import make_yfinance_quote_source
-from ops.research.baseline import update_baseline_portfolio
+from ops.research.baseline import auto_write_off_delisted, update_baseline_portfolio
 from ops.research.prices import PriceContext, fetch_price_context
 from ops.research.screener import NameInputs, screen_universe
 from ops.research.store import ScreenStore
@@ -168,15 +168,21 @@ def run_screen(
         )
         try:
             with Journal(config.baseline_journal_path) as baseline_journal:
+                qs = quote_source or make_yfinance_quote_source()
+                writeoffs = auto_write_off_delisted(
+                    journal=baseline_journal, quote_source=qs,
+                    starting_cash=config.baseline_starting_cash, asof=asof,
+                )
                 broker = PaperBroker.from_journal(
                     journal=baseline_journal,
-                    quote_source=quote_source or make_yfinance_quote_source(),
+                    quote_source=qs,
                     starting_cash=config.baseline_starting_cash,
                 )
                 baseline_summary = update_baseline_portfolio(
                     broker=broker, journal=baseline_journal,
                     passers=list(passed), asof=asof,
                 )
+                baseline_summary["writeoffs"] = [w["symbol"] for w in writeoffs]
         except Exception as exc:  # the control must never take down a screen run
             msg = f"baseline: {type(exc).__name__}: {exc}"
             print(f"[screen] {msg}", file=sys.stderr)

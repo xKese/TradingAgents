@@ -220,7 +220,8 @@ def screen(asof_dt: datetime | None, dry_run: bool, limit: int | None, do_notify
         click.echo(
             f"baseline: {len(summary.baseline['buys'])} buys, "
             f"{len(summary.baseline['exits'])} exits, "
-            f"{len(summary.baseline['skipped'])} skipped"
+            f"{len(summary.baseline['skipped'])} skipped, "
+            f"{len(summary.baseline.get('writeoffs', []))} written off"
         )
 
     for bar_name, counts in sorted(summary.coverage.items()):
@@ -248,11 +249,16 @@ def screen(asof_dt: datetime | None, dry_run: bool, limit: int | None, do_notify
                 title="screen BLIND", body=body, urgency="high",
             ))
         else:
+            n_writeoffs = (
+                len(summary.baseline.get("writeoffs", []))
+                if summary.baseline is not None else 0
+            )
+            body = (f"asof {summary.asof}: {len(summary.passed)} passed / "
+                    f"{summary.screened} screened / {len(summary.errors)} errors")
+            if n_writeoffs > 0:
+                body += f", {n_writeoffs} written off"
             transport.send(NotifyMessage(
-                title="screen complete",
-                body=(f"asof {summary.asof}: {len(summary.passed)} passed / "
-                      f"{summary.screened} screened / {len(summary.errors)} errors"),
-                urgency="normal",
+                title="screen complete", body=body, urgency="normal",
             ))
     if blind:
         raise SystemExit(2)

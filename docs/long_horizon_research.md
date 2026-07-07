@@ -143,7 +143,7 @@ alongside post-earnings momentum).
 4. ✅ Filing-reader agent tools (`read_filing_section`, `diff_filing_sections`,
    `get_insider_transactions`, `get_past_memos`)
 5. ✅ Thesis-type-aware memo pipeline (ops/research/brain.py; two-stage, deterministic orchestration) — debate prompts per sleeve
-6. Monitoring loop: mechanical falsifier checks + `due_for_resolution`
+6. ✅ Monitoring loop: mechanical falsifier checks + `due_for_resolution`
    scheduling, escalation to full re-analysis on trip or −30% drawdown
 7. Sizing layer on the existing guardrails engine (tier caps, sector ≤25%,
    single name ≤10% at cost)

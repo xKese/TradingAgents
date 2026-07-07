@@ -66,6 +66,11 @@ PRETAX_CONCEPTS = (
     "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
 )
 TAX_CONCEPTS = ("IncomeTaxExpenseBenefit",)
+INTEREST_EXPENSE_CONCEPTS = (
+    "InterestExpense",
+    "InterestExpenseNonoperating",
+    "InterestAndDebtExpense",
+)
 
 # When the effective tax rate cannot be computed (loss year, missing tags),
 # fall back to the US statutory corporate rate; clamp implausible rates.
@@ -99,10 +104,6 @@ def _by_year(points: list[FactPoint]) -> dict[date, Decimal]:
     return {p.end: p.value for p in points}
 
 
-def _latest(points: list[FactPoint]) -> Decimal | None:
-    return points[-1].value if points else None
-
-
 def _latest_aligned(
     a: dict[date, Decimal], b: dict[date, Decimal]
 ) -> tuple[Decimal, Decimal] | None:
@@ -131,6 +132,18 @@ def _debt_by_year(
         equity_years = _by_year(annual_series(facts, EQUITY_CONCEPTS, asof=asof))
         return dict.fromkeys(equity_years, _ZERO)
     return {}
+
+
+def _ebit_by_year(facts: dict, *, asof: date) -> dict[date, Decimal]:
+    direct = _by_year(annual_series(facts, EBIT_CONCEPTS, asof=asof))
+    if direct:
+        return direct
+    # Reconstruction for filers that never tag OperatingIncomeLoss:
+    # EBIT ≈ pretax income + interest expense (ignores other non-operating
+    # items — acceptable for a screen-stage cheapness bar).
+    pretax = _by_year(annual_series(facts, PRETAX_CONCEPTS, asof=asof))
+    interest = _by_year(annual_series(facts, INTEREST_EXPENSE_CONCEPTS, asof=asof))
+    return {y: pretax[y] + interest[y] for y in sorted(set(pretax) & set(interest))}
 
 
 def _gross_margins(facts: dict, *, asof: date) -> tuple[YearValue, ...]:
@@ -178,15 +191,14 @@ def _roic_history(
 
 
 def compute_fundamentals(ticker: str, facts: dict, *, asof: date) -> Fundamentals:
-    ebit_pts = annual_series(facts, EBIT_CONCEPTS, asof=asof)
-    ebit_by_year = _by_year(ebit_pts)
+    ebit_by_year = _ebit_by_year(facts, asof=asof)
     equity_by_year = _by_year(annual_series(facts, EQUITY_CONCEPTS, asof=asof))
     cash_by_year = _by_year(annual_series(facts, CASH_CONCEPTS, asof=asof))
     debt_by_year = _debt_by_year(facts, asof=asof, has_balance_sheet=bool(
         equity_by_year
     ))
 
-    ebit = _latest(ebit_pts)
+    ebit = ebit_by_year[max(ebit_by_year)] if ebit_by_year else None
     da_by_year = _by_year(annual_series(facts, DA_CONCEPTS, asof=asof))
     pair = _latest_aligned(ebit_by_year, da_by_year)
     ebitda = pair[0] + pair[1] if pair else None

@@ -220,12 +220,17 @@ def auto_write_off_delisted(
         try:
             broker.get_quote(pos.symbol)
         except QuoteUnavailable as exc:
-            journal.record_event(
+            already_journaled = journal.count_events(
                 events.KIND_BASELINE_QUOTE_FAILURE,
-                events.baseline_quote_failure_payload(
-                    symbol=pos.symbol, asof=asof.isoformat(), error=str(exc),
-                ),
-            )
+                payload_equals={"symbol": pos.symbol, "asof": asof.isoformat()},
+            ) > 0
+            if not already_journaled:
+                journal.record_event(
+                    events.KIND_BASELINE_QUOTE_FAILURE,
+                    events.baseline_quote_failure_payload(
+                        symbol=pos.symbol, asof=asof.isoformat(), error=str(exc),
+                    ),
+                )
             failing.append(pos)
 
     if not failing:
@@ -235,7 +240,14 @@ def auto_write_off_delisted(
         for e in journal.read_events()
         if e["kind"] == events.KIND_BASELINE_SCREEN_RUN
     ]
-    prior = list(dict.fromkeys(run_asofs))[-(DELIST_WRITEOFF_RUNS - 1):]
+    # Exclude today's own asof: on a same-asof re-run (crash-retry, or
+    # running the screen twice in one day), today's date can already be
+    # among the distinct run asofs, and the failure event journaled moments
+    # ago by this very call would satisfy that slot — collapsing the
+    # required 3 DISTINCT failing run dates to 2.
+    prior = [
+        a for a in dict.fromkeys(run_asofs) if a != asof.isoformat()
+    ][-(DELIST_WRITEOFF_RUNS - 1):]
     if len(prior) < DELIST_WRITEOFF_RUNS - 1:
         return []  # not enough baseline-run history for a streak
 

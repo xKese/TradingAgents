@@ -304,3 +304,72 @@ def test_transient_failure_does_not_write_off(tmp_path):
     assert auto_write_off_delisted(journal=journal, quote_source=quote_source,
                                    starting_cash=Decimal("100000"),
                                    asof=date(2026, 7, 11)) == []
+
+
+def test_reinvoke_same_asof_does_not_collapse_streak(tmp_path):
+    """A crash-retry (or accidental second run_screen invocation) of
+    auto_write_off_delisted at the SAME asof must not let today's own
+    baseline_screen_run/failure event double as one of the 2 prior-run
+    streak slots — that would collapse the 3-distinct-date requirement to
+    2 and write off a position one run early. Also verifies the re-run
+    does not stack a duplicate baseline_quote_failure event for the same
+    (symbol, asof)."""
+    journal = Journal(str(tmp_path / "b.sqlite"))
+    quotes = {"AAA": Decimal("10"), "DEAD": Decimal("4")}
+
+    def quote_source(symbol):
+        if symbol not in quotes:
+            raise QuoteUnavailable(symbol)
+        return quotes[symbol]
+
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA", "DEAD"], asof=date(2026, 6, 13))
+    del quotes["DEAD"]  # delisted between runs
+
+    # Run 1: failing run at 6/20 — only one prior baseline-run asof (6/13)
+    # exists, so there isn't enough history for a streak yet.
+    writeoffs = auto_write_off_delisted(
+        journal=journal, quote_source=quote_source,
+        starting_cash=Decimal("100000"), asof=date(2026, 6, 20),
+    )
+    assert writeoffs == []
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA"], asof=date(2026, 6, 20))
+
+    # Run 2: failing run at 6/27 — DEAD has no failure event journaled for
+    # 6/13 (the run before it ever failed), so the streak still isn't met.
+    writeoffs = auto_write_off_delisted(
+        journal=journal, quote_source=quote_source,
+        starting_cash=Decimal("100000"), asof=date(2026, 6, 27),
+    )
+    assert writeoffs == []
+    broker = PaperBroker.from_journal(
+        journal=journal, quote_source=quote_source, starting_cash=Decimal("100000"),
+    )
+    update_baseline_portfolio(broker=broker, journal=journal,
+                              passers=["AAA"], asof=date(2026, 6, 27))
+
+    # Crash-retry: re-invoke auto_write_off_delisted at the SAME asof
+    # (6/27). Without the fix, the baseline_screen_run event just recorded
+    # for 6/27 (above) makes today's own date eligible to fill a prior
+    # slot, and the failure event journaled moments earlier satisfies it —
+    # collapsing distinct failing dates {6/20, 6/27} to a false streak.
+    writeoffs = auto_write_off_delisted(
+        journal=journal, quote_source=quote_source,
+        starting_cash=Decimal("100000"), asof=date(2026, 6, 27),
+    )
+    assert writeoffs == []
+
+    failure_events = [
+        e for e in journal.read_events()
+        if e["kind"] == events.KIND_BASELINE_QUOTE_FAILURE
+        and e["payload"]["symbol"] == "DEAD"
+        and e["payload"]["asof"] == date(2026, 6, 27).isoformat()
+    ]
+    assert len(failure_events) == 1

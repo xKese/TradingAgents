@@ -136,6 +136,19 @@ def test_debt_and_cash_anchor_to_latest_equity_year_not_stale_years():
     assert f.cash is None
 
 
+def test_ebit_falls_back_to_pretax_plus_interest():
+    # No OperatingIncomeLoss tagged; EBIT ≈ pretax income + interest expense
+    # (the standard reconstruction; ignores other non-operating items).
+    facts = _facts({
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": [
+            _row(80, 2024), _row(90, 2025)
+        ],
+        "InterestExpense": [_row(20, 2024), _row(10, 2025)],
+    })
+    f = compute_fundamentals("WIDG", facts, asof=ASOF)
+    assert f.ebit == Decimal("100")
+
+
 def test_eps_history_oldest_first():
     facts = _facts({
         "EarningsPerShareDiluted": [_row("2.5", 2024), _row("3.0", 2025)],

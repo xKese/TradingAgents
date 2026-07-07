@@ -185,3 +185,18 @@ def test_exit_day_counts_must_be_positive():
         OpsConfig(earnings_max_hold_days=0)
     with pytest.raises(ValueError):
         OpsConfig(stopout_reentry_cooldown_days=0)
+
+
+def test_research_model_env_overrides(monkeypatch):
+    monkeypatch.setenv("OPS_RESEARCH_EVIDENCE_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("OPS_RESEARCH_THESIS_MODEL", "anthropic:claude-sonnet-5")
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", "/tmp/m.sqlite")
+    config = load_config()
+    assert config.research_evidence_model == "anthropic:claude-haiku-4-5"
+    assert config.research_thesis_model == "anthropic:claude-sonnet-5"
+    assert config.memo_store_path == "/tmp/m.sqlite"
+
+
+def test_malformed_research_model_rejected():
+    with pytest.raises(ValueError):
+        OpsConfig(research_thesis_model="not-a-spec")

@@ -139,6 +139,43 @@ def test_high_leverage_fails_quality_bar():
     assert levd.quality
 
 
+def test_negative_ebit_is_unprofitable_not_missing():
+    # EBIT tagged and negative: the screener SAW the data; only true gaps
+    # count as missing for coverage purposes.
+    fund = _fund("NEGEBIT", ebit=D("-5"))
+    universe = [
+        _inputs("NEGEBIT", triggers=[_trigger()], fund=fund),
+        *[_expensive_peer(f"PEER{i}") for i in range(5)],
+    ]
+    result = {r.symbol: r for r in screen_universe(universe, asof=ASOF)}["NEGEBIT"]
+    bar = next(b for b in result.valuation_bars if b.name == "ev_ebit_vs_sector")
+    assert bar.detail.startswith("unprofitable:")
+
+
+def test_untagged_ebit_is_missing():
+    fund = _fund("NOEBIT", ebit=None)
+    universe = [
+        _inputs("NOEBIT", triggers=[_trigger()], fund=fund),
+        *[_expensive_peer(f"PEER{i}") for i in range(5)],
+    ]
+    result = {r.symbol: r for r in screen_universe(universe, asof=ASOF)}["NOEBIT"]
+    bar = next(b for b in result.valuation_bars if b.name == "ev_ebit_vs_sector")
+    assert bar.detail.startswith("missing:")
+
+
+def test_negative_ebitda_and_negative_eps_are_unprofitable():
+    fund = _fund("NEGQ", ebitda=D("-3"), eps_history=_yv([(2025, "-1.0")]))
+    universe = [
+        _inputs("NEGQ", triggers=[_trigger()], fund=fund),
+        *[_expensive_peer(f"PEER{i}") for i in range(5)],
+    ]
+    result = {r.symbol: r for r in screen_universe(universe, asof=ASOF)}["NEGQ"]
+    debt_bar = next(b for b in result.quality_bars if b.name == "debt_to_ebitda")
+    pe_bar = next(b for b in result.valuation_bars if b.name == "pe_vs_own_history")
+    assert debt_bar.detail.startswith("unprofitable:")
+    assert pe_bar.detail.startswith("unprofitable:")
+
+
 def test_unstable_gross_margins_fail_q3():
     fund = _fund("SWNG", gross_margin_history=tuple(
         YearValue(date(y, 12, 31), v)

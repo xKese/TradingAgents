@@ -73,10 +73,23 @@ def _ev_ebit(inputs: NameInputs) -> Decimal | None:
     return ev / f.ebit
 
 
-def _ev_ebit_bar(ev_ebit: Decimal | None, benchmark: Decimal | None, label: str) -> Bar:
+def _ev_ebit_blocker(inputs: NameInputs) -> str:
+    f = inputs.fundamentals
+    if f.ebit is None:
+        return "missing: EBIT not tagged in XBRL facts"
+    if f.ebit <= _ZERO:
+        return "unprofitable: EBIT <= 0"
+    if f.total_debt is None:
+        return "missing: no balance sheet (debt unknown)"
+    return "not-meaningful: enterprise value <= 0"
+
+
+def _ev_ebit_bar(
+    ev_ebit: Decimal | None, benchmark: Decimal | None, label: str, blocker: str
+) -> Bar:
     name = "ev_ebit_vs_sector"
     if ev_ebit is None:
-        return Bar(name, False, "missing: EV/EBIT not computable (no EBIT or balance sheet)")
+        return Bar(name, False, blocker)
     if benchmark is None:
         return Bar(name, False, "missing: no peer median available")
     passed = ev_ebit < benchmark
@@ -95,8 +108,10 @@ def _fcf_yield_bar(inputs: NameInputs) -> Bar:
 def _pe_history_bar(inputs: NameInputs) -> Bar:
     name = "pe_vs_own_history"
     eps = inputs.fundamentals.eps_history
-    if not eps or eps[-1].value <= _ZERO:
-        return Bar(name, False, "missing: no positive current EPS")
+    if not eps:
+        return Bar(name, False, "missing: no EPS history")
+    if eps[-1].value <= _ZERO:
+        return Bar(name, False, "unprofitable: negative current EPS")
     current_pe = inputs.price / eps[-1].value
     historical: list[Decimal] = []
     for yv in eps:
@@ -121,8 +136,12 @@ def _roic_bar(inputs: NameInputs) -> Bar:
 def _debt_ebitda_bar(inputs: NameInputs) -> Bar:
     name = "debt_to_ebitda"
     f = inputs.fundamentals
-    if f.ebitda is None or f.ebitda <= _ZERO or f.total_debt is None:
-        return Bar(name, False, "missing: no positive EBITDA or no balance sheet")
+    if f.ebitda is None:
+        return Bar(name, False, "missing: EBITDA not computable (no EBIT or D&A)")
+    if f.total_debt is None:
+        return Bar(name, False, "missing: no balance sheet (debt unknown)")
+    if f.ebitda <= _ZERO:
+        return Bar(name, False, "unprofitable: EBITDA <= 0")
     ratio = f.total_debt / f.ebitda
     return Bar(name, ratio < DEBT_EBITDA_MAX, f"debt/EBITDA {ratio:.2f} vs {DEBT_EBITDA_MAX}")
 
@@ -165,7 +184,7 @@ def screen_universe(inputs: list[NameInputs], *, asof: date) -> list[ScreenResul
             benchmark = median(universe_peers) if universe_peers else None
             label = "universe"
         valuation = (
-            _ev_ebit_bar(ev_ebit_by_symbol[n.symbol], benchmark, label),
+            _ev_ebit_bar(ev_ebit_by_symbol[n.symbol], benchmark, label, _ev_ebit_blocker(n)),
             _fcf_yield_bar(n),
             _pe_history_bar(n),
         )

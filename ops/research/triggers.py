@@ -6,10 +6,12 @@ Two sources:
 
 - EDGAR filings (via the existing edgar vendor's trigger taxonomy): 13D
   activists, tenders, spinoff registrations, going-private, and 8-Ks whose
-  item numbers are in edgar.NOTABLE_8K_ITEMS. Form 4 insider clusters are
-  DEFERRED to build-order step 4: raw Form 4 counts are dominated by routine
-  sales and grants, and separating open-market buys needs the XML parser
-  that step builds.
+  item numbers are in edgar.NOTABLE_8K_ITEMS. Form 4 is excluded from this
+  list — see the insider-cluster trigger below.
+- Insider clusters: >= INSIDER_CLUSTER_MIN_BUYERS distinct insiders each
+  making at least one open-market buy (code P, not a 10b5-1 plan) within
+  the lookback window. Routine 10b5-1 sales and equity grants never count —
+  raw Form 4 counts are dominated by those and would be noise.
 - Price: a guidance-cut-style selloff, defined as the latest close sitting
   >= 25% below the 60-trading-day high.
 """
@@ -93,3 +95,65 @@ def find_selloff_trigger(
         date=asof,
         source="price",
     )
+
+
+INSIDER_CLUSTER_MIN_BUYERS = 2
+
+
+def find_insider_cluster_trigger(
+    ticker: str,
+    *,
+    asof: date,
+    lookback_days: int = TRIGGER_LOOKBACK_DAYS,
+    transactions_fetcher: Callable[..., list] | None = None,
+) -> Trigger | None:
+    """A cluster of distinct insiders buying on the open market, own cash,
+    outside 10b5-1 plans — the strongest single trigger in the taxonomy."""
+    from tradingagents.dataflows.form4 import get_insider_transactions
+
+    fetch = transactions_fetcher or get_insider_transactions
+    since = asof - timedelta(days=lookback_days)
+    txns = fetch(ticker, since=since)
+    buys = [
+        t for t in txns
+        if t.kind == "open_market_buy" and not t.ten_b5_1
+        and t.transaction_date is not None and since <= t.transaction_date <= asof
+    ]
+    buyers = {t.insider_name for t in buys}
+    if len(buyers) < INSIDER_CLUSTER_MIN_BUYERS:
+        return None
+    latest = max(buys, key=lambda t: t.transaction_date)
+    return Trigger(
+        kind="insider_cluster",
+        description=(
+            f"{len(buyers)} insiders made open-market buys (non-10b5-1) "
+            f"in the last {lookback_days} days"
+        ),
+        date=latest.transaction_date,
+        source=latest.accession,
+    )
+
+
+def find_triggers(
+    ticker: str,
+    *,
+    asof: date,
+    lookback_days: int = TRIGGER_LOOKBACK_DAYS,
+    list_filings: Callable[..., list[edgar.Filing]] | None = None,
+    transactions_fetcher: Callable[..., list] | None = None,
+) -> list[Trigger]:
+    """All change triggers for a name: EDGAR filings + insider cluster.
+
+    (The price-selloff trigger stays separate in run.py — it needs the price
+    context, which this module deliberately does not fetch.)
+    """
+    out = find_edgar_triggers(
+        ticker, asof=asof, lookback_days=lookback_days, list_filings=list_filings,
+    )
+    cluster = find_insider_cluster_trigger(
+        ticker, asof=asof, lookback_days=lookback_days,
+        transactions_fetcher=transactions_fetcher,
+    )
+    if cluster is not None:
+        out.append(cluster)
+    return out

@@ -21,8 +21,8 @@ from ops.research.screener import NameInputs, screen_universe
 from ops.research.store import ScreenStore
 from ops.research.triggers import (
     SELLOFF_LOOKBACK_DAYS,
-    find_edgar_triggers,
     find_selloff_trigger,
+    find_triggers,
 )
 from ops.universe.smallcap import UniverseName, build_smallcap_universe
 from tradingagents.dataflows.edgar_facts import get_company_facts
@@ -120,7 +120,7 @@ def run_screen(
 
         edgar.get_user_agent()
         facts_fetcher = get_company_facts
-    triggers_finder = triggers_finder or find_edgar_triggers
+    triggers_finder = triggers_finder or find_triggers
     price_context_fetcher = price_context_fetcher or fetch_price_context
 
     universe = universe_builder()

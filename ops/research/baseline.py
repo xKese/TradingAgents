@@ -32,6 +32,23 @@ BASELINE_MAX_HOLD_DAYS = 365
 _MIN_ORDER_DOLLARS = Decimal("100")
 DELIST_WRITEOFF_RUNS = 3
 
+# Outage guard (final-review Important-1, incident 2026-07-06): a feed-wide
+# quote outage makes make_yfinance_quote_source raise for every symbol, and
+# that is journaled as QuoteUnavailable identically to a genuine delisted
+# quote -- auto_write_off_delisted cannot tell the two apart from the
+# journal alone. This repo already lived the every-fetch-fails mode once; if
+# it recurs on 3 consecutive Saturday runs, treating it as delisting would
+# write off the ENTIRE control portfolio at cost -- irreversible, and it
+# permanently corrupts the null baseline. A simultaneous failure across a
+# STRICT MAJORITY of the held book (or the whole book) in a single run is
+# far more likely to be an outage than that many names delisting on the
+# same day, so the write-off pass is skipped entirely for that run when
+# this fires. Quote-failure events are still journaled beforehand, so
+# streak history for genuinely delisted names is preserved and the
+# write-off resumes once quotes recover (or once other positions are
+# added/removed and the book is no longer majority-failing).
+QUOTE_OUTAGE_MAJORITY_MULTIPLE = 2
+
 
 def _equity_with_fallback(broker: Broker, journal: Journal) -> Decimal:
     """Equity for sizing/reporting, resilient to unquotable positions.
@@ -194,6 +211,16 @@ def _no_quotes(symbol: str) -> Decimal:
     raise AssertionError("write-off must never quote")
 
 
+def _is_quote_outage(*, failing_count: int, held_count: int) -> bool:
+    """True when this run's failing-quote count looks like a feed outage
+    rather than delisting: a strict majority of a multi-position book, or
+    (n=1 special case, since one name can't be told apart from an outage
+    by count alone) the entire book. See QUOTE_OUTAGE_MAJORITY_MULTIPLE."""
+    if held_count >= 1 and failing_count == held_count:
+        return True
+    return held_count >= 2 and failing_count * QUOTE_OUTAGE_MAJORITY_MULTIPLE > held_count
+
+
 def auto_write_off_delisted(
     *,
     journal: Journal,
@@ -208,6 +235,10 @@ def auto_write_off_delisted(
     the last N-1 baseline_screen_run asofs — so there is no counter state to
     lose. Runs BEFORE the main baseline broker is built: the replay after
     this call no longer contains the dead position.
+
+    If a majority (or all) of the held book fails to quote in this run, the
+    write-off pass is skipped entirely — see _is_quote_outage /
+    QUOTE_OUTAGE_MAJORITY_MULTIPLE. Failure events are journaled regardless.
     """
     from ops.broker.paper import PaperBroker
 
@@ -215,8 +246,10 @@ def auto_write_off_delisted(
     broker = PaperBroker.from_journal(
         journal=journal, quote_source=quote_source, starting_cash=starting_cash,
     )
+    positions = broker.get_positions()
+    held_count = len(positions)
     failing: list = []
-    for pos in broker.get_positions():
+    for pos in positions:
         try:
             broker.get_quote(pos.symbol)
         except QuoteUnavailable as exc:
@@ -234,6 +267,10 @@ def auto_write_off_delisted(
             failing.append(pos)
 
     if not failing:
+        return []
+    if _is_quote_outage(failing_count=len(failing), held_count=held_count):
+        # Outage, not delisting (see QUOTE_OUTAGE_MAJORITY_MULTIPLE above).
+        # Failures are already journaled; skip the write-off pass entirely.
         return []
     run_asofs = [
         e["payload"]["asof"]

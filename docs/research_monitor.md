@@ -13,6 +13,10 @@ the monitor — escalations queue re-research hits for `ops research run`.
 | research run | launchd com.tradingagents.research | Sat 12:00 | drains the pending queue into memos |
 
 Manual: `ops research monitor` (safe anywhere; empty stores are a no-op).
+Running it manually in the morning journals the research_monitor_run
+summary event for that day, so the daemon's own 16:20 ET pass sees today
+already covered and silently skips it — falsifiers are not re-evaluated
+against the day's close.
 
 ## What gets pushed
 
@@ -25,7 +29,10 @@ Manual: `ops research monitor` (safe anywhere; empty stores are a no-op).
 
 Re-notification is deduped per memo/falsifier over a 7-day window (journal
 count_events — no side state). Escalations dedupe naturally: a symbol with a
-hit already pending is not re-queued.
+hit already pending is not re-queued. A drawdown or tripped falsifier on a
+memo that stays open just re-escalates on that weekly cadence (high push)
+and burns a research slot each Saturday — the loop stops only once the
+operator resolves the memo.
 
 ## Falsifier metrics evaluable today
 
@@ -52,5 +59,15 @@ the screen's --notify summary). Manual override remains:
 
 ## Inspecting
 
+Monitor events (falsifier_tripped, research_escalation, resolution_due,
+catalyst_due) live in the ops journal:
+
     sqlite3 ${XDG_STATE_HOME:-~/.local/state}/tradingagents/ops_journal.sqlite \
-      "SELECT at, kind, payload FROM events WHERE kind LIKE 'research_%' OR kind LIKE '%falsifier%' ORDER BY id DESC LIMIT 20"
+      "SELECT at, kind, payload FROM events WHERE kind IN ('falsifier_tripped', 'research_escalation', 'resolution_due', 'catalyst_due') ORDER BY id DESC LIMIT 20"
+
+Delisted-baseline events (baseline_quote_failure, baseline_auto_writeoff)
+are journaled into the separate baseline journal (ops/config.py
+_default_baseline_journal_path), not the ops journal above:
+
+    sqlite3 ${XDG_STATE_HOME:-~/.local/state}/tradingagents/baseline_journal.sqlite \
+      "SELECT at, kind, payload FROM events WHERE kind IN ('baseline_quote_failure', 'baseline_auto_writeoff') ORDER BY id DESC LIMIT 20"

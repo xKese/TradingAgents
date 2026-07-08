@@ -50,14 +50,29 @@ def parse_args() -> argparse.Namespace:
             "a few days) or 'position' (a hold, multi-month trend). Default: position."
         ),
     )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        help=(
+            "Use the quick-think model for every agent, including the research "
+            "manager and portfolio manager (normally the deep-think model). "
+            "Useful when deep_think_llm is a much larger/slower model than "
+            "quick_think_llm and this run is a cheap pre-filter rather than a "
+            "final decision, e.g. the screener's shortlist deep-dive."
+        ),
+    )
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
 
 
-def analyze_one(ticker: str, trade_date: str, debug: bool, horizon: str = "position") -> dict:
+def analyze_one(
+    ticker: str, trade_date: str, debug: bool, horizon: str = "position", quick: bool = False,
+) -> dict:
     asset_type = detect_asset_type(ticker)
     analysts = filter_analysts_for_asset_type(list(AnalystType), asset_type)
     config = DEFAULT_CONFIG.copy()
+    if quick:
+        config["deep_think_llm"] = config["quick_think_llm"]
     graph = TradingAgentsGraph(
         selected_analysts=tuple(a.value for a in analysts),
         debug=debug,
@@ -106,7 +121,7 @@ def main() -> int:
     results = []
     for ticker in tickers:
         try:
-            results.append(analyze_one(ticker, trade_date, args.debug, args.horizon))
+            results.append(analyze_one(ticker, trade_date, args.debug, args.horizon, args.quick))
         except Exception as exc:  # noqa: BLE001 - batch must not die on one bad ticker
             results.append(
                 {"ticker": ticker, "date": trade_date, "error": f"{type(exc).__name__}: {exc}"}

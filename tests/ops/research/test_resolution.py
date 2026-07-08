@@ -146,6 +146,40 @@ def test_holding_days_and_fraction_convention_matches_memo_store_fixture(journal
     assert numbers["resolved_at"] == NOW
 
 
+def test_explicit_exit_price_on_passed_memo_stays_none(journal):
+    # Schema docstring: exit_price is None for shadow-tracked "passed" memos,
+    # unqualified — even when the caller supplies an explicit --exit-price.
+    # The return math still uses the explicit price.
+    memo = _memo(status="passed", entry=10.0)
+    numbers = compute_resolution_numbers(
+        memo, research_journal=journal, price_fetcher=_prices(),
+        now=NOW, exit_price=14.0,
+    )
+    assert numbers["exit_price"] is None
+    assert numbers["realized_return_pct"] == pytest.approx((14.0 - 10.0) / 10.0)
+
+
+def test_multiple_sell_fills_latest_by_filled_at_wins(journal):
+    # Insert the later fill first to prove selection is by filled_at, not
+    # insertion/row-id order.
+    journal.record_fill(
+        order_id="o2", client_order_id="c2", symbol="WIDG", side="SELL",
+        quantity=Decimal("10"), price=Decimal("20.0"),
+        filled_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    journal.record_fill(
+        order_id="o1", client_order_id="c1", symbol="WIDG", side="SELL",
+        quantity=Decimal("10"), price=Decimal("14.5"),
+        filled_at=datetime(2026, 1, 10, tzinfo=timezone.utc),
+    )
+    memo = _memo(entry=10.0)
+    numbers = compute_resolution_numbers(
+        memo, research_journal=journal, price_fetcher=_prices(), now=NOW,
+    )
+    assert numbers["exit_price"] == 20.0
+    assert numbers["realized_return_pct"] == pytest.approx((20.0 - 10.0) / 10.0)
+
+
 def test_missing_benchmark_data_raises_resolution_error(journal):
     memo = _memo(entry=10.0)
 

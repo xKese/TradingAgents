@@ -18,8 +18,10 @@ Exit-price fallback ladder (first hit wins):
 
 Shadow-tracked "passed" memos never generate a fill (the position was never
 opened), so per the schema's documented convention their resolved
-``exit_price`` stays ``None`` even though the *return math* still uses the
-current close — the corpus records "what would have happened," not a
+``exit_price`` is unconditionally ``None`` — even if the caller supplies an
+explicit ``--exit-price`` — even though the *return math* still uses
+whatever price the ladder above found (the explicit price, a fill, or the
+current close). The corpus records "what would have happened," not a
 market execution that never occurred.
 """
 
@@ -49,7 +51,12 @@ def _last_sell_fill_price(research_journal, ticker: str):
         fill for fill in research_journal.read_fills()
         if fill["symbol"].upper() == ticker.upper() and fill["side"] == "SELL"
     ]
-    return matches[-1]["price"] if matches else None
+    if not matches:
+        return None
+    # Select by filled_at, not insertion/row-id order (mirrors Journal.
+    # last_buy_fill_for's "ORDER BY filled_at DESC" precedent).
+    latest = max(matches, key=lambda fill: fill["filled_at"])
+    return latest["price"]
 
 
 def compute_resolution_numbers(
@@ -81,8 +88,8 @@ def compute_resolution_numbers(
 
     # exit_for_return_math is what the arithmetic below actually uses; it is
     # only ever allowed to diverge from the reported exit_price in the one
-    # documented case (a passed memo that fell all the way through the
-    # ladder to a current close it never actually executed at).
+    # documented case (a passed memo, where the return math uses whatever
+    # price the ladder found but the reported exit_price is always None).
     exit_for_return_math = resolved_exit_price
     if resolved_exit_price is None:
         # Ladder step 3: current close. Neither an explicit price nor a fill
@@ -95,10 +102,15 @@ def compute_resolution_numbers(
             )
         current_close = float(close)
         exit_for_return_math = current_close
-        # Shadow-tracked "passed" memos never fill — report exit_price=None
-        # per the schema's documented convention, even though the return
-        # math above still used the current close.
-        resolved_exit_price = None if memo.status == "passed" else current_close
+        resolved_exit_price = current_close
+
+    # schema.py's Resolution docstring: exit_price is "None for shadow-
+    # tracked 'passed' memos" — unqualified. A shadow position has no real
+    # exit, so this holds even when the caller passed an explicit
+    # --exit-price or a SELL fill exists; the return math above still uses
+    # that price.
+    if memo.status == "passed":
+        resolved_exit_price = None
 
     realized_return_pct = (
         exit_for_return_math - memo.entry_price_ref

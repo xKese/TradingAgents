@@ -513,6 +513,60 @@ def research_trade() -> None:
         click.echo(f"  error: {err}")
 
 
+@research.command("resolve")
+@click.argument("memo_id")
+@click.option("--label", "outcome_label", required=True,
+              type=click.Choice([
+                  "thesis_right_made_money", "thesis_right_lost_money",
+                  "thesis_wrong_made_money", "thesis_wrong_lost_money",
+              ]),
+              help="Right/wrong process crossed with made/lost money — human judgment call.")
+@click.option("--narrative", required=True,
+              help="What actually happened, and whether the reasoning was sound.")
+@click.option("--exit-price", "exit_price", default=None, type=float,
+              help="Explicit exit price; overrides the sell-fill/current-close ladder.")
+def research_resolve(memo_id: str, outcome_label: str, narrative: str,
+                      exit_price: float | None) -> None:
+    """Resolve a memo: the arithmetic is computed, the human supplies only
+    the outcome label and the narrative."""
+    from ops.journal import Journal
+    from ops.research.resolution import ResolutionError, compute_resolution_numbers
+    from tradingagents.memos.schema import Resolution
+    from tradingagents.memos.store import MemoStore
+
+    config = load_config()
+    memo_store = MemoStore(config.memo_store_path)
+    memo = memo_store.get(memo_id)
+    if memo is None:
+        raise click.ClickException(f"no memo with id {memo_id!r}")
+    if memo.status == "resolved":
+        raise click.ClickException(f"memo {memo_id!r} is already resolved")
+
+    with Journal(config.research_journal_path) as research_journal:
+        try:
+            numbers = compute_resolution_numbers(
+                memo, research_journal=research_journal, exit_price=exit_price,
+            )
+        except ResolutionError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+    resolution = Resolution(
+        **numbers, outcome_label=outcome_label,
+        falsifiers_tripped=[], catalysts_realized=[], narrative=narrative,
+    )
+    try:
+        resolved = memo_store.resolve(memo_id, resolution)
+    except (KeyError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"resolved {resolved.ticker} ({memo_id}): {outcome_label} — "
+        f"exit {numbers['exit_price']}, realized {numbers['realized_return_pct']:+.1%} "
+        f"vs benchmark {numbers['benchmark_return_pct']:+.1%} "
+        f"over {numbers['holding_days']}d"
+    )
+
+
 @cli.command("decide-once")
 @click.option("--date", "as_of", required=True,
               type=click.DateTime(formats=["%Y-%m-%d"]),

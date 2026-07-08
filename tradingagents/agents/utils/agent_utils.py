@@ -66,7 +66,7 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
-def get_horizon_instruction(state: Mapping[str, Any]) -> str:
+def get_horizon_instruction(state: Mapping[str, Any] | None) -> str:
     """Return a prompt instruction biasing the decision toward the run's
     trade horizon — ``state["horizon"]`` is ``"swing"`` (a few days) or
     ``"position"`` (a multi-month hold), set at run start (see
@@ -75,10 +75,11 @@ def get_horizon_instruction(state: Mapping[str, Any]) -> str:
     not the analysts, whose reports describe the instrument regardless of
     how long the reader intends to hold it.
 
-    Defaults to "position" when absent (bare programmatic states, tests),
-    matching the graph's own default.
+    Defaults to "position" when absent or ``state`` isn't a mapping (bare
+    programmatic states, tests), matching the graph's own default.
     """
-    horizon = str(state.get("horizon") or "position").strip().lower()
+    horizon = str((state or {}).get("horizon") or "position").strip().lower() \
+        if isinstance(state, Mapping) else "position"
     if horizon == "swing":
         return (
             " Trade horizon: SWING — this recommendation is for a short "

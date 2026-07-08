@@ -69,8 +69,12 @@ def screen_equities(risk: str, horizon: str, limit: int = 20) -> list[dict[str, 
     but the fields available (beta, market cap bands) are most reliable
     there; broaden later if non-US coverage is requested.
     """
-    import yfinance as yf
-    from yfinance import EquityQuery
+    try:
+        import yfinance as yf
+        from yfinance import EquityQuery
+    except ImportError as exc:
+        logger.warning("equity screen: yfinance is not importable: %s", exc)
+        return []
 
     beta_lo, beta_hi = _equity_beta_bounds(risk)
     sort_field = "percentchange" if horizon == "swing" else "fiftytwowkpercentchange"
@@ -81,13 +85,19 @@ def screen_equities(risk: str, horizon: str, limit: int = 20) -> list[dict[str, 
         EquityQuery("gte", ["intradaymarketcap", 300_000_000]),
         EquityQuery("gt", ["dayvolume", 100_000]),
     ])
-    result = yf.screen(query, sortField=sort_field, sortAsc=False, size=limit)
+    try:
+        result = yf.screen(query, sortField=sort_field, sortAsc=False, size=limit)
+    except Exception as exc:  # noqa: BLE001 — a screener outage shouldn't crash discovery
+        logger.warning("equity screen: yf.screen() failed: %s", exc)
+        return []
     quotes = result.get("quotes", []) if isinstance(result, dict) else []
 
     candidates = []
     for q in quotes[:limit]:
+        if not isinstance(q, dict) or not q.get("symbol"):
+            continue
         candidates.append({
-            "ticker": q.get("symbol"),
+            "ticker": q["symbol"],
             "asset_type": "stock",
             "source": "yfinance_screen",
             "metrics": {
@@ -119,27 +129,41 @@ def screen_crypto(risk: str, horizon: str, limit: int = 20) -> list[dict[str, An
     change_field = "price_change_percentage_24h_in_currency" if horizon == "swing" \
         else "price_change_percentage_7d_in_currency"
 
-    resp = requests.get(
-        _COINGECKO_MARKETS_URL,
-        params={
-            "vs_currency": "usd",
-            "order": "market_cap_desc",
-            "per_page": max_rank,
-            "page": 1,
-            "price_change_percentage": "24h,7d",
-        },
-        timeout=15,
-    )
-    resp.raise_for_status()
-    coins = resp.json()
+    try:
+        resp = requests.get(
+            _COINGECKO_MARKETS_URL,
+            params={
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": max_rank,
+                "page": 1,
+                "price_change_percentage": "24h,7d",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        coins = resp.json()
+    except Exception as exc:  # noqa: BLE001 — CoinGecko being down/rate-limited shouldn't crash discovery
+        logger.warning("crypto screen: failed to fetch CoinGecko markets: %s", exc)
+        return []
 
-    banded = [c for c in coins[min_rank - 1:max_rank] if c.get(change_field) is not None]
+    if not isinstance(coins, list):
+        logger.warning("crypto screen: unexpected CoinGecko response shape: %r", coins)
+        return []
+
+    banded = [
+        c for c in coins[min_rank - 1:max_rank]
+        if isinstance(c, dict) and c.get(change_field) is not None
+    ]
     banded.sort(key=lambda c: c[change_field], reverse=True)
 
     candidates = []
     for c in banded[:limit]:
+        symbol = c.get("symbol")
+        if not symbol:
+            continue
         candidates.append({
-            "ticker": f"{c['symbol'].upper()}-USD",
+            "ticker": f"{symbol.upper()}-USD",
             "asset_type": "crypto",
             "source": "coingecko",
             "metrics": {
@@ -176,7 +200,10 @@ def screen_commodities(risk: str, horizon: str, limit: int = 20) -> list[dict[st
             hist = yf.Ticker(c["ticker"]).history(period=period)
             if hist.empty:
                 continue
-            pct_change = (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100
+            close_0 = hist["Close"].iloc[0]
+            if not close_0 or close_0 != close_0:  # zero or NaN (NaN != NaN)
+                continue
+            pct_change = (hist["Close"].iloc[-1] / close_0 - 1) * 100
         except Exception as exc:  # noqa: BLE001 — one bad future shouldn't kill the screen
             logger.warning("commodity screen: failed to fetch %s: %s", c["ticker"], exc)
             continue

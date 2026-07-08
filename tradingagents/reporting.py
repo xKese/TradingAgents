@@ -37,6 +37,16 @@ def extract_screen_summary(final_state: dict) -> dict[str, Any]:
     unparseable input yields ``None``, never an exception, so a screener run
     on many tickers isn't derailed by one odd report.
     """
+    empty = {
+        "direction": None,
+        "sentiment_band": None,
+        "sentiment_score": None,
+        "price_target": None,
+        "time_horizon": None,
+    }
+    if not isinstance(final_state, dict):
+        return empty
+
     final_trade_decision = final_state.get("final_trade_decision") or ""
     sentiment_report = final_state.get("sentiment_report") or ""
 
@@ -44,7 +54,12 @@ def extract_screen_summary(final_state: dict) -> dict[str, Any]:
 
     sentiment_match = _SENTIMENT_HEADER_RE.search(sentiment_report)
     sentiment_band = sentiment_match.group(1).strip() if sentiment_match else None
-    sentiment_score = float(sentiment_match.group(2)) if sentiment_match else None
+    sentiment_score = None
+    if sentiment_match:
+        try:
+            sentiment_score = float(sentiment_match.group(2))
+        except ValueError:
+            pass
 
     price_target_match = _PRICE_TARGET_RE.search(final_trade_decision)
     time_horizon_match = _TIME_HORIZON_RE.search(final_trade_decision)

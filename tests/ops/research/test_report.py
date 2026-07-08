@@ -148,6 +148,10 @@ def seeded(stores):
     memo_c = _value_memo(
         "CCC", created_at=datetime(2026, 4, 5, tzinfo=timezone.utc),
         conviction_tier="starter",
+        scenarios=[
+            ReturnScenario(probability=0.6, return_pct=-0.15, description="down"),
+            ReturnScenario(probability=0.4, return_pct=0.05, description="flat"),
+        ],
     )
     memo_store.save(memo_c)
     memo_store.mark_passed(memo_c.memo_id)  # shadow-tracked, never bought
@@ -374,6 +378,92 @@ def test_format_report_renders_empty_store_with_no_data_yet_everywhere(stores):
     ):
         assert header in rendered
     assert rendered.count("no data yet") == 6
+
+
+def test_scenario_calibration_excludes_empty_scenarios_from_n_and_gaps(stores):
+    """Add a 6th memo with empty scenarios to the 5-memo numeric test: verify
+    that it is excluded from n and gap calculations, counted as unscored, and
+    doesn't affect the scored mean gaps or hit rate."""
+    memo_store, research_journal, baseline_journal = stores
+    # The 5 scored cases from test_scenario_calibration_numeric_path_with_five_resolved.
+    cases = [
+        (0.30, 0.20),   # gap = +0.10, both positive -> hit
+        (0.10, -0.05),  # gap = +0.15, sign mismatch -> miss
+        (-0.10, -0.20), # gap = +0.10, both negative -> hit
+        (0.05, 0.05),   # gap = 0.00, both positive -> hit
+        (-0.05, 0.10),  # gap = -0.15, sign mismatch -> miss
+    ]
+    for i, (stated, realized) in enumerate(cases):
+        memo = _value_memo(
+            f"T{i}", created_at=datetime(2026, 1, 1 + i, tzinfo=timezone.utc),
+            scenarios=[ReturnScenario(probability=1.0, return_pct=stated, description="only")],
+        )
+        memo_store.save(memo)
+        _resolve(
+            memo_store, memo, realized_return_pct=realized,
+            outcome_label="thesis_right_made_money" if realized >= 0 else "thesis_right_lost_money",
+        )
+
+    # 6th memo: empty scenarios (unscored).
+    memo_unscored = _value_memo(
+        "T5", created_at=datetime(2026, 1, 6, tzinfo=timezone.utc),
+        scenarios=[],  # empty: should be excluded
+    )
+    memo_store.save(memo_unscored)
+    _resolve(
+        memo_store, memo_unscored, realized_return_pct=0.25,
+        outcome_label="thesis_right_made_money",
+    )
+
+    report = build_report(
+        memo_store=memo_store, research_journal=research_journal,
+        baseline_journal=baseline_journal, now=NOW,
+    )
+    section = report["scenario_calibration"]
+    # Scored n should remain 5 (the empty-scenario memo is excluded).
+    assert section["n"] == 5
+    assert section["too_small"] is False
+    # Gaps and hit rate unchanged from the 5-memo test.
+    gaps = [0.10, 0.15, 0.10, 0.00, -0.15]
+    assert section["mean_signed_gap_pct"] == pytest.approx(sum(gaps) / 5)
+    assert section["mean_abs_gap_pct"] == pytest.approx(sum(abs(g) for g in gaps) / 5)
+    assert section["directional_hit_rate"] == pytest.approx(3 / 5)
+    # Unscored count.
+    assert section["unscored"] == 1
+    # Verify the rendered markdown mentions it.
+    rendered = format_report(report)
+    assert "unscored (no stated scenarios): 1" in rendered
+
+
+def test_scenario_calibration_all_empty_scenarios_small_corpus(stores):
+    """All resolved memos have empty scenarios: scored n=0, but we count
+    unscored; the n=0 honesty path (empty) should still apply."""
+    memo_store, research_journal, baseline_journal = stores
+    # 3 resolved memos, all with empty scenarios.
+    for i in range(3):
+        memo = _value_memo(
+            f"E{i}", created_at=datetime(2026, 1, 1 + i, tzinfo=timezone.utc),
+            scenarios=[],  # all empty
+        )
+        memo_store.save(memo)
+        _resolve(
+            memo_store, memo, realized_return_pct=0.10 * (i + 1),
+            outcome_label="thesis_right_made_money",
+        )
+
+    report = build_report(
+        memo_store=memo_store, research_journal=research_journal,
+        baseline_journal=baseline_journal, now=NOW,
+    )
+    section = report["scenario_calibration"]
+    # Scored n=0 (all memos excluded).
+    assert section["n"] == 0
+    assert section["empty"] is True
+    # All 3 are unscored.
+    assert section["unscored"] == 3
+    # Render should say "no data yet" for the n=0 case.
+    rendered = format_report(report)
+    assert "no data yet" in rendered.split("## 3. Scenario calibration")[1]
 
 
 def test_build_report_is_journal_and_store_only_no_network_imports():

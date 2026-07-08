@@ -88,29 +88,33 @@ def _build_outcome_matrix(resolved: list[Any]) -> dict[str, Any]:
 
 
 def _build_scenario_calibration(resolved: list[Any]) -> dict[str, Any]:
-    n = len(resolved)
+    # Exclude memos with empty scenarios; count them as unscored.
+    scored = [m for m in resolved if m.scenarios]
+    unscored_count = len(resolved) - len(scored)
+    n = len(scored)
+
     if n == 0:
         return {
-            "n": 0, "empty": True, "too_small": False,
+            "n": 0, "empty": True, "too_small": False, "unscored": unscored_count,
             "mean_signed_gap_pct": None, "mean_abs_gap_pct": None,
             "directional_hit_rate": None,
         }
     if n < _SMALL_CORPUS_THRESHOLD:
         return {
-            "n": n, "empty": False, "too_small": True,
+            "n": n, "empty": False, "too_small": True, "unscored": unscored_count,
             "mean_signed_gap_pct": None, "mean_abs_gap_pct": None,
             "directional_hit_rate": None,
         }
     gaps: list[float] = []
     hits = 0
-    for memo in resolved:
+    for memo in scored:
         stated = sum(s.probability * s.return_pct for s in memo.scenarios)
         realized = memo.resolution.realized_return_pct
         gaps.append(stated - realized)
         if (stated > 0) == (realized > 0):
             hits += 1
     return {
-        "n": n, "empty": False, "too_small": False,
+        "n": n, "empty": False, "too_small": False, "unscored": unscored_count,
         "mean_signed_gap_pct": _mean(gaps),
         "mean_abs_gap_pct": _mean([abs(g) for g in gaps]),
         "directional_hit_rate": hits / n,
@@ -301,9 +305,13 @@ def _format_scenario_calibration(section: dict[str, Any]) -> list[str]:
     lines = ["## 3. Scenario calibration"]
     if section["empty"]:
         lines.append("no data yet")
+        if section["unscored"] > 0:
+            lines.append(f"unscored (no stated scenarios): {section['unscored']}")
         return lines
     if section["too_small"]:
         lines.append(f"corpus too small (n={section['n']} < 5) — numbers are noise")
+        if section["unscored"] > 0:
+            lines.append(f"unscored (no stated scenarios): {section['unscored']}")
         return lines
     lines.append("")
     lines.append(f"Resolved memos: {section['n']}")
@@ -313,6 +321,8 @@ def _format_scenario_calibration(section: dict[str, Any]) -> list[str]:
         f"Directional hit rate (stated-positive vs realized-positive agreement): "
         f"{section['directional_hit_rate']:.0%}"
     )
+    if section["unscored"] > 0:
+        lines.append(f"unscored (no stated scenarios): {section['unscored']}")
     return lines
 
 

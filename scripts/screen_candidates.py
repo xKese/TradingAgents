@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--risk", required=True, choices=["low", "medium", "high"])
     parser.add_argument("--horizon", required=True, choices=["swing", "position"])
     parser.add_argument("--limit", type=int, default=20, help="Max candidates per asset class")
+    parser.add_argument(
+        "--price-range",
+        default="all",
+        choices=["all", "pennies", "5_50", "51_100", "101_300", "301_plus"],
+        help="Price filter: all, pennies (<$5), 5_50, 51_100, 101_300, or 301_plus. Default: all.",
+    )
     return parser.parse_args()
 
 
@@ -41,7 +47,7 @@ def main() -> int:
     asset_classes = [a.strip() for a in args.asset_classes.split(",") if a.strip()]
 
     try:
-        candidates = discover(asset_classes, args.risk, args.horizon, args.limit)
+        candidates = discover(asset_classes, args.risk, args.horizon, args.limit, args.price_range)
     except Exception as exc:  # noqa: BLE001 — report as JSON, not a traceback
         print(json.dumps({"candidates": [], "error": f"{type(exc).__name__}: {exc}"}))
         return 1

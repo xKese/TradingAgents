@@ -342,3 +342,12 @@ def test_phase_d_trading_kinds_registered():
         events.KIND_RESEARCH_POSITION_OPENED, events.KIND_RESEARCH_POSITION_CLOSED,
     ):
         assert kind in events.BUILDERS
+
+
+def test_analysis_decision_kind_registered():
+    from ops import events
+    from ops.notify.policy import POLICY
+
+    assert events.KIND_ANALYSIS_DECISION in events.AUDIT_ONLY
+    assert events.KIND_ANALYSIS_DECISION not in POLICY
+    assert events.KIND_ANALYSIS_DECISION in events.BUILDERS

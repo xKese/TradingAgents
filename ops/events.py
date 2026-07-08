@@ -114,6 +114,10 @@ KIND_RESEARCH_TRADE_ERROR = "research_trade_error"
 KIND_RESEARCH_POSITION_OPENED = "research_position_opened"
 KIND_RESEARCH_POSITION_CLOSED = "research_position_closed"
 
+# Momentum sleeve: per-name pipeline verdict (BUY/HOLD/SELL), one per
+# analyzed candidate regardless of whether it turned into an order.
+KIND_ANALYSIS_DECISION = "analysis_decision"
+
 # Kinds deliberately NOT notified. Everything here is an audit trail the
 # operator reads via `ops status` or sqlite, not a push/email — either
 # because it fires during normal operation (service lifecycle, replay
@@ -159,6 +163,9 @@ AUDIT_ONLY: frozenset[str] = frozenset({
     KIND_RESEARCH_TRADE_ERROR,
     KIND_RESEARCH_POSITION_OPENED,
     KIND_RESEARCH_POSITION_CLOSED,
+    # Per-name momentum pipeline verdict: audit trail, not a push — the BUY
+    # case already notifies via position_opened/fill.
+    KIND_ANALYSIS_DECISION,
 })
 
 
@@ -632,6 +639,20 @@ def research_position_closed_payload(
     }
 
 
+def analysis_decision_payload(
+    *, symbol: str, decision: str, source: str, asof: str, rank: int | None = None,
+) -> dict[str, Any]:
+    """Momentum sleeve per-name pipeline verdict. `decision` is one of
+    "BUY"/"HOLD"/"SELL"; `rank` is omitted (not None) when the candidate
+    has no momentum payload (an earnings-only candidate)."""
+    payload: dict[str, Any] = {
+        "symbol": symbol, "decision": decision, "source": source, "asof": asof,
+    }
+    if rank is not None:
+        payload["rank"] = rank
+    return payload
+
+
 # Kind -> builder registry: the enforcement test walks this to prove every
 # POLICY kind has a builder and every builder's kind has been classified
 # (POLICY or AUDIT_ONLY). Register every new builder here.
@@ -689,4 +710,5 @@ BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     KIND_RESEARCH_TRADE_ERROR: research_trade_error_payload,
     KIND_RESEARCH_POSITION_OPENED: research_position_opened_payload,
     KIND_RESEARCH_POSITION_CLOSED: research_position_closed_payload,
+    KIND_ANALYSIS_DECISION: analysis_decision_payload,
 }

@@ -65,7 +65,7 @@ def test_researches_marks_and_summarizes(env, monkeypatch):
             errors=["no machine-checkable falsifier"] if status == "failed" else [],
         )
 
-    monkeypatch.setattr("ops.research.brain.research_hit", fake_research)
+    monkeypatch.setattr("ops.research.drain.research_hit", fake_research)
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["research", "run", "--max-names", "3"])
     assert result.exit_code == 0, result.output
@@ -79,7 +79,7 @@ def test_researches_marks_and_summarizes(env, monkeypatch):
 def test_all_failed_exits_one(env, monkeypatch):
     _seed_hits(env, ["AAA"])
     monkeypatch.setattr(
-        "ops.research.brain.research_hit",
+        "ops.research.drain.research_hit",
         lambda hit, **kw: ResearchOutcome(
             symbol=hit["symbol"], hit_id=hit["id"], status="failed",
             errors=["insufficient cited evidence"],
@@ -103,7 +103,7 @@ def test_unexpected_exception_marks_failed_and_continues(env, monkeypatch):
             memo_id="m-BBB", recommendation="pass",
         )
 
-    monkeypatch.setattr("ops.research.brain.research_hit", flaky)
+    monkeypatch.setattr("ops.research.drain.research_hit", flaky)
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["research", "run"])
     assert result.exit_code == 0, result.output
@@ -120,7 +120,7 @@ def test_missing_sec_edgar_user_agent_fails_fast_without_marking(env, monkeypatc
     def must_not_be_called(hit, **kw):
         raise AssertionError("research_hit must not be called when EDGAR is unconfigured")
 
-    monkeypatch.setattr("ops.research.brain.research_hit", must_not_be_called)
+    monkeypatch.setattr("ops.research.drain.research_hit", must_not_be_called)
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["research", "run"])
     assert result.exit_code != 0
@@ -137,7 +137,7 @@ def _all_hits(store):
 def test_notify_sends_summary_after_batch(env, monkeypatch):
     _seed_hits(env, ["AAA"])
     monkeypatch.setattr(
-        "ops.research.brain.research_hit",
+        "ops.research.drain.research_hit",
         lambda hit, **kw: ResearchOutcome(
             symbol=hit["symbol"], hit_id=hit["id"], status="researched",
             memo_id="m-AAA", recommendation="buy",
@@ -173,7 +173,7 @@ def test_notify_sends_high_urgency_on_batch_failure(env, monkeypatch):
     def boom(hit, **kw):
         raise RuntimeError("edgar on fire")
 
-    monkeypatch.setattr("ops.research.brain.research_hit", boom)
+    monkeypatch.setattr("ops.research.drain.research_hit", boom)
     monkeypatch.setattr(
         "ops.llm_backend.build_managed_backend",
         lambda cfg: (_ for _ in ()).throw(RuntimeError("backend unreachable")),
@@ -197,7 +197,7 @@ def test_notify_sends_high_urgency_on_batch_failure(env, monkeypatch):
 def test_notify_not_sent_without_flag(env, monkeypatch):
     _seed_hits(env, ["AAA"])
     monkeypatch.setattr(
-        "ops.research.brain.research_hit",
+        "ops.research.drain.research_hit",
         lambda hit, **kw: ResearchOutcome(
             symbol=hit["symbol"], hit_id=hit["id"], status="researched",
             memo_id="m-AAA", recommendation="buy",

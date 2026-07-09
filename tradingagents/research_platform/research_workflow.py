@@ -8,7 +8,13 @@ from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .agent_artifacts import (
+    agent_output_from_analyst_note,
+    agent_output_from_investment_thesis,
+    agent_output_from_trade_signal,
+)
 from .agent_contracts import (
+    AgentOutputEnvelope,
     AnalystNote,
     ConfidenceLevel,
     EvidenceRef,
@@ -108,6 +114,13 @@ def run_ticker_research(
         as_of_date=config.as_of_date,
         notes=analyst_notes,
     )
+    agent_outputs = build_agent_outputs(
+        analyst_notes=analyst_notes,
+        thesis=thesis,
+        signal=signal,
+    )
+    if store is not None:
+        store.save_agent_outputs(agent_outputs)
 
     risk_review: RiskReview | None = None
     backtest_result: BacktestResult | None = None
@@ -141,6 +154,7 @@ def run_ticker_research(
         price_bars=price_bars,
         fundamentals=fundamentals,
         news=news,
+        agent_outputs=agent_outputs,
         analyst_notes=analyst_notes,
         thesis=thesis,
         signal=signal,
@@ -151,6 +165,21 @@ def run_ticker_research(
     report_path = write_research_report(bundle, output_dir) if output_dir is not None else None
     return ResearchWorkflowResult(bundle=bundle, markdown=markdown, report_path=report_path)
 
+
+def build_agent_outputs(
+    *,
+    analyst_notes: Sequence[AnalystNote],
+    thesis: InvestmentThesis | None,
+    signal: TradeSignal | None = None,
+) -> list[AgentOutputEnvelope]:
+    """Create standard envelopes for all agent-like workflow artifacts."""
+
+    outputs = [agent_output_from_analyst_note(note) for note in analyst_notes]
+    if thesis is not None:
+        outputs.append(agent_output_from_investment_thesis(thesis))
+    if signal is not None:
+        outputs.append(agent_output_from_trade_signal(signal))
+    return outputs
 
 def build_deterministic_notes(
     *,

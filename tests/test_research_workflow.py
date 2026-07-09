@@ -145,6 +145,8 @@ def test_run_ticker_research_fetches_stores_reviews_backtests_and_writes_report(
     assert "## Risk Review" in result.markdown
     assert result.bundle.risk_review.decision == RiskDecision.REDUCE
     assert result.bundle.backtest_result.trades
+    assert len(result.bundle.agent_outputs) == 5
+    assert store.load_agent_outputs("NVDA", as_of_date=date(2026, 1, 5))
     assert store.load_price_bars("NVDA", date(2026, 1, 1), date(2026, 1, 5))
 
 
@@ -163,6 +165,7 @@ def test_run_ticker_research_without_signal_still_returns_data_report():
     assert result.bundle.risk_review is None
     assert result.bundle.backtest_result is None
     assert len(result.bundle.analyst_notes) == 3
+    assert len(result.bundle.agent_outputs) == 4
     assert result.bundle.thesis is not None
 
 
@@ -178,5 +181,6 @@ def test_run_ticker_research_handles_empty_provider():
 
     assert result.bundle.price_bars == []
     assert result.bundle.analyst_notes == []
+    assert result.bundle.agent_outputs == []
     assert result.bundle.thesis is None
     assert "No normalized price bars available." in result.markdown

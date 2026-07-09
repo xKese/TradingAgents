@@ -6,6 +6,9 @@ import re
 from datetime import date
 
 from .agent_contracts import (
+    AgentOutputEnvelope,
+    AgentOutputSection,
+    AgentOutputType,
     AnalystNote,
     ConfidenceLevel,
     EvidenceRef,
@@ -120,6 +123,171 @@ def render_trade_signal(signal: TradeSignal) -> str:
         )
     parts.extend(["", "### Evidence", render_evidence(signal.evidence)])
     return "\n".join(parts)
+
+
+def render_agent_output(output: AgentOutputEnvelope) -> str:
+    """Render one structured agent output for reports and cockpit previews."""
+
+    parts = [
+        f"### {output.agent_role}: {output.headline}",
+        "",
+        f"**Agent ID:** `{output.agent_id}`",
+        f"**Type:** {output.output_type.value}",
+        f"**As Of:** {output.as_of_date.isoformat()}",
+        f"**Confidence:** {output.confidence.value}",
+        "",
+        output.summary,
+    ]
+
+    for section in output.sections:
+        parts.extend(["", f"#### {section.title}"])
+        if section.summary:
+            parts.extend(["", section.summary])
+        if section.bullets:
+            parts.extend(["", *[f"- {item}" for item in section.bullets]])
+        if section.evidence:
+            parts.extend(["", render_evidence(section.evidence)])
+
+    if output.risks:
+        parts.extend(["", "#### Risks / Watch Items", *[f"- {risk}" for risk in output.risks]])
+
+    parts.extend(["", "#### Evidence", render_evidence(output.evidence)])
+    return "\n".join(parts)
+
+
+def render_agent_outputs(outputs: list[AgentOutputEnvelope]) -> str:
+    """Render multiple agent outputs in cockpit/report order."""
+
+    if not outputs:
+        return "No structured agent outputs available."
+    ordered = sorted(outputs, key=lambda item: (item.as_of_date, item.agent_role, item.agent_id))
+    return "\n\n".join(render_agent_output(output) for output in ordered)
+
+
+def agent_output_from_analyst_note(
+    note: AnalystNote,
+    *,
+    agent_id: str | None = None,
+) -> AgentOutputEnvelope:
+    """Wrap an AnalystNote in the standard agent-output envelope."""
+
+    sections = [
+        AgentOutputSection(
+            title="Summary",
+            summary=note.summary,
+            evidence=note.evidence,
+        )
+    ]
+    if note.risks:
+        sections.append(AgentOutputSection(title="Risks", bullets=note.risks))
+
+    return AgentOutputEnvelope(
+        symbol=note.symbol,
+        as_of_date=note.as_of_date,
+        agent_id=agent_id or _slug_agent_id(note.analyst_role),
+        agent_role=note.analyst_role,
+        output_type=AgentOutputType.ANALYST_NOTE,
+        headline=f"{note.analyst_role} note for {note.symbol}",
+        summary=note.summary,
+        sections=sections,
+        evidence=note.evidence,
+        risks=note.risks,
+        confidence=note.confidence,
+        payload=note,
+        metadata={"source_artifact": "AnalystNote"},
+    )
+
+
+def agent_output_from_investment_thesis(
+    thesis: InvestmentThesis,
+    *,
+    agent_id: str = "research-manager",
+    agent_role: str = "Research Manager",
+) -> AgentOutputEnvelope:
+    """Wrap an InvestmentThesis in the standard agent-output envelope."""
+
+    sections = [
+        AgentOutputSection(title="Base Case", summary=thesis.base_case, evidence=thesis.evidence),
+        AgentOutputSection(title="Bull Case", summary=thesis.bull_case),
+        AgentOutputSection(title="Bear Case", summary=thesis.bear_case),
+    ]
+    if thesis.catalysts:
+        sections.append(AgentOutputSection(title="Catalysts", bullets=thesis.catalysts))
+    if thesis.disconfirming_evidence:
+        sections.append(
+            AgentOutputSection(
+                title="Disconfirming Evidence",
+                bullets=thesis.disconfirming_evidence,
+            )
+        )
+
+    return AgentOutputEnvelope(
+        symbol=thesis.symbol,
+        as_of_date=thesis.as_of_date,
+        agent_id=agent_id,
+        agent_role=agent_role,
+        output_type=AgentOutputType.INVESTMENT_THESIS,
+        headline=f"Investment thesis for {thesis.symbol}",
+        summary=_first_sentence(thesis.base_case),
+        sections=sections,
+        evidence=thesis.evidence,
+        risks=thesis.disconfirming_evidence,
+        confidence=_confidence_level_from_score(thesis.confidence),
+        payload=thesis,
+        metadata={"source_artifact": "InvestmentThesis", "confidence_score": thesis.confidence},
+    )
+
+
+def agent_output_from_trade_signal(
+    signal: TradeSignal,
+    *,
+    agent_id: str = "portfolio-manager",
+    agent_role: str = "Portfolio Manager",
+) -> AgentOutputEnvelope:
+    """Wrap a TradeSignal in the standard agent-output envelope."""
+
+    bullets = [
+        f"Direction: {signal.direction.value}",
+        f"Horizon: {signal.horizon.value}",
+        f"Confidence: {signal.confidence:.0%}",
+    ]
+    if signal.proposed_position_pct is not None:
+        bullets.append(f"Proposed position: {signal.proposed_position_pct:.1%}")
+    if signal.expected_return_pct is not None:
+        bullets.append(f"Expected return: {signal.expected_return_pct:.1%}")
+    if signal.stop_loss_pct is not None:
+        bullets.append(f"Stop loss: {signal.stop_loss_pct:.1%}")
+
+    sections = [
+        AgentOutputSection(title="Decision", bullets=bullets, evidence=signal.evidence),
+        AgentOutputSection(title="Rationale", summary=signal.rationale),
+    ]
+    if signal.invalidation_triggers:
+        sections.append(
+            AgentOutputSection(
+                title="Invalidation Triggers",
+                bullets=signal.invalidation_triggers,
+            )
+        )
+
+    return AgentOutputEnvelope(
+        symbol=signal.symbol,
+        as_of_date=signal.as_of_date,
+        agent_id=agent_id,
+        agent_role=agent_role,
+        output_type=AgentOutputType.TRADE_SIGNAL,
+        headline=f"{signal.direction.value.title()} signal for {signal.symbol}",
+        summary=(
+            f"{signal.direction.value.title()} / {signal.horizon.value} signal "
+            f"with {signal.confidence:.0%} confidence."
+        ),
+        sections=sections,
+        evidence=signal.evidence,
+        risks=signal.invalidation_triggers,
+        confidence=_confidence_level_from_score(signal.confidence),
+        payload=signal,
+        metadata={"source_artifact": "TradeSignal", "confidence_score": signal.confidence},
+    )
 
 
 def analyst_note_from_legacy_report(
@@ -277,3 +445,24 @@ def _required_text(value: str, label: str) -> str:
 
 def _single_line(value: str) -> str:
     return " ".join(value.split())
+
+
+def _slug_agent_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
+    return cleaned.strip("-") or "agent"
+
+
+def _confidence_level_from_score(score: float) -> ConfidenceLevel:
+    if score >= 0.75:
+        return ConfidenceLevel.HIGH
+    if score < 0.4:
+        return ConfidenceLevel.LOW
+    return ConfidenceLevel.MEDIUM
+
+
+def _first_sentence(value: str, max_length: int = 220) -> str:
+    text = _single_line(value)
+    sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+    if len(sentence) <= max_length:
+        return sentence
+    return sentence[: max_length - 3].rstrip() + "..."

@@ -1,6 +1,9 @@
 """Contract-first models for the personal research platform migration."""
 
 from .agent_contracts import (
+    AgentOutputEnvelope,
+    AgentOutputSection,
+    AgentOutputType,
     AnalystNote,
     ConfidenceLevel,
     EvidenceRef,
@@ -37,6 +40,9 @@ from .risk_contracts import (
 )
 
 __all__ = [
+    "AgentOutputEnvelope",
+    "AgentOutputSection",
+    "AgentOutputType",
     "AnalystNote",
     "AssetClass",
     "BacktestConfig",

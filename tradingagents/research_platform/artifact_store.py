@@ -11,13 +11,14 @@ from pydantic import BaseModel
 
 from tradingagents.dataflows.utils import safe_ticker_component
 
+from .agent_contracts import AgentOutputEnvelope
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
 
 RecordT = TypeVar("RecordT", bound=BaseModel)
 
 
 class ArtifactStore(Protocol):
-    """Storage interface for normalized data-layer artifacts."""
+    """Storage interface for normalized research artifacts."""
 
     def save_price_bars(self, records: Sequence[PriceBar]) -> None:
         """Persist normalized price bars."""
@@ -55,6 +56,17 @@ class ArtifactStore(Protocol):
         as_of_date: date | None = None,
     ) -> list[NewsItem]:
         """Load news items in a date range, optionally constrained by availability."""
+
+    def save_agent_outputs(self, records: Sequence[AgentOutputEnvelope]) -> None:
+        """Persist structured agent outputs."""
+
+    def load_agent_outputs(
+        self,
+        symbol: str,
+        *,
+        as_of_date: date | None = None,
+    ) -> list[AgentOutputEnvelope]:
+        """Load structured agent outputs for a symbol."""
 
 
 class JsonArtifactStore:
@@ -122,6 +134,18 @@ class JsonArtifactStore:
             if start <= record.published_at.date() <= end
             and (as_of_date is None or record.as_of_date <= as_of_date)
         ]
+
+    def save_agent_outputs(self, records: Sequence[AgentOutputEnvelope]) -> None:
+        self._save_grouped(records, "agent_outputs", lambda r: r.symbol, _agent_output_key)
+
+    def load_agent_outputs(
+        self,
+        symbol: str,
+        *,
+        as_of_date: date | None = None,
+    ) -> list[AgentOutputEnvelope]:
+        records = self._load("agent_outputs", symbol, AgentOutputEnvelope)
+        return [record for record in records if as_of_date is None or record.as_of_date <= as_of_date]
 
     def _save_grouped(
         self,
@@ -191,4 +215,12 @@ def _news_key(record: NewsItem) -> str:
         record.provider,
         record.title,
         record.url or "",
+    ])
+
+
+def _agent_output_key(record: AgentOutputEnvelope) -> str:
+    return "|".join([
+        record.as_of_date.isoformat(),
+        record.agent_id,
+        record.output_type.value,
     ])

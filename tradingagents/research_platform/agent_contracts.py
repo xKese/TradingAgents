@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ConfidenceLevel(str, Enum):
@@ -32,6 +32,13 @@ class ThesisScenario(str, Enum):
     BEAR = "bear"
 
 
+class AgentOutputType(str, Enum):
+    ANALYST_NOTE = "analyst_note"
+    INVESTMENT_THESIS = "investment_thesis"
+    TRADE_SIGNAL = "trade_signal"
+    COCKPIT_PANEL = "cockpit_panel"
+
+
 class EvidenceRef(BaseModel):
     """Reference to a deterministic data artifact or cited source."""
 
@@ -41,6 +48,17 @@ class EvidenceRef(BaseModel):
     description: str = Field(min_length=1)
     as_of_date: date
     confidence: float = Field(ge=0.0, le=1.0)
+
+
+class AgentOutputSection(BaseModel):
+    """Report/cockpit section inside a structured agent output."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str = Field(min_length=1)
+    summary: str | None = Field(default=None, min_length=1)
+    bullets: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceRef] = Field(default_factory=list)
 
 
 class AnalystNote(BaseModel):
@@ -89,3 +107,55 @@ class TradeSignal(BaseModel):
     stop_loss_pct: float | None = Field(default=None, ge=0.0, le=1.0)
     evidence: list[EvidenceRef] = Field(default_factory=list)
     invalidation_triggers: list[str] = Field(default_factory=list)
+
+
+AgentPayload = AnalystNote | InvestmentThesis | TradeSignal
+MetadataValue = str | int | float | bool | None
+
+
+class AgentOutputEnvelope(BaseModel):
+    """Stable envelope for one complete agent output.
+
+    The envelope keeps cockpit/report metadata separate from the typed payload
+    so downstream tools can render, cache, diff, and validate agent output
+    without re-parsing markdown.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str = Field(min_length=1)
+    as_of_date: date
+    agent_id: str = Field(min_length=1)
+    agent_role: str = Field(min_length=1)
+    output_type: AgentOutputType
+    headline: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    sections: list[AgentOutputSection] = Field(default_factory=list)
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
+    payload: AgentPayload | None = None
+    metadata: dict[str, MetadataValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _payload_matches_envelope(self) -> "AgentOutputEnvelope":
+        if self.payload is None:
+            return self
+
+        if self.payload.symbol != self.symbol:
+            raise ValueError("payload symbol must match envelope symbol")
+        if self.payload.as_of_date != self.as_of_date:
+            raise ValueError("payload as_of_date must match envelope as_of_date")
+
+        expected_type = _payload_output_type(self.payload)
+        if self.output_type != expected_type:
+            raise ValueError("payload type must match envelope output_type")
+        return self
+
+
+def _payload_output_type(payload: AgentPayload) -> AgentOutputType:
+    if isinstance(payload, AnalystNote):
+        return AgentOutputType.ANALYST_NOTE
+    if isinstance(payload, InvestmentThesis):
+        return AgentOutputType.INVESTMENT_THESIS
+    return AgentOutputType.TRADE_SIGNAL

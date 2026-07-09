@@ -11,11 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from tradingagents.dataflows.utils import safe_ticker_component
 
 from .agent_artifacts import (
+    render_agent_outputs,
     render_analyst_note,
     render_investment_thesis,
     render_trade_signal,
 )
-from .agent_contracts import AnalystNote, InvestmentThesis, TradeSignal
+from .agent_contracts import AgentOutputEnvelope, AnalystNote, InvestmentThesis, TradeSignal
 from .backtest_contracts import BacktestResult
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
 from .risk_contracts import RiskReview
@@ -36,6 +37,7 @@ class ResearchReportBundle(BaseModel):
     price_bars: list[PriceBar] = Field(default_factory=list)
     fundamentals: list[FundamentalSnapshot] = Field(default_factory=list)
     news: list[NewsItem] = Field(default_factory=list)
+    agent_outputs: list[AgentOutputEnvelope] = Field(default_factory=list)
     analyst_notes: list[AnalystNote] = Field(default_factory=list)
     thesis: InvestmentThesis | None = None
     signal: TradeSignal | None = None
@@ -51,6 +53,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
         _render_market_snapshot(bundle.price_bars),
         _render_fundamentals(bundle.fundamentals),
         _render_news(bundle.news),
+        _render_agent_outputs(bundle.agent_outputs),
         _render_analyst_notes(bundle.analyst_notes),
         _render_thesis(bundle.thesis),
         _render_signal(bundle.signal),
@@ -159,6 +162,11 @@ def _render_news(news: list[NewsItem]) -> str:
         )
     return "\n".join(["## News", "", "| Date | Provider | Title |", "| --- | --- | --- |", *rows])
 
+
+def _render_agent_outputs(outputs: list[AgentOutputEnvelope]) -> str:
+    if not outputs:
+        return "## Agent Outputs\n\nNo structured agent outputs available."
+    return "## Agent Outputs\n\n" + render_agent_outputs(outputs)
 
 def _render_analyst_notes(notes: list[AnalystNote]) -> str:
     if not notes:

@@ -221,3 +221,35 @@ def test_research_journal_defaults(monkeypatch):
 def test_nonpositive_research_cash_rejected():
     with pytest.raises(ValueError):
         OpsConfig(research_starting_cash=Decimal("0"))
+
+
+def test_research_cadence_defaults():
+    from ops.config import OpsConfig
+    cfg = OpsConfig()
+    assert cfg.research_screen_interval_days == 3
+    assert cfg.research_drain_deadline_hour == 8
+    assert cfg.research_screen_ttl_days == 7
+
+
+def test_research_cadence_env_overrides(monkeypatch):
+    from ops.config import load_config
+    monkeypatch.setenv("OPS_RESEARCH_SCREEN_INTERVAL_DAYS", "2")
+    monkeypatch.setenv("OPS_RESEARCH_DRAIN_DEADLINE_HOUR", "7")
+    monkeypatch.setenv("OPS_RESEARCH_SCREEN_TTL_DAYS", "5")
+    cfg = load_config()
+    assert cfg.research_screen_interval_days == 2
+    assert cfg.research_drain_deadline_hour == 7
+    assert cfg.research_screen_ttl_days == 5
+
+
+def test_research_cadence_validation():
+    import pytest
+    from ops.config import OpsConfig
+    with pytest.raises(ValueError):
+        OpsConfig(research_screen_interval_days=0)
+    with pytest.raises(ValueError):
+        OpsConfig(research_screen_ttl_days=0)
+    with pytest.raises(ValueError):
+        OpsConfig(research_drain_deadline_hour=24)
+    with pytest.raises(ValueError):
+        OpsConfig(research_drain_deadline_hour=-1)

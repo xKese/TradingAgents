@@ -582,6 +582,97 @@ def test_daily_cycle_gate_runs_again_on_the_next_trading_day(monkeypatch):
     assert len(cycle_events) == 2
 
 
+# --- Daily cycle retry-on-failure (up to MAX_DAILY_CYCLE_ATTEMPTS/day) ---
+
+def test_daily_cycle_completed_recorded_on_clean_run_and_gates_second_tick(monkeypatch):
+    """A clean cycle records both daily_cycle_run and daily_cycle_completed;
+    a SECOND same-day tick returns early — the pipeline/strategy is not
+    invoked again."""
+    from ops import events
+
+    journal = _make_journal()
+    clock = {"now": _MON}
+    _pin_journal_clock(monkeypatch, clock)
+    universe = _fake_universe([])
+    strategy = _fake_strategy([])
+    orch = _make_orchestrator(
+        universe_builder=universe, strategy=strategy, journal=journal,
+        now_fn=lambda: clock["now"],
+    )
+    orch.tick()
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_DAILY_CYCLE_RUN) == 1
+    assert kinds.count(events.KIND_DAILY_CYCLE_COMPLETED) == 1
+
+    orch.tick()
+    assert universe.call_count == 1
+    assert strategy.propose_orders.call_count == 1
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_DAILY_CYCLE_RUN) == 1
+    assert kinds.count(events.KIND_DAILY_CYCLE_COMPLETED) == 1
+
+
+def test_daily_cycle_retries_next_tick_after_failure(monkeypatch):
+    """A cycle that raises mid-analysis (the ds4-unreachable case) is
+    journaled as orchestrator_tick_error with NO daily_cycle_completed — the
+    next same-day tick must retry the cycle (attempts now 2)."""
+    from ops import events
+
+    journal = _make_journal()
+    clock = {"now": _MON}
+    _pin_journal_clock(monkeypatch, clock)
+    universe = _fake_universe([])
+    strategy = _fake_strategy([])
+    strategy.propose_orders.side_effect = RuntimeError("ds4 unreachable")
+    orch = _make_orchestrator(
+        universe_builder=universe, strategy=strategy, journal=journal,
+        now_fn=lambda: clock["now"],
+    )
+    orch.tick()
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_DAILY_CYCLE_RUN) == 1
+    assert events.KIND_ORCHESTRATOR_TICK_ERROR in kinds
+    assert events.KIND_DAILY_CYCLE_COMPLETED not in kinds
+
+    orch.tick()
+    assert universe.call_count == 2
+    assert strategy.propose_orders.call_count == 2
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_DAILY_CYCLE_RUN) == 2
+    assert events.KIND_DAILY_CYCLE_COMPLETED not in kinds
+
+
+def test_daily_cycle_attempt_cap_stops_retrying_after_max_attempts(monkeypatch):
+    """After MAX_DAILY_CYCLE_ATTEMPTS (3) failed attempts, the 4th same-day
+    tick returns early — no 4th attempt, so a persistently-crashing cycle
+    can't burn the analysis budget all day."""
+    from ops import events
+    from ops.scheduler.orchestrator import MAX_DAILY_CYCLE_ATTEMPTS
+
+    journal = _make_journal()
+    clock = {"now": _MON}
+    _pin_journal_clock(monkeypatch, clock)
+    universe = _fake_universe([])
+    strategy = _fake_strategy([])
+    strategy.propose_orders.side_effect = RuntimeError("boom")
+    orch = _make_orchestrator(
+        universe_builder=universe, strategy=strategy, journal=journal,
+        now_fn=lambda: clock["now"],
+    )
+    for _ in range(MAX_DAILY_CYCLE_ATTEMPTS):
+        orch.tick()
+    assert universe.call_count == MAX_DAILY_CYCLE_ATTEMPTS
+    assert strategy.propose_orders.call_count == MAX_DAILY_CYCLE_ATTEMPTS
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_DAILY_CYCLE_RUN) == MAX_DAILY_CYCLE_ATTEMPTS
+
+    orch.tick()  # 4th tick: cap reached, no new attempt
+    assert universe.call_count == MAX_DAILY_CYCLE_ATTEMPTS
+    assert strategy.propose_orders.call_count == MAX_DAILY_CYCLE_ATTEMPTS
+    kinds = [e["kind"] for e in journal.read_events()]
+    assert kinds.count(events.KIND_DAILY_CYCLE_RUN) == MAX_DAILY_CYCLE_ATTEMPTS
+
+
 # --- Fix 2: unknown-provenance positions are journaled for audit ---
 
 def test_exit_engine_journals_unknown_provenance_for_position_with_no_entry_event():

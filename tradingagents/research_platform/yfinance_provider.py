@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -29,9 +32,10 @@ class YFinanceDataUnavailableError(RuntimeError):
 class YFinanceProvider:
     """Fetch yfinance data directly into normalized platform contracts.
 
-    This provider intentionally bypasses the legacy markdown/CSV formatting path
-    so downstream research, backtesting, and risk code can consume typed records
-    with provenance.
+    This provider bypasses legacy markdown/CSV formatting. When using the real
+    yfinance ticker factory it also points yfinance's SQLite timezone cache at a
+    writable directory, because the library's default cache path can fail in
+    restricted desktop/sandbox environments.
     """
 
     name = "yfinance"
@@ -41,7 +45,10 @@ class YFinanceProvider:
         *,
         ticker_factory: TickerFactory | None = None,
         news_limit: int = 20,
+        cache_dir: str | Path | None = None,
     ):
+        if ticker_factory is None:
+            _configure_yfinance_cache(cache_dir)
         self._ticker_factory = ticker_factory or _default_ticker_factory
         self._news_limit = news_limit
 
@@ -60,7 +67,12 @@ class YFinanceProvider:
         canonical = _canonical_symbol(identity)
         ticker = self._ticker_factory(canonical)
         end_exclusive = (end + timedelta(days=1)).isoformat()
-        frame = ticker.history(start=start.isoformat(), end=end_exclusive)
+        try:
+            frame = ticker.history(start=start.isoformat(), end=end_exclusive)
+        except Exception as exc:
+            raise YFinanceDataUnavailableError(
+                f"yfinance price data unavailable for {identity.symbol}: {exc}"
+            ) from exc
 
         if frame is None or frame.empty:
             raise YFinanceDataUnavailableError(
@@ -103,9 +115,14 @@ class YFinanceProvider:
         availability_date = as_of_date or date.today()
         canonical = _canonical_symbol(identity)
         ticker = self._ticker_factory(canonical)
-        info = getattr(ticker, "info", None)
-        if callable(info):
-            info = info()
+        try:
+            info = getattr(ticker, "info", None)
+            if callable(info):
+                info = info()
+        except Exception as exc:
+            raise YFinanceDataUnavailableError(
+                f"yfinance fundamentals unavailable for {identity.symbol}: {exc}"
+            ) from exc
         if not isinstance(info, Mapping) or not info:
             raise YFinanceDataUnavailableError(f"no yfinance fundamentals for {identity.symbol}")
 
@@ -145,7 +162,12 @@ class YFinanceProvider:
         availability_date = as_of_date or end
         canonical = _canonical_symbol(identity)
         ticker = self._ticker_factory(canonical)
-        raw_news = ticker.get_news(count=self._news_limit)
+        try:
+            raw_news = ticker.get_news(count=self._news_limit)
+        except Exception as exc:
+            raise YFinanceDataUnavailableError(
+                f"yfinance news unavailable for {identity.symbol}: {exc}"
+            ) from exc
         if not raw_news:
             return []
 
@@ -181,9 +203,37 @@ class YFinanceProvider:
 
 
 def _default_ticker_factory(symbol: str) -> Any:
-    import yfinance as yf
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise YFinanceDataUnavailableError(
+            "yfinance is not installed; install it to use the live provider"
+        ) from exc
 
     return yf.Ticker(symbol)
+
+
+def _configure_yfinance_cache(cache_dir: str | Path | None) -> None:
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise YFinanceDataUnavailableError(
+            "yfinance is not installed; install it to use the live provider"
+        ) from exc
+
+    path = Path(
+        cache_dir
+        or os.getenv("TRADINGAGENTS_YFINANCE_CACHE_DIR")
+        or Path(tempfile.gettempdir()) / "tradingagents-yfinance-cache"
+    )
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if hasattr(yf, "set_tz_cache_location"):
+            yf.set_tz_cache_location(str(path))
+    except Exception as exc:
+        raise YFinanceDataUnavailableError(
+            f"could not initialize yfinance cache at {path}: {exc}"
+        ) from exc
 
 
 def _canonical_symbol(identity: InstrumentIdentity) -> str:

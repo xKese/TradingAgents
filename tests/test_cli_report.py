@@ -13,6 +13,7 @@ from tradingagents.research_platform.data_contracts import (
     NewsItem,
     PriceBar,
 )
+from tradingagents.research_platform.yfinance_provider import YFinanceDataUnavailableError
 
 
 class FakeProvider:
@@ -51,6 +52,19 @@ class FakeProvider:
                 source_id="news-1",
             )
         ]
+
+
+class FailingProvider:
+    name = "failing-yfinance"
+
+    def get_price_bars(self, identity, start, end, *, as_of_date=None):
+        raise YFinanceDataUnavailableError("rate limited")
+
+    def get_fundamentals(self, identity, *, as_of_date=None):
+        raise AssertionError("workflow should stop after price failure")
+
+    def get_news(self, identity, start, end, *, as_of_date=None):
+        raise AssertionError("workflow should stop after price failure")
 
 
 def _provenance(symbol: str, day: date) -> DataProvenance:
@@ -108,9 +122,42 @@ def test_manual_signal_parser_accepts_percent_inputs():
     assert signal.confidence == 0.75
 
 
+def test_parser_accepts_yfinance_cache_dir(tmp_path):
+    args = build_parser().parse_args(["NVDA", "--yfinance-cache-dir", str(tmp_path)])
+
+    assert args.yfinance_cache_dir == str(tmp_path)
+
+
 def test_cli_requires_direction_for_signal_fields():
     with pytest.raises(SystemExit):
         main(["NVDA", "--position-pct", "5"], provider_factory=lambda _args: FakeProvider())
+
+
+def test_cli_returns_data_provider_error_without_traceback(capsys):
+    code = main(
+        ["NVDA", "--as-of", "2026-01-05"],
+        provider_factory=lambda _args: FailingProvider(),
+    )
+
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Data provider error: rate limited" in captured.err
+
+
+
+def test_cli_returns_data_provider_error_when_provider_creation_fails(capsys):
+    def failing_factory(_args):
+        raise YFinanceDataUnavailableError("cache unavailable")
+
+    code = main(["NVDA", "--as-of", "2026-01-05"], provider_factory=failing_factory)
+
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.out == ""
+    assert "Data provider error: cache unavailable" in captured.err
 
 
 def test_cli_runs_workflow_with_fake_provider_and_writes_report(tmp_path, capsys):

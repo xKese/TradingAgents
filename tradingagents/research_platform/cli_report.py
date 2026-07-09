@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
@@ -12,7 +13,7 @@ from .artifact_store import JsonArtifactStore
 from .data_contracts import DataProvider
 from .research_workflow import ResearchWorkflowConfig, run_ticker_research
 from .risk_contracts import RiskPolicy
-from .yfinance_provider import YFinanceProvider
+from .yfinance_provider import YFinanceDataUnavailableError, YFinanceProvider
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--currency", default=None, help="Optional quote currency label.")
     parser.add_argument("--output-dir", default="research_reports", help="Directory for Markdown reports.")
     parser.add_argument("--cache-dir", default=None, help="Optional JSONL artifact cache directory.")
+    parser.add_argument(
+        "--yfinance-cache-dir",
+        default=None,
+        help="Optional writable directory for yfinance's local cache.",
+    )
     parser.add_argument("--news-limit", type=int, default=20, help="Max yfinance news items to request.")
     parser.add_argument("--initial-cash", type=float, default=100_000.0, help="Backtest initial cash.")
 
@@ -64,11 +70,15 @@ def main(
     args = parser.parse_args(argv)
     _validate_signal_args(parser, args)
 
-    provider = (
-        provider_factory(args)
-        if provider_factory is not None
-        else YFinanceProvider(news_limit=args.news_limit)
-    )
+    try:
+        provider = (
+            provider_factory(args)
+            if provider_factory is not None
+            else YFinanceProvider(news_limit=args.news_limit, cache_dir=args.yfinance_cache_dir)
+        )
+    except YFinanceDataUnavailableError as exc:
+        print(f"Data provider error: {exc}", file=sys.stderr)
+        return 2
     store = JsonArtifactStore(args.cache_dir) if args.cache_dir else None
     signal = _build_manual_signal(args)
     policy = RiskPolicy(
@@ -100,14 +110,18 @@ def main(
         }
     )
 
-    result = run_ticker_research(
-        config=config,
-        provider=provider,
-        store=store,
-        signal=signal,
-        risk_policy=policy,
-        output_dir=Path(args.output_dir),
-    )
+    try:
+        result = run_ticker_research(
+            config=config,
+            provider=provider,
+            store=store,
+            signal=signal,
+            risk_policy=policy,
+            output_dir=Path(args.output_dir),
+        )
+    except YFinanceDataUnavailableError as exc:
+        print(f"Data provider error: {exc}", file=sys.stderr)
+        return 2
     if result.report_path is None:
         print("Report rendered but no output path was requested.")
     else:

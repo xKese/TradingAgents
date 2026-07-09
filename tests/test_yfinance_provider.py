@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import pytest
 
+from tradingagents.research_platform import yfinance_provider as yp
 from tradingagents.research_platform.data_contracts import InstrumentIdentity
 from tradingagents.research_platform.yfinance_provider import (
     YFinanceDataUnavailableError,
@@ -11,19 +12,41 @@ from tradingagents.research_platform.yfinance_provider import (
 
 
 class FakeTicker:
-    def __init__(self, *, history=None, info=None, news=None):
+    def __init__(
+        self,
+        *,
+        history=None,
+        info=None,
+        news=None,
+        history_error=None,
+        info_error=None,
+        news_error=None,
+    ):
         self._history = history if history is not None else pd.DataFrame()
-        self.info = info if info is not None else {}
+        self._info = info if info is not None else {}
         self._news = news if news is not None else []
+        self._history_error = history_error
+        self._info_error = info_error
+        self._news_error = news_error
         self.history_calls = []
         self.news_calls = []
 
+    @property
+    def info(self):
+        if self._info_error is not None:
+            raise self._info_error
+        return self._info
+
     def history(self, **kwargs):
         self.history_calls.append(kwargs)
+        if self._history_error is not None:
+            raise self._history_error
         return self._history
 
     def get_news(self, **kwargs):
         self.news_calls.append(kwargs)
+        if self._news_error is not None:
+            raise self._news_error
         return self._news
 
 
@@ -86,6 +109,16 @@ def test_yfinance_provider_raises_when_price_data_is_empty():
         provider.get_price_bars(identity, date(2026, 1, 1), date(2026, 1, 5))
 
 
+def test_yfinance_provider_wraps_history_errors():
+    provider = YFinanceProvider(
+        ticker_factory=lambda symbol: FakeTicker(history_error=RuntimeError("rate limited"))
+    )
+    identity = InstrumentIdentity(symbol="NVDA")
+
+    with pytest.raises(YFinanceDataUnavailableError, match="price data unavailable"):
+        provider.get_price_bars(identity, date(2026, 1, 1), date(2026, 1, 5))
+
+
 def test_yfinance_provider_normalizes_fundamentals_snapshot():
     fake = FakeTicker(
         info={
@@ -108,6 +141,16 @@ def test_yfinance_provider_normalizes_fundamentals_snapshot():
     assert snapshots[0].metrics["pe_ratio_ttm"] == 42.5
     assert "irrelevantNested" not in snapshots[0].metrics
     assert snapshots[0].currency == "USD"
+
+
+def test_yfinance_provider_wraps_fundamental_errors():
+    provider = YFinanceProvider(
+        ticker_factory=lambda symbol: FakeTicker(info_error=RuntimeError("temporarily blocked"))
+    )
+    identity = InstrumentIdentity(symbol="NVDA")
+
+    with pytest.raises(YFinanceDataUnavailableError, match="fundamentals unavailable"):
+        provider.get_fundamentals(identity, as_of_date=date(2026, 1, 5))
 
 
 def test_yfinance_provider_normalizes_nested_and_flat_news():
@@ -149,6 +192,16 @@ def test_yfinance_provider_normalizes_nested_and_flat_news():
     assert items[1].source_id.startswith("yfinance-news:")
 
 
+def test_yfinance_provider_wraps_news_errors():
+    provider = YFinanceProvider(
+        ticker_factory=lambda symbol: FakeTicker(news_error=RuntimeError("rate limited"))
+    )
+    identity = InstrumentIdentity(symbol="NVDA")
+
+    with pytest.raises(YFinanceDataUnavailableError, match="news unavailable"):
+        provider.get_news(identity, date(2026, 1, 1), date(2026, 1, 5))
+
+
 def test_yfinance_provider_filters_future_news():
     future = {
         "content": {
@@ -170,3 +223,13 @@ def test_yfinance_provider_filters_future_news():
     )
 
     assert items == []
+
+
+def test_yfinance_provider_configures_cache_for_real_factory(monkeypatch, tmp_path):
+    called = {}
+    monkeypatch.setattr(yp, "_configure_yfinance_cache", lambda cache_dir: called.setdefault("cache_dir", cache_dir))
+
+    provider = yp.YFinanceProvider(cache_dir=tmp_path)
+
+    assert provider.name == "yfinance"
+    assert called["cache_dir"] == tmp_path

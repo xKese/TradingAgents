@@ -23,6 +23,11 @@ from ops.universe.momentum import (
 from ops.universe.sp500 import load_sp500_members
 from ops.universe import yf_pacing
 
+# The leaderboard/exits/entries cycle may retry a FAILED run on later ticks
+# (see the gate in _tick_impl), but only up to this many attempts/day — a
+# persistently-crashing cycle must not burn the analysis budget all day.
+MAX_DAILY_CYCLE_ATTEMPTS = 3
+
 
 class Orchestrator:
     def __init__(
@@ -66,14 +71,25 @@ class Orchestrator:
         asof_date = now.date()
 
         # The leaderboard/exits/entries cycle costs ~500 yfinance calls plus
-        # up to daily_analysis_budget LLM runs, so it may run only once per
-        # trading day — the FIRST open, un-halted tick. Record the event
-        # BEFORE running the cycle (not after): a mid-cycle crash must not
-        # re-spend the budget on the next tick. Exits crashing mid-cycle is
-        # already journaled separately, and the guardian still enforces
-        # stops regardless of whether this cycle ran.
-        if self._journal.has_event_today(events.KIND_DAILY_CYCLE_RUN, now=now):
+        # up to daily_analysis_budget LLM runs, so "attempted" is tracked
+        # separately from "succeeded": a cycle that fails (e.g. the LLM
+        # backend is unreachable) retries on a later tick, up to
+        # MAX_DAILY_CYCLE_ATTEMPTS/day, but a cycle that COMPLETES cleanly
+        # never re-runs that day (never re-spend the budget on a good day).
+        # Exits crashing mid-cycle is already journaled separately, and the
+        # guardian still enforces stops regardless of whether this cycle ran.
+
+        # Already completed cleanly today -> never re-run.
+        if self._journal.has_event_today(events.KIND_DAILY_CYCLE_COMPLETED, now=now):
             return
+        # Retry a FAILED cycle on later ticks, but cap the daily attempts so
+        # a persistently-crashing cycle can't burn the budget all day.
+        attempts = self._journal.count_events(
+            events.KIND_DAILY_CYCLE_RUN, since=trading_day_start(now),
+        )
+        if attempts >= MAX_DAILY_CYCLE_ATTEMPTS:
+            return
+        # Attempt marker (recorded BEFORE the run, as before).
         self._journal.record_event(
             events.KIND_DAILY_CYCLE_RUN,
             events.daily_cycle_run_payload(asof_date=asof_date),
@@ -156,6 +172,15 @@ class Orchestrator:
                         rank=cand.momentum.rank if cand.momentum else None,
                     ),
                 )
+
+        # Reached only on a clean full run (an uncaught exception anywhere
+        # above propagates to tick()'s handler instead) — this is what the
+        # gate above checks to stop same-day retries.
+        self._journal.record_event(
+            events.KIND_DAILY_CYCLE_COMPLETED,
+            events.daily_cycle_completed_payload(asof_date=asof_date.isoformat()),
+            at=now,
+        )
 
     def _run_exits(self, leaderboard, asof_date) -> None:
         report = evaluate_exits(

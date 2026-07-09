@@ -10,6 +10,7 @@ from tradingagents.research_platform import (
     PriceBar,
     RiskDecision,
     RiskPolicy,
+    RiskSeverity,
     TradeDirection,
     TradeHorizon,
     TradeSignal,
@@ -137,3 +138,40 @@ def test_hold_signal_is_watch_only():
 
     assert review.decision == RiskDecision.WATCH
     assert review.approved_position_pct == 0.04
+
+def test_basic_risk_returns_structured_rule_results():
+    review = evaluate_basic_risk(
+        _signal(),
+        RiskPolicy(max_single_position_pct=0.10),
+    )
+
+    assert review.decision == RiskDecision.APPROVE
+    assert review.rule_results
+    assert all(result.passed for result in review.rule_results)
+    assert review.rule_results[0].severity == RiskSeverity.INFO
+
+
+def test_basic_risk_reduces_for_gross_exposure_budget():
+    review = evaluate_basic_risk(
+        _signal(proposed_position_pct=0.10),
+        RiskPolicy(max_single_position_pct=0.20, max_gross_exposure_pct=0.80),
+        portfolio_gross_exposure_pct=0.75,
+    )
+
+    assert review.decision == RiskDecision.REDUCE
+    assert review.approved_position_pct == pytest.approx(0.05)
+    assert review.breaches[-1].rule == "max_gross_exposure_pct"
+    assert review.breaches[-1].recommended_action == "reduce_to_available_exposure"
+
+
+def test_basic_risk_reduces_to_preserve_cash_floor():
+    review = evaluate_basic_risk(
+        _signal(proposed_position_pct=0.10),
+        RiskPolicy(max_single_position_pct=0.20, min_cash_pct=0.95),
+        cash_pct=1.0,
+    )
+
+    assert review.decision == RiskDecision.REDUCE
+    assert review.approved_position_pct == pytest.approx(0.05)
+    assert review.breaches[-1].rule == "min_cash_pct"
+    assert review.breaches[-1].severity == RiskSeverity.WARNING

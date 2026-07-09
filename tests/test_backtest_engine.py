@@ -69,7 +69,30 @@ def test_backtest_executes_signal_on_next_available_bar():
     assert len(result.trades) == 1
     assert result.trades[0].date == date(2026, 1, 2)
     assert result.trades[0].source_signal_date == date(2026, 1, 1)
+    assert result.trades[0].cash_after is not None
+    assert result.trades[0].position_after is not None
     assert result.equity_curve[-1].equity > 1000
+
+
+def test_backtest_allows_same_day_execution_when_configured():
+    result = run_daily_signal_backtest(
+        config=BacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 2),
+            initial_cash=1000,
+            symbols=["NVDA"],
+            execution=ExecutionConfig(allow_same_day_signal=True),
+        ),
+        price_bars=[
+            _bar("NVDA", date(2026, 1, 1), 100),
+            _bar("NVDA", date(2026, 1, 2), 105),
+        ],
+        signals=[_signal(as_of_date=date(2026, 1, 1), position_pct=0.5)],
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].date == date(2026, 1, 1)
+    assert result.assumptions["signal_execution"].startswith("first eligible bar")
 
 
 def test_backtest_closes_long_on_sell_when_shorts_disabled():
@@ -101,6 +124,8 @@ def test_backtest_closes_long_on_sell_when_shorts_disabled():
         TradeDirection.SELL,
     ]
     assert result.equity_curve[-1].gross_exposure_pct == 0.0
+    assert len(result.round_trips) == 1
+    assert result.round_trips[0].holding_days == 1
 
 
 def test_backtest_applies_commission_and_slippage():
@@ -145,3 +170,52 @@ def test_backtest_metrics_include_turnover_and_drawdown():
     assert result.metrics.turnover_pct == 1.0
     assert result.metrics.max_drawdown_pct > 0
     assert result.metrics.average_exposure_pct > 0
+    assert result.metrics.win_rate_pct is None
+
+
+def test_backtest_trade_quality_metrics_use_closed_round_trips():
+    result = run_daily_signal_backtest(
+        config=BacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 6),
+            initial_cash=1000,
+            symbols=["NVDA"],
+        ),
+        price_bars=[
+            _bar("NVDA", date(2026, 1, 1), 100),
+            _bar("NVDA", date(2026, 1, 2), 100),
+            _bar("NVDA", date(2026, 1, 3), 110),
+            _bar("NVDA", date(2026, 1, 4), 110),
+            _bar("NVDA", date(2026, 1, 5), 100),
+            _bar("NVDA", date(2026, 1, 6), 100),
+        ],
+        signals=[
+            _signal(as_of_date=date(2026, 1, 1), position_pct=0.5),
+            _signal(as_of_date=date(2026, 1, 2), direction=TradeDirection.SELL, position_pct=0.5),
+            _signal(as_of_date=date(2026, 1, 3), position_pct=0.5),
+            _signal(as_of_date=date(2026, 1, 4), direction=TradeDirection.SELL, position_pct=0.5),
+        ],
+    )
+
+    assert len(result.round_trips) == 2
+    assert result.metrics.win_rate_pct == 0.5
+    assert result.metrics.profit_factor is not None
+    assert result.metrics.average_holding_days == 1.0
+    assert result.metrics.max_consecutive_losses == 1
+
+
+def test_backtest_emits_structured_warning_for_unexecuted_signal():
+    result = run_daily_signal_backtest(
+        config=BacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 1),
+            initial_cash=1000,
+            symbols=["NVDA"],
+        ),
+        price_bars=[_bar("NVDA", date(2026, 1, 1), 100)],
+        signals=[_signal(as_of_date=date(2026, 1, 1), position_pct=0.5)],
+    )
+
+    assert result.warning_events[0].code == "signal_not_executed"
+    assert result.warning_events[0].symbol == "NVDA"
+    assert result.warnings == [result.warning_events[0].message]

@@ -198,24 +198,33 @@ def _render_risk_review(review: RiskReview | None) -> str:
         f"**Approved Position:** {_pct(review.approved_position_pct)}",
     ]
     if review.breaches:
-        parts.extend(["", "| Rule | Observed | Limit | Message |", "| --- | ---: | ---: | --- |"])
+        parts.extend(
+            [
+                "",
+                "| Rule | Severity | Observed | Limit | Action | Message |",
+                "| --- | --- | ---: | ---: | --- | --- |",
+            ]
+        )
         for breach in review.breaches:
             parts.append(
                 "| "
                 + " | ".join(
                     [
                         breach.rule,
+                        breach.severity.value,
                         _format_value(breach.observed),
                         _format_value(breach.limit),
+                        breach.recommended_action or "N/A",
                         breach.message,
                     ]
                 )
                 + " |"
             )
+    if review.rule_results:
+        parts.extend(["", f"**Rules Evaluated:** {len(review.rule_results)}"])
     if review.notes:
         parts.extend(["", "### Notes", *[f"- {note}" for note in review.notes]])
     return "\n".join(parts)
-
 
 def _render_backtest(result: BacktestResult | None) -> str:
     if result is None:
@@ -233,15 +242,24 @@ def _render_backtest(result: BacktestResult | None) -> str:
         f"| Sharpe | {_optional_number(metrics.sharpe)} |",
         f"| Sortino | {_optional_number(metrics.sortino)} |",
         f"| Max Drawdown | {_pct(metrics.max_drawdown_pct)} |",
+        f"| Win Rate | {_optional_pct(metrics.win_rate_pct)} |",
+        f"| Profit Factor | {_optional_number(metrics.profit_factor)} |",
+        f"| Avg Trade Return | {_optional_pct(metrics.average_trade_return_pct)} |",
+        f"| Avg Holding Days | {_optional_number(metrics.average_holding_days)} |",
+        f"| Max Consecutive Losses | {_optional_int(metrics.max_consecutive_losses)} |",
         f"| Turnover | {_optional_pct(metrics.turnover_pct)} |",
         f"| Average Exposure | {_optional_pct(metrics.average_exposure_pct)} |",
         "",
         f"**Trades:** {len(result.trades)}",
+        f"**Closed Round Trips:** {len(result.round_trips)}",
     ]
-    if result.warnings:
+    if result.warning_events:
+        parts.extend(["", "### Warnings", "| Severity | Code | Message |", "| --- | --- | --- |"])
+        for warning in result.warning_events:
+            parts.append(f"| {warning.severity.value} | {warning.code} | {warning.message} |")
+    elif result.warnings:
         parts.extend(["", "### Warnings", *[f"- {warning}" for warning in result.warnings]])
     return "\n".join(parts)
-
 
 def _render_provenance(bundle: ResearchReportBundle) -> str:
     rows = []
@@ -293,6 +311,9 @@ def _optional_pct(value: float | None) -> str:
 
 def _optional_number(value: float | None) -> str:
     return "N/A" if value is None else f"{value:.2f}"
+
+def _optional_int(value: int | None) -> str:
+    return "N/A" if value is None else str(value)
 
 
 def _format_value(value: Any) -> str:

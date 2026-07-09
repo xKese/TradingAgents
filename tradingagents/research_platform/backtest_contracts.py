@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date as Date
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .agent_contracts import TradeDirection, TradeSignal
+
+
+class BacktestWarningSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
 
 
 class ExecutionConfig(BaseModel):
@@ -17,6 +24,7 @@ class ExecutionConfig(BaseModel):
     commission_bps: float = Field(default=0.0, ge=0.0)
     slippage_bps: float = Field(default=0.0, ge=0.0)
     allow_short: bool = False
+    allow_same_day_signal: bool = False
     rebalance_frequency: str = "daily"
 
 
@@ -25,8 +33,8 @@ class BacktestConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    start_date: date
-    end_date: date
+    start_date: Date
+    end_date: Date
     initial_cash: float = Field(default=100_000.0, gt=0.0)
     symbols: list[str] = Field(min_length=1)
     benchmark_symbol: str | None = None
@@ -39,19 +47,54 @@ class BacktestConfig(BaseModel):
         return self
 
 
+class BacktestWarning(BaseModel):
+    """Structured simulation warning for report and cockpit surfaces."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    severity: BacktestWarningSeverity = BacktestWarningSeverity.WARNING
+    symbol: str | None = None
+    date: Date | None = None
+    signal_date: Date | None = None
+
+
 class BacktestTrade(BaseModel):
     """Executed trade in the simulation ledger."""
 
     model_config = ConfigDict(frozen=True)
 
     symbol: str = Field(min_length=1)
-    date: date
+    date: Date
     direction: TradeDirection
     quantity: float
     price: float = Field(gt=0.0)
     notional: float
     commission: float = Field(default=0.0, ge=0.0)
-    source_signal_date: date
+    source_signal_date: Date
+    cash_after: float | None = None
+    position_after: float | None = None
+
+
+class BacktestRoundTrip(BaseModel):
+    """Closed position segment used for trade-quality metrics."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str = Field(min_length=1)
+    entry_date: Date
+    exit_date: Date
+    entry_direction: TradeDirection
+    quantity: float = Field(gt=0.0)
+    entry_price: float = Field(gt=0.0)
+    exit_price: float = Field(gt=0.0)
+    gross_pnl: float
+    net_pnl: float
+    return_pct: float
+    holding_days: int = Field(ge=0)
+    source_entry_signal_date: Date
+    source_exit_signal_date: Date | None = None
 
 
 class EquityPoint(BaseModel):
@@ -59,7 +102,7 @@ class EquityPoint(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    date: date
+    date: Date
     equity: float = Field(ge=0.0)
     cash: float
     gross_exposure_pct: float = Field(ge=0.0)
@@ -78,6 +121,10 @@ class BacktestMetrics(BaseModel):
     sortino: float | None = None
     max_drawdown_pct: float
     win_rate_pct: float | None = None
+    profit_factor: float | None = None
+    average_trade_return_pct: float | None = None
+    average_holding_days: float | None = None
+    max_consecutive_losses: int | None = None
     turnover_pct: float | None = None
     average_exposure_pct: float | None = None
 
@@ -90,14 +137,16 @@ class BacktestResult(BaseModel):
     config: BacktestConfig
     metrics: BacktestMetrics
     trades: list[BacktestTrade] = Field(default_factory=list)
+    round_trips: list[BacktestRoundTrip] = Field(default_factory=list)
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     assumptions: dict[str, str | float | int | bool | None] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    warning_events: list[BacktestWarning] = Field(default_factory=list)
 
 
 def validate_signal_timing(
     signal: TradeSignal,
-    execution_date: date,
+    execution_date: Date,
     *,
     allow_same_day: bool = False,
 ) -> None:

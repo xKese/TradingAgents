@@ -164,7 +164,7 @@ def run_screen(
         store = ScreenStore(config.screen_store_path)
         run_id = store.record_run(
             asof=asof, universe_size=len(universe), results=results,
-            coverage=coverage,
+            coverage=coverage, ttl_days=config.research_screen_ttl_days,
         )
         try:
             with Journal(config.baseline_journal_path) as baseline_journal:

@@ -8,6 +8,7 @@ transport error must degrade to a placeholder rather than raise.
 from __future__ import annotations
 
 import http.client
+import json
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -38,12 +39,32 @@ class TestStockTwitsResilience:
             HTTPError("url", 503, "down", {}, None),
             TimeoutError("slow"),
         ],
+        ids=["incomplete-read", "http-error", "timeout"],
     )
     def test_transport_errors_return_placeholder(self, exc):
         with patch.object(stocktwits, "urlopen", return_value=_raise(exc)):
             out = stocktwits.fetch_stocktwits_messages("NVDA")
         assert "unavailable" in out.lower()
         assert out.startswith("<stocktwits unavailable")
+
+    def test_unexpected_message_shape_returns_placeholder(self):
+        class _Resp:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+            def read(self_inner):
+                return json.dumps(self_inner.payload).encode("utf-8")
+
+        for payload in ({"messages": {"body": "not-a-list"}}, {"messages": ["bad"]}):
+            with patch.object(stocktwits, "urlopen", return_value=_Resp(payload)):
+                out = stocktwits.fetch_stocktwits_messages("NVDA")
+            assert out == "<no StockTwits messages found for $NVDA>"
 
 
 @pytest.mark.unit

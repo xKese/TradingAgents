@@ -58,6 +58,11 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
         return f"<stocktwits unavailable: {type(exc).__name__}>"
 
     messages = data.get("messages", []) if isinstance(data, dict) else []
+    messages = (
+        [m for m in messages if isinstance(m, dict)]
+        if isinstance(messages, list)
+        else []
+    )
     if not messages:
         return f"<no StockTwits messages found for ${ticker.upper()}>"
 

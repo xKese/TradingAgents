@@ -8,7 +8,9 @@ Hit lifecycle: ``pending`` (awaiting deep research — build-order step 5
 consumes these) -> ``researched`` (a memo exists) | ``failed`` (research
 rejected) | ``expired`` (went stale). A pending symbol is never duplicated by
 later runs; once researched/failed/expired it may be queued again by a fresh
-screen pass.
+screen pass — unless a positive ``ttl_days`` is supplied (as ``run_screen``
+does via ``research_screen_ttl_days``, default 7), in which case a symbol
+screened within that window is not re-queued regardless of status.
 """
 
 from __future__ import annotations
@@ -117,8 +119,11 @@ class ScreenStore:
         """Queue one ad-hoc research hit (monitoring escalation path).
 
         Same dedupe rule as record_run: a symbol already pending is not
-        re-queued. The payload must be _screen_summary-compatible — the
-        caller (ops/research/monitor.py) owns that contract.
+        re-queued. When a positive ``ttl_days`` is supplied, a symbol
+        screened within that window is also skipped regardless of status
+        (same TTL semantics as record_run). The payload must be
+        _screen_summary-compatible — the caller (ops/research/monitor.py)
+        owns that contract.
         """
         symbol = symbol.upper()
         with self._lock, self._connect() as conn:

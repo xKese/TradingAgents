@@ -85,20 +85,33 @@ always re-queued for re-research even if it was screened yesterday.
 | Var | Config field | Default | Meaning |
 |---|---|---|---|
 | `OPS_RESEARCH_SCREEN_INTERVAL_DAYS` | `research_screen_interval_days` | `3` | minimum age (days) of the last screen run before the nightly tick re-screens |
-| `OPS_RESEARCH_DRAIN_DEADLINE_HOUR` | `research_drain_deadline_hour` | `8` | local (America/New_York) hour-of-day the overnight drain must stop by; validated to `0..23` |
+| `OPS_RESEARCH_DRAIN_DEADLINE_HOUR` | `research_drain_deadline_hour` | `8` | local (America/New_York) hour-of-day the overnight drain must stop by; validated to `0..8` (must precede the 09:00 momentum tick) |
 | `OPS_RESEARCH_SCREEN_TTL_DAYS` | `research_screen_ttl_days` | `7` | a symbol screened within this many days is not re-queued by a later screen pass (any status) |
 
 ## ds4 non-overlap invariant
 
 The overnight drain (00:00-08:00 America/New_York, market closed) and the
-momentum multi-agent graph's ticks (`orchestrator_tick`, 09:30-16:00
-America/New_York, `mon-fri`) must never run ds4 at the same time — that's
-why the drain deadline defaults to 08:00, well ahead of the 09:30 first
-momentum tick. The overnight tick owns the managed ds4 backend for its own
-duration only (`ensure_up`/`shutdown` in a `finally`) and both jobs run on
-the same single-process `BackgroundScheduler`, which serializes job
-execution. Do not lower `research_drain_deadline_hour` below the point where
-this margin holds, and do not move the momentum tick earlier without
+momentum multi-agent graph's ticks (`orchestrator_tick`, 09:00-15:30
+America/New_York, `mon-fri`) must never run ds4 at the same time. The
+overnight tick owns the managed ds4 backend for its own duration only
+(`ensure_up`/`shutdown` in a `finally`).
+
+Both jobs run on the same `BackgroundScheduler`, but that does **not**
+serialize them: APScheduler's `BackgroundScheduler` dispatches jobs onto a
+thread pool (default 10 workers) and does not serialize distinct job ids —
+`max_instances=1` only prevents a job from overlapping *itself*, not from
+overlapping a different job. The actual guard against two LLM jobs holding
+ds4 at once is the **time margin**: the drain's 08:00 deadline sits a full
+hour before the momentum graph's first tick at 09:00. `research_drain_deadline_hour`
+is validated to be `< 9` for exactly this reason (see `OpsConfig.__post_init__`).
+
+That margin assumes no single research name runs long enough to bleed past
+09:00. The deadline is checked *between* names, not within one, so a name
+that starts before 08:00 still runs to completion — typically 19-30 minutes,
+comfortably inside the hour of slack. A hypothetical hung/runaway name is
+therefore the one residual overlap risk this design does not fully close.
+Do not lower `research_drain_deadline_hour` below the point where this
+margin holds, and do not move the momentum tick earlier without
 re-checking this margin.
 
 ## Manual end-to-end run: `ops research kick`

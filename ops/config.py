@@ -166,10 +166,11 @@ class OpsConfig:
             val = getattr(self, fname)
             if val <= 0:
                 raise ValueError(f"{fname} must be > 0, got {val}")
-        if not (0 <= self.research_drain_deadline_hour <= 23):
+        if not (0 <= self.research_drain_deadline_hour < 9):
             raise ValueError(
-                "research_drain_deadline_hour must be in 0..23, got "
-                f"{self.research_drain_deadline_hour}"
+                "research_drain_deadline_hour must be in 0..8 — the overnight "
+                "drain must free ds4 before the momentum orchestrator's first "
+                f"tick at 09:00 America/New_York, got {self.research_drain_deadline_hour}"
             )
         from ops.research.models import parse_model_spec
 

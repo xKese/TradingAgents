@@ -502,7 +502,13 @@ def _research_overnight_tick(journal: Journal, config, *, now=None, should_stop=
     """Nightly 00:00 job: screen if it's been >= research_screen_interval_days,
     then drain the whole pending queue on ds4 until the queue empties, the
     local deadline hour is reached, or shutdown is requested. Scheduler-safe:
-    any failure records research_drain_error rather than raising."""
+    any failure records research_drain_error rather than raising.
+
+    No has_event_today gate here (unlike the sibling research ticks): the
+    3-day screen-due check plus the pending-queue state already make re-firing
+    idempotent/safe — a second run same night either finds nothing due and an
+    empty queue (no-op, see the empty-queue guard below) or correctly resumes
+    draining whatever is still pending."""
     screened_this_run = False
     try:
         from ops.research.store import ScreenStore
@@ -515,6 +521,19 @@ def _research_overnight_tick(journal: Journal, config, *, now=None, should_stop=
 
             run_screen(config=config, asof=date.today())
             screened_this_run = True
+
+        if not store.pending_hits():
+            # Nothing to drain — skip waking the 86 GB ds4 model entirely.
+            # This is the common case (~2 of 3 nights): no screen due and the
+            # queue already empty.
+            journal.record_event(
+                events.KIND_RESEARCH_DRAIN_RUN,
+                events.research_drain_run_payload(
+                    asof=date.today().isoformat(), screened_this_run=screened_this_run,
+                    researched=0, failed=0, still_pending=0, hit_deadline=False,
+                ),
+            )
+            return
 
         from tradingagents.dataflows import edgar
         edgar.get_user_agent()  # fail fast before spinning ds4

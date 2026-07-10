@@ -253,3 +253,9 @@ def test_research_cadence_validation():
         OpsConfig(research_drain_deadline_hour=24)
     with pytest.raises(ValueError):
         OpsConfig(research_drain_deadline_hour=-1)
+    # The deadline must land strictly before the 09:00 first momentum tick —
+    # 9 (and later) would let the drain bleed into market-open ds4 usage.
+    with pytest.raises(ValueError):
+        OpsConfig(research_drain_deadline_hour=9)
+    OpsConfig(research_drain_deadline_hour=8)  # boundary: still valid
+    OpsConfig(research_drain_deadline_hour=0)  # boundary: still valid

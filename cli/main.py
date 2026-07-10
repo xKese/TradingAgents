@@ -1,5 +1,6 @@
 import csv
 import datetime
+import json
 import os
 import time
 from collections import deque
@@ -42,8 +43,8 @@ from cli.utils import (
     select_research_depth,
     select_shallow_thinking_agent,
 )
-from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.dataflows.utils import safe_ticker_component
+from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
     build_analyst_execution_plan,
@@ -51,6 +52,11 @@ from tradingagents.graph.analyst_execution import (
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.ibkr import load_portfolio_snapshot
+from tradingagents.portfolio_review import (
+    build_portfolio_review,
+    write_portfolio_review,
+)
 from tradingagents.reporting import write_report_tree
 
 console = Console()
@@ -1141,6 +1147,25 @@ def _write_batch_summary(rows: list[dict], batch_dir: Path) -> tuple[Path, Path]
     return csv_path, md_path
 
 
+def _prepare_ibkr_context(
+    enabled: bool,
+    host: str,
+    port: int,
+    client_id: int,
+    batch_dir: Path,
+) -> dict | None:
+    """Fail-fast TWS preflight and persist the sanitized snapshot."""
+    if not enabled:
+        return None
+    snapshot = load_portfolio_snapshot(host, port, client_id)
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "portfolio_snapshot.json").write_text(
+        json.dumps(snapshot, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return snapshot
+
+
 def _run_batch_analysis(
     *,
     tickers: list[str],
@@ -1148,10 +1173,13 @@ def _run_batch_analysis(
     analyst_keys: list[str],
     config: dict,
     batch_dir: Path,
+    portfolio_context: dict | None = None,
 ) -> list[dict]:
     """Run a headless sequential batch and return summary rows."""
     batch_dir.mkdir(parents=True, exist_ok=True)
     rows = []
+    decisions: dict[str, str] = {}
+    review_llm = None
 
     for index, ticker in enumerate(tickers, start=1):
         console.print(f"[cyan]({index}/{len(tickers)}) Analyzing {ticker}...[/cyan]")
@@ -1170,11 +1198,21 @@ def _run_batch_analysis(
                 debug=False,
             )
             asset_type = detect_asset_type(ticker).value
-            final_state, signal = graph.propagate(
-                ticker,
-                analysis_date,
-                asset_type=asset_type,
-            )
+            if portfolio_context is None:
+                final_state, signal = graph.propagate(
+                    ticker,
+                    analysis_date,
+                    asset_type=asset_type,
+                )
+            else:
+                final_state, signal = graph.propagate(
+                    ticker,
+                    analysis_date,
+                    asset_type=asset_type,
+                    portfolio_context=portfolio_context,
+                )
+                decisions[ticker] = final_state.get("final_trade_decision", "")
+                review_llm = graph.deep_thinking_llm
             report_dir = batch_dir / safe_ticker_component(ticker)
             report_file = graph.save_reports(final_state, ticker, save_path=report_dir)
             row.update(
@@ -1191,6 +1229,14 @@ def _run_batch_analysis(
         rows.append(row)
 
     _write_batch_summary(rows, batch_dir)
+    if portfolio_context is not None and review_llm is not None:
+        review = build_portfolio_review(
+            portfolio_context,
+            rows,
+            decisions,
+            review_llm,
+        )
+        write_portfolio_review(review, batch_dir)
     return rows
 
 
@@ -1541,6 +1587,26 @@ def batch_analyze(
         "--deep-model",
         help="Model ID for deep-thinking agents. Overrides --model for deep thinking.",
     ),
+    ibkr_context: bool = typer.Option(
+        False,
+        "--ibkr-context",
+        help="Load a live read-only portfolio snapshot from Trader Workstation.",
+    ),
+    ibkr_host: str = typer.Option(
+        os.getenv("TRADINGAGENTS_IBKR_HOST", "127.0.0.1"),
+        "--ibkr-host",
+        help="Trader Workstation API host.",
+    ),
+    ibkr_port: int = typer.Option(
+        int(os.getenv("TRADINGAGENTS_IBKR_PORT", "7496")),
+        "--ibkr-port",
+        help="Trader Workstation API port (7496 is the live default).",
+    ),
+    ibkr_client_id: int = typer.Option(
+        int(os.getenv("TRADINGAGENTS_IBKR_CLIENT_ID", "71")),
+        "--ibkr-client-id",
+        help="Dedicated read-only TWS API client ID.",
+    ),
     checkpoint: bool | None = typer.Option(
         None,
         "--checkpoint/--no-checkpoint",
@@ -1565,6 +1631,13 @@ def batch_analyze(
     config = _build_run_config(selections, checkpoint)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     batch_dir = Path(config["results_dir"]) / "batch" / stamp
+    portfolio_context = _prepare_ibkr_context(
+        ibkr_context,
+        ibkr_host,
+        ibkr_port,
+        ibkr_client_id,
+        batch_dir,
+    )
 
     console.print(
         f"[bold cyan]Batch analysis[/bold cyan]: {len(parsed_tickers)} ticker(s), "
@@ -1577,6 +1650,7 @@ def batch_analyze(
         analyst_keys=analyst_keys,
         config=config,
         batch_dir=batch_dir,
+        portfolio_context=portfolio_context,
     )
 
     failures = sum(1 for row in rows if row["status"] != "success")

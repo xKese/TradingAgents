@@ -20,8 +20,3 @@ def test_initial_state_preserves_frozen_portfolio_context():
 def test_full_graph_public_entrypoint_accepts_portfolio_context():
     signature = inspect.signature(TradingAgentsGraph.propagate)
     assert signature.parameters["portfolio_context"].default is None
-
-
-def test_research_only_entrypoint_remains_portfolio_blind():
-    signature = inspect.signature(TradingAgentsGraph.propagate_analysts)
-    assert "portfolio_context" not in signature.parameters

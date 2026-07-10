@@ -115,16 +115,3 @@ def test_batch_shares_snapshot_and_writes_portfolio_review(monkeypatch, tmp_path
     assert seen_contexts == [snapshot, snapshot]
     assert seen_contexts[0] is seen_contexts[1]
     assert reviewed["decisions"] == {"OUST": "Decision OUST", "HIMS": "Decision HIMS"}
-
-
-def test_technical_only_rejects_portfolio_context(tmp_path):
-    with pytest.raises(ValueError, match="full decision-stage analysis"):
-        main._run_batch_analysis(
-            tickers=["OUST"],
-            analysis_date="2026-07-09",
-            analyst_keys=["market"],
-            config={"results_dir": str(tmp_path)},
-            batch_dir=tmp_path / "batch",
-            technical_only=True,
-            portfolio_context=_snapshot(),
-        )

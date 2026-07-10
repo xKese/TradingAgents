@@ -57,7 +57,7 @@ cli = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --basetemp=tmp/pytest-runtime -o cache_dir=tmp/pytest-cache"
+addopts = "-ra --strict-markers --basetemp=../.TradingAgents-pytest -o cache_dir=../.TradingAgents-pytest-cache"
 markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external services",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import suppress
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -72,6 +73,37 @@ def _position_to_dict(item: Any, net_liquidation: float | None) -> dict[str, Any
     }
 
 
+def _reconcile_position_weights(
+    positions: list[dict[str, Any]], summary: dict[str, Any]
+) -> None:
+    """Convert one-currency position values into base-currency NAV weights."""
+    net_liquidation = summary.get("net_liquidation")
+    gross_value = summary.get("gross_position_value")
+    currencies = {position.get("currency") for position in positions}
+    quoted_total = sum(abs(position.get("market_value") or 0) for position in positions)
+    if (
+        len(currencies) == 1
+        and None not in currencies
+        and net_liquidation not in (None, 0)
+        and gross_value is not None
+        and quoted_total
+    ):
+        exposure_pct = abs(gross_value) / net_liquidation * 100
+        for position in positions:
+            market_value = position.get("market_value")
+            position["portfolio_weight_pct"] = (
+                None
+                if market_value is None
+                else abs(market_value) / quoted_total * exposure_pct
+            )
+        return
+
+    base_currency = summary.get("base_currency")
+    for position in positions:
+        if position.get("currency") != base_currency:
+            position["portfolio_weight_pct"] = None
+
+
 def validate_portfolio_snapshot(snapshot: dict[str, Any]) -> None:
     """Reject snapshots whose empty holdings contradict account exposure."""
     gross = snapshot.get("gross_position_value")
@@ -130,6 +162,7 @@ def load_portfolio_snapshot(
             for item in ib.portfolio(account)
             if str(getattr(item.contract, "secType", "")).upper() == "STK"
         ]
+        _reconcile_position_weights(positions, summary)
         positions.sort(
             key=lambda value: abs(value.get("market_value") or 0), reverse=True
         )
@@ -146,10 +179,8 @@ def load_portfolio_snapshot(
     except Exception as exc:
         raise IBKRPortfolioError(f"Unable to load TWS portfolio: {exc}") from exc
     finally:
-        try:
+        with suppress(Exception):
             ib.disconnect()
-        except Exception:
-            pass
 
 
 def _money(value: Any, currency: str) -> str:

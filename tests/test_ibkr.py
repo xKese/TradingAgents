@@ -115,7 +115,7 @@ def test_render_owned_ticker_includes_position_and_concentration():
     assert "LIVE PORTFOLIO CONTEXT - READ ONLY" in rendered
     assert "Owned: yes" in rendered
     assert "Quantity: 10" in rendered
-    assert "Current portfolio weight: 6.43%" in rendered
+    assert "Current portfolio weight: 65.27%" in rendered
     assert "Position rank by market value: 1 of 1" in rendered
 
 
@@ -139,3 +139,43 @@ def test_connection_error_is_wrapped_without_leaking_account_data():
         load_portfolio_snapshot("127.0.0.1", 7496, 71, ib_factory=BrokenIB)
 
     assert BrokenIB.last_instance.disconnected is True
+
+
+def test_weights_reconcile_quote_currency_positions_to_base_gross_exposure():
+    class CurrencyScaledIB(FakeIB):
+        def accountSummary(self, account):
+            return [
+                SimpleNamespace(tag="NetLiquidation", value="3000", currency="AUD"),
+                SimpleNamespace(tag="TotalCashValue", value="1500", currency="AUD"),
+                SimpleNamespace(tag="GrossPositionValue", value="1500", currency="AUD"),
+            ]
+
+        def portfolio(self, account):
+            first = SimpleNamespace(
+                contract=SimpleNamespace(
+                    symbol="AAA", localSymbol="AAA", secType="STK", currency="USD"
+                ),
+                position=6,
+                marketPrice=100,
+                marketValue=600,
+                averageCost=90,
+                unrealizedPNL=60,
+            )
+            second = SimpleNamespace(
+                contract=SimpleNamespace(
+                    symbol="BBB", localSymbol="BBB", secType="STK", currency="USD"
+                ),
+                position=4,
+                marketPrice=100,
+                marketValue=400,
+                averageCost=90,
+                unrealizedPNL=40,
+            )
+            return [first, second]
+
+    snapshot = load_portfolio_snapshot(
+        "127.0.0.1", 7496, 71, ib_factory=CurrencyScaledIB
+    )
+
+    assert snapshot["positions"][0]["portfolio_weight_pct"] == pytest.approx(30)
+    assert snapshot["positions"][1]["portfolio_weight_pct"] == pytest.approx(20)

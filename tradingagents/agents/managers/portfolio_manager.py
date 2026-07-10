@@ -21,7 +21,6 @@ from tradingagents.agents.utils.structured import (
 )
 from tradingagents.ibkr import get_portfolio_context_from_state
 
-
 _PORTFOLIO_INSTRUCTIONS = """Use the live portfolio context when translating analysis into action. Never say "initiate" for an owned ticker. Distinguish Hold existing, Add, Trim, Exit, and Avoid; reconcile sizing with current whole shares, portfolio weight, available cash, and concentration. Do not let average cost override current evidence."""
 
 

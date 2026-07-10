@@ -492,8 +492,11 @@ def _days_since_iso(iso: str) -> float:
 
 def _drain_deadline(hour: int) -> datetime:
     """Today's local (America/New_York) HH:00 as a tz-aware datetime — the
-    wall-clock the overnight drain must stop before, well ahead of the
-    09:30 first momentum tick."""
+    wall-clock the overnight drain must stop before, ahead of the 09:00
+    first momentum tick (CronTrigger minute="0,30" hour="9-15"). The
+    scheduler's thread pool does NOT serialize the drain against that tick;
+    this time margin is the sole guard against two models holding ds4 at
+    once, which is why research_drain_deadline_hour is validated < 9."""
     ny = ZoneInfo("America/New_York")
     return datetime.now(ny).replace(hour=hour, minute=0, second=0, microsecond=0)
 

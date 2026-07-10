@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -65,6 +66,8 @@ def _review_prompt(snapshot: dict, rows: list[dict], decisions: dict[str, str]) 
             "Use whole shares where practical and explain any action that cannot be quantified.",
             "Soft concentration warning: 10% of NAV.",
             "Never sum values across currencies or invent a currency conversion.",
+            "Return exactly one action for every successful ticker decision.",
+            "When weights_reconciled_to_base_nav is true, portfolio weights are authoritative base-NAV percentages; do not claim they lack FX conversion or reconciliation.",
             "Reconcile standalone ratings with current ownership, cash, position weights, and concentration.",
             "Flag a Buy or Overweight conflict when the ticker is already a large holding.",
             "\nAccount summary:",
@@ -74,6 +77,9 @@ def _review_prompt(snapshot: dict, rows: list[dict], decisions: dict[str, str]) 
                     "net_liquidation": snapshot.get("net_liquidation"),
                     "cash": snapshot.get("cash"),
                     "available_funds": snapshot.get("available_funds"),
+                    "weights_reconciled_to_base_nav": snapshot.get(
+                        "weights_reconciled_to_base_nav", False
+                    ),
                 },
                 sort_keys=True,
             ),
@@ -85,6 +91,137 @@ def _review_prompt(snapshot: dict, rows: list[dict], decisions: dict[str, str]) 
             *(failures or ["- none"]),
         ]
     )
+
+
+def _decision_field(decision: str, field: str) -> str:
+    match = re.search(
+        rf"\*\*{re.escape(field)}\*\*:\s*(.*?)(?=\n\s*\n|\Z)",
+        decision,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def _derive_action(
+    ticker: str, decision: str, position: dict | None
+) -> PortfolioAction:
+    rating = _decision_field(decision, "Rating").splitlines()[0].strip().lower()
+    summary = _decision_field(decision, "Executive Summary")
+    current_shares = position.get("quantity") if position else None
+    current_weight = position.get("portfolio_weight_pct") if position else None
+    owned = bool(position and current_shares)
+    action_map = {
+        "buy": "Add",
+        "overweight": "Add",
+        "hold": "Hold existing" if owned else "Avoid",
+        "underweight": "Trim" if owned else "Avoid",
+        "sell": "Exit" if owned else "Avoid",
+    }
+    action = action_map.get(rating, "Review")
+    proposed_shares = None
+
+    reduction = re.search(
+        r"\b(?:sell|trim|reduce(?:\s+by)?)\s+(\d+(?:\.\d+)?)"
+        r"(?:\s+(?:share|shares))?(?:\s+of\s+(\d+(?:\.\d+)?))?",
+        summary,
+        flags=re.IGNORECASE,
+    )
+    maintained = re.search(
+        r"\b(?:maintain|hold|retain)\s+(?:the\s+)?(?:current\s+)?"
+        r"(\d+(?:\.\d+)?)[- ]share",
+        summary,
+        flags=re.IGNORECASE,
+    )
+    if reduction and current_shares is not None:
+        proposed_shares = max(0.0, float(current_shares) - float(reduction.group(1)))
+    elif maintained:
+        proposed_shares = float(maintained.group(1))
+    elif action == "Hold existing" and current_shares is not None:
+        proposed_shares = float(current_shares)
+    elif action == "Exit" and current_shares is not None:
+        proposed_shares = 0.0
+
+    share_change = None
+    proposed_weight = None
+    if current_shares is not None and proposed_shares is not None:
+        share_change = proposed_shares - float(current_shares)
+        if current_weight is not None and float(current_shares) != 0:
+            proposed_weight = (
+                float(current_weight) * proposed_shares / float(current_shares)
+            )
+
+    return PortfolioAction(
+        ticker=ticker,
+        action=action,
+        priority="High" if rating in {"sell", "underweight"} else "Medium",
+        current_shares=current_shares,
+        proposed_shares=proposed_shares,
+        share_change=share_change,
+        current_weight_pct=current_weight,
+        proposed_weight_pct=proposed_weight,
+        rationale=summary or decision.strip()[:500],
+    )
+
+
+def _false_threshold_claim(text: str, positions: dict[str, dict]) -> bool:
+    lowered = text.lower()
+    if "exceed" not in lowered or "10%" not in lowered:
+        return False
+    for ticker, position in positions.items():
+        weight = position.get("portfolio_weight_pct")
+        if ticker.lower() in lowered and weight is not None and float(weight) < 10:
+            return True
+    return False
+
+
+def _false_reconciliation_warning(text: str) -> bool:
+    lowered = text.lower()
+    phrases = (
+        "cannot be reconciled",
+        "cannot reconcile",
+        "without an fx conversion",
+        "without conversion",
+        "no conversion rate",
+        "no conversion is available",
+        "without an explicit exchange rate",
+        "usd values only",
+        "usd-terms positions",
+        "usd values divided directly",
+    )
+    return any(phrase in lowered for phrase in phrases)
+
+
+def normalize_portfolio_review(
+    review: PortfolioReview,
+    snapshot: dict,
+    decisions: dict[str, str],
+) -> PortfolioReview:
+    """Enforce action coverage and remove claims contradicted by account facts."""
+    normalized = review.model_copy(deep=True)
+    positions = {
+        str(position.get("symbol", "")).upper(): position
+        for position in snapshot.get("positions") or []
+    }
+    existing = {action.ticker.upper() for action in normalized.actions}
+    for ticker, decision in decisions.items():
+        if ticker.upper() not in existing:
+            normalized.actions.append(
+                _derive_action(ticker, decision, positions.get(ticker.upper()))
+            )
+            existing.add(ticker.upper())
+
+    normalized.conflicts_and_overrides = [
+        text
+        for text in normalized.conflicts_and_overrides
+        if not _false_threshold_claim(text, positions)
+    ]
+    if snapshot.get("weights_reconciled_to_base_nav"):
+        normalized.data_quality_warnings = [
+            text
+            for text in normalized.data_quality_warnings
+            if not _false_reconciliation_warning(text)
+        ]
+    return normalized
 
 
 def build_portfolio_review(
@@ -100,14 +237,16 @@ def build_portfolio_review(
         try:
             result = structured_llm.invoke(prompt)
             if isinstance(result, PortfolioReview):
-                return result
-            return PortfolioReview.model_validate(result)
+                review = result
+            else:
+                review = PortfolioReview.model_validate(result)
+            return normalize_portfolio_review(review, snapshot, decisions)
         except Exception as exc:
             logger.warning("Portfolio Reviewer structured output failed: %s", exc)
 
     response = llm.invoke(prompt)
     failed = [row.get("ticker", "UNKNOWN") for row in rows if row.get("status") != "success"]
-    return PortfolioReview(
+    review = PortfolioReview(
         executive_assessment=response.content,
         conflicts_and_overrides=[],
         risk_triggers=[],
@@ -117,6 +256,7 @@ def build_portfolio_review(
         ),
         actions=[],
     )
+    return normalize_portfolio_review(review, snapshot, decisions)
 
 
 def _fmt(value) -> str:

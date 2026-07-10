@@ -31,6 +31,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=1.4.1",
+    "ib_async>=2.0.1",
 ]
 
 [project.optional-dependencies]
@@ -56,7 +57,7 @@ cli = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --basetemp=tmp/pytest-runtime -o cache_dir=tmp/pytest-cache"
 markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external services",

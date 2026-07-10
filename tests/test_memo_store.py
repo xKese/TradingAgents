@@ -226,6 +226,136 @@ def test_memo_without_authored_by_model_deserializes(tmp_path):
     assert loaded.authored_by_model == ""
 
 
+def test_memo_status_accepts_vetting_lifecycle_values():
+    """pending_vetting and rejected are valid memo statuses (graph-vetting funnel)."""
+    memo = _value_memo(status="pending_vetting")
+    assert memo.status == "pending_vetting"
+    memo2 = _value_memo(status="rejected")
+    assert memo2.status == "rejected"
+
+
+def test_vetting_result_round_trips_on_memo():
+    from tradingagents.memos.schema import VettingResult
+
+    vetting = VettingResult(
+        verdict="confirm", rating="Buy", conviction_before="starter",
+        conviction_after="high", added_falsifier_indices=[2, 3],
+        rationale="judge liked it", vetted_by_model="openai_compatible:ds4",
+    )
+    memo = _value_memo(vetting=vetting)
+    restored = Memo.model_validate_json(memo.model_dump_json())
+    assert restored.vetting is not None
+    assert restored.vetting.verdict == "confirm"
+    assert restored.vetting.rating == "Buy"
+    assert restored.vetting.conviction_before == "starter"
+    assert restored.vetting.conviction_after == "high"
+    assert restored.vetting.added_falsifier_indices == [2, 3]
+
+
+def test_vetting_result_reject_needs_no_conviction_after():
+    from tradingagents.memos.schema import VettingResult
+
+    vetting = VettingResult(
+        verdict="reject", rating="Hold", conviction_before="medium",
+        rationale="debate found the thesis weak",
+    )
+    assert vetting.conviction_after is None
+
+
+def test_memo_vetting_defaults_none():
+    assert _value_memo().vetting is None
+
+
+def test_pending_vetting_memos_returns_queue_oldest_first(store):
+    older = _value_memo(status="pending_vetting",
+                        created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    newer = _value_memo(status="pending_vetting",
+                        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc))
+    open_memo = _value_memo(status="open")
+    passed = _value_memo(status="passed")
+    for m in (newer, open_memo, older, passed):
+        store.save(m)
+    queue = store.pending_vetting_memos()
+    assert [m.memo_id for m in queue] == [older.memo_id, newer.memo_id]
+
+
+def test_pending_vetting_memo_is_not_open_and_never_trades(store):
+    """THE gate: a pending_vetting memo must not appear in open_memos()."""
+    store.save(_value_memo(status="pending_vetting"))
+    assert store.open_memos() == []
+    assert len(store.pending_vetting_memos()) == 1
+
+
+def test_apply_vetting_confirm_promotes_to_open(store):
+    from tradingagents.memos.schema import VettingResult
+
+    memo = _value_memo(status="pending_vetting", conviction_tier="starter")
+    store.save(memo)
+    memo.status = "open"
+    memo.conviction_tier = "high"
+    memo.vetting = VettingResult(
+        verdict="confirm", rating="Buy", conviction_before="starter",
+        conviction_after="high",
+    )
+    store.apply_vetting(memo)
+    got = store.get(memo.memo_id)
+    assert got.status == "open"
+    assert got.conviction_tier == "high"
+    assert got.vetting.verdict == "confirm"
+    assert store.pending_vetting_memos() == []
+    assert [m.memo_id for m in store.open_memos()] == [memo.memo_id]
+
+
+def test_apply_vetting_reject_marks_rejected(store):
+    from tradingagents.memos.schema import VettingResult
+
+    memo = _value_memo(status="pending_vetting")
+    store.save(memo)
+    memo.status = "rejected"
+    memo.vetting = VettingResult(
+        verdict="reject", rating="Hold", conviction_before=memo.conviction_tier,
+    )
+    store.apply_vetting(memo)
+    got = store.get(memo.memo_id)
+    assert got.status == "rejected"
+    assert store.open_memos() == []
+    assert store.pending_vetting_memos() == []
+
+
+def test_apply_vetting_refuses_non_pending_row(store):
+    from tradingagents.memos.schema import VettingResult
+
+    memo = _value_memo(status="open")
+    store.save(memo)
+    memo.status = "open"
+    memo.vetting = VettingResult(
+        verdict="confirm", rating="Buy", conviction_before=memo.conviction_tier,
+        conviction_after="high",
+    )
+    with pytest.raises(ValueError, match="pending_vetting"):
+        store.apply_vetting(memo)
+
+
+def test_apply_vetting_requires_vetting_block_and_final_status(store):
+    memo = _value_memo(status="pending_vetting")
+    store.save(memo)
+    memo.status = "open"          # vetting block missing
+    with pytest.raises(ValueError, match="vetting"):
+        store.apply_vetting(memo)
+
+
+def test_apply_vetting_unknown_memo_raises_keyerror(store):
+    from tradingagents.memos.schema import VettingResult
+
+    memo = _value_memo(status="pending_vetting")  # never saved
+    memo.status = "rejected"
+    memo.vetting = VettingResult(
+        verdict="reject", rating="Sell", conviction_before=memo.conviction_tier,
+    )
+    with pytest.raises(KeyError):
+        store.apply_vetting(memo)
+
+
 def test_default_memo_store_path_env_override(monkeypatch):
     from tradingagents.memos.store import default_memo_store_path
 

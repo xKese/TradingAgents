@@ -29,6 +29,14 @@ def create_fundamentals_analyst(llm):
             + get_language_instruction(),
         )
 
+        research_memo_context = state.get("research_memo_context", "")
+        research_block = (
+            "\n\nA prior deep-research memo exists for this company (a "
+            "filings-focused first-cut). Treat it as a head start on filings "
+            "evidence — verify its claims with your own tools rather than "
+            "repeating them:\n" + research_memo_context
+        ) if research_memo_context else ""
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -41,7 +49,7 @@ def create_fundamentals_analyst(llm):
                     " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
                     " You have access to the following tools: {tool_names}."
                     " Today's date is {current_date}; treat it as 'now' for all analysis and tool-call date ranges. {instrument_context}\n"
-                    "{system_message}",
+                    "{system_message}{research_memo_block}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
@@ -51,6 +59,7 @@ def create_fundamentals_analyst(llm):
         prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(instrument_context=instrument_context)
+        prompt = prompt.partial(research_memo_block=research_block)
 
         chain = prompt | llm.bind_tools(tools)
 

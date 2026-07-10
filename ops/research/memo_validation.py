@@ -12,7 +12,13 @@ from __future__ import annotations
 from tradingagents.memos.schema import EvidenceItem, Memo
 
 
-def _is_machine_checkable(falsifier) -> bool:
+def is_machine_checkable(falsifier) -> bool:
+    """A falsifier is mechanically monitorable iff it has metric+operator+threshold.
+
+    Shared with the graph-vetting stage's risk-debate extraction gate
+    (ops/research/vetting.py), so the debate can only ADD falsifiers that
+    the monitoring loop can actually evaluate.
+    """
     return (
         bool(falsifier.metric)
         and falsifier.operator is not None
@@ -54,7 +60,7 @@ def validate_memo(
             "thesis block does not match thesis_type (fill exactly the "
             f"{memo.thesis_type}_block)"
         )
-    if not any(_is_machine_checkable(f) for f in memo.falsifiers):
+    if not any(is_machine_checkable(f) for f in memo.falsifiers):
         errors.append(
             "no machine-checkable falsifier (need metric+operator+threshold "
             "on at least one)"

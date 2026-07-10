@@ -140,6 +140,39 @@ class MemoStore:
                 (memo.model_dump_json(), memo_id),
             )
 
+    def apply_vetting(self, memo: Memo) -> None:
+        """Persist a graph-vetting adjudication: pending_vetting -> open|rejected.
+
+        The caller (ops/research/vetting.py) mutates the memo in memory
+        (status, conviction_tier, appended falsifiers, vetting provenance);
+        this method persists it, refusing anything that is not a
+        pending_vetting row transitioning to a final vetted status — the
+        stored-status check makes a double-vet or a race with resolution a
+        loud error instead of a silent overwrite.
+        """
+        if memo.vetting is None:
+            raise ValueError(f"memo {memo.memo_id}: apply_vetting requires a vetting block")
+        if memo.status not in ("open", "rejected"):
+            raise ValueError(
+                f"memo {memo.memo_id}: apply_vetting expects status open/rejected, "
+                f"got {memo.status!r}"
+            )
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM memos WHERE memo_id = ?", (memo.memo_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no memo with id {memo.memo_id!r}")
+            if row["status"] != "pending_vetting":
+                raise ValueError(
+                    f"memo {memo.memo_id!r} is {row['status']!r}, not pending_vetting"
+                )
+            conn.execute(
+                "UPDATE memos SET status = ?, conviction_tier = ?, payload = ? "
+                "WHERE memo_id = ?",
+                (memo.status, memo.conviction_tier, memo.model_dump_json(), memo.memo_id),
+            )
+
     # --- Read path ---
 
     def get(self, memo_id: str) -> Memo | None:
@@ -177,6 +210,15 @@ class MemoStore:
     def open_memos(self) -> list[Memo]:
         """Memos backing live positions — the monitoring loop's work list."""
         return self.list(status="open")
+
+    def pending_vetting_memos(self) -> list[Memo]:
+        """The graph-vetting queue: brain-buys awaiting adjudication, oldest-first.
+
+        Every pending_vetting memo is a brain-buy by construction (the pass
+        path goes straight to ``passed``), so no recommendation filter exists.
+        """
+        memos = self.list(status="pending_vetting")
+        return sorted(memos, key=lambda m: m.created_at)
 
     def resolved_corpus(self) -> list[Memo]:
         """All resolved memos, oldest-first: the calibration/training dataset."""

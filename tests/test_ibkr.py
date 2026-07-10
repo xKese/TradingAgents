@@ -179,3 +179,34 @@ def test_weights_reconcile_quote_currency_positions_to_base_gross_exposure():
 
     assert snapshot["positions"][0]["portfolio_weight_pct"] == pytest.approx(30)
     assert snapshot["positions"][1]["portfolio_weight_pct"] == pytest.approx(20)
+
+
+def test_same_currency_weights_are_marked_reconciled_to_base_nav():
+    snapshot = load_portfolio_snapshot(
+        "127.0.0.1", 7496, 71, ib_factory=FakeIB
+    )
+
+    assert snapshot["weights_reconciled_to_base_nav"] is True
+
+
+def test_mixed_currency_weights_are_not_marked_reconciled():
+    class MixedCurrencyIB(FakeIB):
+        def portfolio(self, account):
+            usd = super().portfolio(account)[0]
+            eur = SimpleNamespace(
+                contract=SimpleNamespace(
+                    symbol="SAP", localSymbol="SAP", secType="STK", currency="EUR"
+                ),
+                position=1,
+                marketPrice=200,
+                marketValue=200,
+                averageCost=180,
+                unrealizedPNL=20,
+            )
+            return [usd, eur]
+
+    snapshot = load_portfolio_snapshot(
+        "127.0.0.1", 7496, 71, ib_factory=MixedCurrencyIB
+    )
+
+    assert snapshot["weights_reconciled_to_base_nav"] is False

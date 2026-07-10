@@ -75,7 +75,7 @@ def _position_to_dict(item: Any, net_liquidation: float | None) -> dict[str, Any
 
 def _reconcile_position_weights(
     positions: list[dict[str, Any]], summary: dict[str, Any]
-) -> None:
+) -> bool:
     """Convert one-currency position values into base-currency NAV weights."""
     net_liquidation = summary.get("net_liquidation")
     gross_value = summary.get("gross_position_value")
@@ -96,12 +96,13 @@ def _reconcile_position_weights(
                 if market_value is None
                 else abs(market_value) / quoted_total * exposure_pct
             )
-        return
+        return True
 
     base_currency = summary.get("base_currency")
     for position in positions:
         if position.get("currency") != base_currency:
             position["portfolio_weight_pct"] = None
+    return False
 
 
 def validate_portfolio_snapshot(snapshot: dict[str, Any]) -> None:
@@ -162,7 +163,7 @@ def load_portfolio_snapshot(
             for item in ib.portfolio(account)
             if str(getattr(item.contract, "secType", "")).upper() == "STK"
         ]
-        _reconcile_position_weights(positions, summary)
+        weights_reconciled = _reconcile_position_weights(positions, summary)
         positions.sort(
             key=lambda value: abs(value.get("market_value") or 0), reverse=True
         )
@@ -170,6 +171,7 @@ def load_portfolio_snapshot(
             **summary,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "position_fetch_complete": True,
+            "weights_reconciled_to_base_nav": weights_reconciled,
             "positions": positions,
         }
         validate_portfolio_snapshot(snapshot)

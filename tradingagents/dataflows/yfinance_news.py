@@ -1,7 +1,7 @@
 """yfinance-based news data fetching functions."""
 
 import contextlib
-from datetime import datetime
+from datetime import datetime, timezone
 
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
@@ -57,18 +57,27 @@ def _extract_article_data(article: dict) -> dict:
         }
 
 
-def _in_news_window(pub_date, start_dt, end_dt) -> bool:
-    """Whether an article belongs in the [start_dt, end_dt] window.
+def _as_utc(value: datetime) -> datetime:
+    """Return a UTC-aware datetime, treating naive internal values as UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
-    Dated articles are kept only if they fall in the window. An undated article
-    is kept only when the window reaches the present (live run) — in a
-    historical/backtest window it's excluded, since we can't prove it isn't
-    future news (look-ahead safety, #992/#1007).
+
+def _in_news_window(pub_date, start_dt, end_dt) -> bool:
+    """Whether an article belongs in the UTC [start, end + 1 day) window.
+
+    Dated articles are kept only if they fall in the half-open interval. An
+    undated article is kept only when the window reaches the present (live run)
+    because a historical run cannot prove that an undated article is safe.
     """
     if pub_date is not None:
-        naive = pub_date.replace(tzinfo=None) if hasattr(pub_date, "replace") else pub_date
-        return start_dt <= naive <= end_dt + relativedelta(days=1)
-    return end_dt >= datetime.now() - relativedelta(days=1)
+        published_at = _as_utc(pub_date)
+        window_start = _as_utc(start_dt)
+        window_end_exclusive = _as_utc(end_dt) + relativedelta(days=1)
+        return window_start <= published_at < window_end_exclusive
+
+    return _as_utc(end_dt) >= datetime.now(timezone.utc) - relativedelta(days=1)
 
 
 def get_news_yfinance(

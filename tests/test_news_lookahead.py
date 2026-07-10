@@ -5,7 +5,7 @@ Regressions for #992 (flat articles bypassed the date filter), #1007 (global
 news injected future articles), #993 (empty-after-filter returned a blank body).
 """
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -38,6 +38,30 @@ def test_window_excludes_future_and_undated_in_backtest():
 
 
 @pytest.mark.unit
+def test_window_is_end_exclusive_and_accepts_the_full_end_date():
+    start = datetime(2025, 5, 1)
+    end = datetime(2025, 5, 9)
+
+    assert ynews._in_news_window(datetime(2025, 5, 1), start, end) is True
+    assert (
+        ynews._in_news_window(
+            datetime(2025, 5, 9, 23, 59, 59, 999999), start, end
+        )
+        is True
+    )
+    assert ynews._in_news_window(datetime(2025, 5, 10), start, end) is False
+
+
+@pytest.mark.unit
+def test_window_compares_equivalent_aware_instants_in_utc():
+    start = datetime(2025, 5, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 5, 9, tzinfo=timezone.utc)
+    same_instant = datetime.fromisoformat("2025-05-09T19:30:00-04:00")
+
+    assert ynews._in_news_window(same_instant, start, end) is True
+
+
+@pytest.mark.unit
 def test_window_keeps_undated_in_live_window():
     # Live window (reaches today): undated articles can't be "future", so keep them.
     start = datetime.now()
@@ -61,6 +85,36 @@ def test_global_news_future_flat_article_excluded(monkeypatch):
     out = ynews.get_global_news_yfinance("2025-05-09", look_back_days=7, limit=10)
     assert "PAST EVENT" in out
     assert "FUTURE EVENT" not in out  # #1007
+
+
+@pytest.mark.unit
+def test_global_news_excludes_midnight_after_curr_date(monkeypatch):
+    inside = {
+        "content": {
+            "title": "INSIDE WINDOW",
+            "provider": {"displayName": "P"},
+            "pubDate": "2025-05-09T23:59:59Z",
+        }
+    }
+    next_midnight = {
+        "content": {
+            "title": "NEXT MIDNIGHT",
+            "provider": {"displayName": "P"},
+            "pubDate": "2025-05-10T00:00:00Z",
+        }
+    }
+
+    class FakeSearch:
+        def __init__(self, *args, **kwargs):
+            self.news = [inside, next_midnight]
+
+    monkeypatch.setattr(ynews.yf, "Search", FakeSearch)
+    out = ynews.get_global_news_yfinance(
+        "2025-05-09", look_back_days=7, limit=10
+    )
+
+    assert "INSIDE WINDOW" in out
+    assert "NEXT MIDNIGHT" not in out
 
 
 @pytest.mark.unit

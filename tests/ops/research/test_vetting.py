@@ -1,6 +1,6 @@
 """Graph vetting of brain memos: verdict from the native rating, bounded
 falsifier enrichment, promote/reject persistence, deadline-boxed queue."""
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -69,6 +69,13 @@ class BoomFalsifierLLM:
                 raise RuntimeError("boom")
 
         return _Runner()
+
+
+class BoomBindLLM:
+    """with_structured_output itself raises something bind_structured doesn't catch."""
+
+    def with_structured_output(self, schema):
+        raise RuntimeError("bind exploded")
 
 
 # --- verdict + conviction mapping (native rating) ------------------------
@@ -160,6 +167,16 @@ def test_extraction_failure_returns_empty_with_note():
     assert notes and "failed" in notes[0]
 
 
+def test_extraction_bind_failure_returns_empty_with_note():
+    kept, notes = extract_risk_falsifiers(
+        BoomBindLLM(),
+        {"risk_debate_state": {"history": "H", "judge_decision": "J"}},
+        ticker="ACME",
+    )
+    assert kept == []
+    assert notes and "failed" in notes[0]
+
+
 def test_extraction_skips_on_empty_debate():
     kept, notes = extract_risk_falsifiers(
         FixedFalsifierLLM([]), {"risk_debate_state": {}}, ticker="ACME",
@@ -193,6 +210,22 @@ def test_extraction_failure_never_blocks_a_confirm(store):
     store.save(memo)
     adapter = StubPipelineAdapter(ratings={"ACME": "Buy"})
     outcome = vet_memo(memo, adapter=adapter, falsifier_llm=BoomFalsifierLLM(),
+                       memo_store=store)
+    assert outcome.verdict == "confirm"
+    got = store.get(memo.memo_id)
+    assert got.status == "open"
+    assert len(got.falsifiers) == 1
+    assert got.vetting.added_falsifier_indices == []
+    assert "falsifier extraction failed" in got.vetting.rationale
+
+
+def test_bind_failure_never_blocks_a_confirm(store):
+    """A with_structured_output that raises an uncaught exception must not
+    escape vet_memo: the memo still confirms on the brain's falsifiers."""
+    memo = _memo()
+    store.save(memo)
+    adapter = StubPipelineAdapter(ratings={"ACME": "Buy"})
+    outcome = vet_memo(memo, adapter=adapter, falsifier_llm=BoomBindLLM(),
                        memo_store=store)
     assert outcome.verdict == "confirm"
     got = store.get(memo.memo_id)

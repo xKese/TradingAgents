@@ -108,7 +108,10 @@ def extract_risk_falsifiers(
     Returns (kept, notes). Never raises: any failure returns ([], [note]) so
     the caller confirms with the brain's falsifiers alone.
     """
-    structured = bind_structured(falsifier_llm, FalsifierBatch, "research-vetting-falsifiers")
+    try:
+        structured = bind_structured(falsifier_llm, FalsifierBatch, "research-vetting-falsifiers")
+    except Exception as exc:  # noqa: BLE001 - enrichment must never block a confirm
+        return [], [f"falsifier extraction failed: {type(exc).__name__}: {exc}"]
     if structured is None:
         return [], ["falsifier extraction skipped: no structured-output support"]
     risk = final_state.get("risk_debate_state") or {}

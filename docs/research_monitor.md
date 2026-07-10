@@ -9,8 +9,7 @@ the monitor — escalations queue re-research hits for `ops research run`.
 | job | where | when | what |
 |---|---|---|---|
 | research_monitor | ops daemon (APScheduler) | 16:20 ET mon-fri | falsifiers, drawdown, catalysts, resolution-due |
-| screen | launchd com.tradingagents.screen | Sat 10:00 | fills the pending queue; auto write-off of delisted baseline names |
-| research run | launchd com.tradingagents.research | Sat 12:00 | drains the pending queue into memos |
+| research_overnight | ops daemon (APScheduler) | 00:00 ET nightly | screens (every `research_screen_interval_days`, default 3 days; also auto write-off of delisted baseline names) then deadline-boxed drain of the pending queue into memos |
 
 Manual: `ops research monitor` (safe anywhere; empty stores are a no-op).
 Running it manually in the morning journals the research_monitor_run
@@ -30,9 +29,9 @@ against the day's close.
 Re-notification is deduped per memo/falsifier over a 7-day window (journal
 count_events — no side state). Escalations dedupe naturally: a symbol with a
 hit already pending is not re-queued. A drawdown or tripped falsifier on a
-memo that stays open just re-escalates on that weekly cadence (high push)
-and burns a research slot each Saturday — the loop stops only once the
-operator resolves the memo.
+memo that stays open just re-escalates on that 7-day-deduped cadence (high
+push) and burns a research slot in the next nightly `research_overnight`
+drain — the loop stops only once the operator resolves the memo.
 
 ## Falsifier metrics evaluable today
 
@@ -51,7 +50,8 @@ degrade to unevaluable with a note in the run summary.
 
 ## Delisted baseline names
 
-Each weekly screen probes every held baseline position once; a quote failure
+Each screen run (every `research_screen_interval_days`, default 3 days)
+probes every held baseline position once; a quote failure
 journals baseline_quote_failure. Three consecutive failing runs write the
 position off at the last buy-fill price (baseline_auto_writeoff, surfaced in
 the screen's --notify summary). Manual override remains:

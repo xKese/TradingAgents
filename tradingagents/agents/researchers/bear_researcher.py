@@ -23,6 +23,13 @@ def create_bear_researcher(llm):
             if asset_type == "stock"
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
+        research_memo_context = state.get("research_memo_context", "")
+        research_block = (
+            "Deep-research memo (a filings-based first-cut BUY thesis for this "
+            "company; your job is to stress-test it — attack its assumptions "
+            "and find where it is wrong):\n"
+            f"{research_memo_context}\n"
+        ) if research_memo_context else ""
 
         prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
@@ -41,7 +48,7 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
+{research_block}Conversation history of the debate: {history}
 Last bull argument: {current_response}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
 """ + get_language_instruction()

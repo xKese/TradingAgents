@@ -24,6 +24,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -481,6 +482,81 @@ def _research_trade_tick(journal: Journal, config) -> None:
         )
 
 
+def _days_since_iso(iso: str) -> float:
+    """Whole-plus-fractional days between an ISO-8601 UTC timestamp and now."""
+    then = datetime.fromisoformat(iso)
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - then).total_seconds() / 86400.0
+
+
+def _drain_deadline(hour: int) -> datetime:
+    """Today's local (America/New_York) HH:00 as a tz-aware datetime — the
+    wall-clock the overnight drain must stop before, well ahead of the
+    09:30 first momentum tick."""
+    ny = ZoneInfo("America/New_York")
+    return datetime.now(ny).replace(hour=hour, minute=0, second=0, microsecond=0)
+
+
+def _research_overnight_tick(journal: Journal, config, *, now=None, should_stop=None) -> None:
+    """Nightly 00:00 job: screen if it's been >= research_screen_interval_days,
+    then drain the whole pending queue on ds4 until the queue empties, the
+    local deadline hour is reached, or shutdown is requested. Scheduler-safe:
+    any failure records research_drain_error rather than raising."""
+    screened_this_run = False
+    try:
+        from ops.research.store import ScreenStore
+
+        store = ScreenStore(config.screen_store_path)
+        last = store.last_run()
+        due = last is None or _days_since_iso(last["created_at"]) >= config.research_screen_interval_days
+        if due:
+            from ops.research.run import run_screen
+
+            run_screen(config=config, asof=date.today())
+            screened_this_run = True
+
+        from tradingagents.dataflows import edgar
+        edgar.get_user_agent()  # fail fast before spinning ds4
+
+        from ops.research.drain import drain_pending
+        from ops.research.models import build_stage_llm
+        from tradingagents.memos.store import MemoStore
+
+        evidence_llm = build_stage_llm(config.research_evidence_model)
+        thesis_llm = build_stage_llm(config.research_thesis_model)
+        deadline = _drain_deadline(config.research_drain_deadline_hour)
+        stop = should_stop or _shutdown_event.is_set
+        backend = build_managed_backend(load_managed_backend_config())
+        try:
+            backend.ensure_up()
+            summary = drain_pending(
+                store=store, memo_store=MemoStore(config.memo_store_path),
+                evidence_llm=evidence_llm, thesis_llm=thesis_llm,
+                thesis_model_spec=config.research_thesis_model,
+                deadline=deadline, should_stop=stop,
+                now=(now or (lambda: datetime.now(deadline.tzinfo))),
+            )
+        finally:
+            backend.shutdown()
+
+        journal.record_event(
+            events.KIND_RESEARCH_DRAIN_RUN,
+            events.research_drain_run_payload(
+                asof=date.today().isoformat(), screened_this_run=screened_this_run,
+                researched=summary.researched, failed=summary.failed,
+                still_pending=summary.still_pending, hit_deadline=summary.hit_deadline,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+        journal.record_event(
+            events.KIND_RESEARCH_DRAIN_ERROR,
+            events.research_drain_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
 # Dead-man's switch tuning (A1.3). Staleness is 3x the guardian poll
 # interval: one slow pass must not flap the external check, but a loop
 # that has missed three consecutive polls is wedged and must look dead.
@@ -581,6 +657,11 @@ def _start_full_scheduler(
             lambda: _research_trade_tick(journal, config),
             CronTrigger(hour=16, minute=25, day_of_week="mon-fri"),
             id="research_trade", max_instances=1, misfire_grace_time=300,
+        )
+        sched.add_job(
+            lambda: _research_overnight_tick(journal, config),
+            CronTrigger(hour=0, minute=0),
+            id="research_overnight", max_instances=1, misfire_grace_time=600,
         )
         sched.add_job(
             lambda: _daily_overview_tick(journal, config),

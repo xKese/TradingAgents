@@ -654,3 +654,105 @@ def test_daily_overview_tick_writes_file_and_records_gate_event(tmp_path, monkey
         assert len(gate_events_again) == 1
     finally:
         journal.close()
+
+
+def test_overnight_tick_screens_when_due_then_drains(monkeypatch, tmp_path):
+    import ops.main as main_mod
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    class _NoBackend:
+        def ensure_up(self): pass
+        def shutdown(self): pass
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: _NoBackend())
+
+    events_seen = []
+    monkeypatch.setattr("ops.research.run.run_screen",
+                        lambda **kw: events_seen.append("screen"))
+    monkeypatch.setattr("ops.research.drain.drain_pending",
+                        lambda **kw: (events_seen.append("drain"),
+                                      DrainSummary(3, 0, 0, False))[1])
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        # No prior screen run -> screen is due.
+        main_mod._research_overnight_tick(journal, config)
+        assert events_seen == ["screen", "drain"]
+        assert journal.has_event_today(main_mod.events.KIND_RESEARCH_DRAIN_RUN)
+
+
+def test_overnight_tick_skips_screen_when_recent(monkeypatch, tmp_path):
+    import ops.main as main_mod
+    from datetime import date
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    class _NoBackend:
+        def ensure_up(self): pass
+        def shutdown(self): pass
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: _NoBackend())
+
+    # A screen run recorded just now -> interval (3 days) not elapsed.
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=date.today(), universe_size=0, results=[])
+
+    seen = []
+    monkeypatch.setattr("ops.research.run.run_screen",
+                        lambda **kw: seen.append("screen"))
+    monkeypatch.setattr("ops.research.drain.drain_pending",
+                        lambda **kw: (seen.append("drain"),
+                                      DrainSummary(0, 0, 0, False))[1])
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+    assert seen == ["drain"]  # screened recently -> only drain
+
+
+def test_overnight_tick_records_error_event_not_raises(monkeypatch, tmp_path):
+    import ops.main as main_mod
+    from ops.config import load_config
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.run.run_screen",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)  # must not raise
+        assert journal.has_event_today(main_mod.events.KIND_RESEARCH_DRAIN_ERROR)
+
+
+def test_full_scheduler_registers_overnight_job():
+    """Mirrors test_research_trade_job_registered_and_gated — a MagicMock
+    journal/config is enough to verify registration without touching the
+    paper-trading _startup path (real backend/broker wiring is out of scope
+    here; that path is exercised elsewhere)."""
+    from unittest.mock import MagicMock
+    from ops.main import _start_full_scheduler
+
+    sched = _start_full_scheduler(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        config=MagicMock(),
+    )
+    try:
+        job = sched.get_job("research_overnight")
+        assert job is not None
+    finally:
+        sched.shutdown(wait=False)

@@ -381,7 +381,7 @@ def research_hit(
             continue
         memo = Memo(
             ticker=symbol, as_of_date=today, entry_price_ref=float(price),
-            evidence=kept, status="open",
+            evidence=kept, status="pending_vetting",
             authored_by_model=thesis_model_spec or "",
             **draft.model_dump(exclude={"recommendation"}),
         )

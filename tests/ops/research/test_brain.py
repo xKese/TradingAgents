@@ -150,17 +150,29 @@ def _good_evidence_llm():
     ])
 
 
-def test_happy_path_saves_open_memo(memo_store):
+def test_happy_path_saves_pending_vetting_memo(memo_store):
     thesis_llm = FakeLLM(["bear: distributor loss is permanent", _draft()])
     outcome = _run(_good_evidence_llm(), thesis_llm, memo_store)
     assert outcome.status == "researched"
     assert outcome.recommendation == "buy"
     memo = memo_store.get(outcome.memo_id)
-    assert memo.status == "open"
+    assert memo.status == "pending_vetting"
     assert memo.ticker == "WIDG"
     assert memo.entry_price_ref == pytest.approx(4.10)
     assert memo.as_of_date == TODAY
     assert len(memo.evidence) == 5
+
+
+def test_buy_memo_is_stored_pending_vetting(memo_store):
+    """A brain buy is NOT tradeable until the graph confirms it: it enters
+    the vetting queue, never open_memos()."""
+    thesis_llm = FakeLLM(["bear case", _draft(recommendation="buy")])
+    outcome = _run(_good_evidence_llm(), thesis_llm, memo_store)
+    assert outcome.status == "researched"
+    memo = memo_store.get(outcome.memo_id)
+    assert memo.status == "pending_vetting"
+    assert memo_store.open_memos() == []
+    assert [m.memo_id for m in memo_store.pending_vetting_memos()] == [memo.memo_id]
 
 
 def test_pass_recommendation_shadow_tracks(memo_store):

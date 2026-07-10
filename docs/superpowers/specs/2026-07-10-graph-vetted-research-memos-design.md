@@ -140,26 +140,53 @@ function, fully unit-testable.
   covers filings/fundamentals; the graph's market/news/sentiment analysts add
   dimensions the brain never sees, and the debate stress-tests the brain's thesis.
 - Extend `PipelineAdapter.propagate` to accept an optional
-  `research_context: str = ""` and pass it through. `StubPipelineAdapter` accepts
-  and ignores it (keeps tests/dry-runs cheap).
+  `research_context: str = ""` and pass it through, and to expose the graph's
+  **native 5-tier rating** (Buy/Overweight/Hold/Underweight/Sell) for the vetting
+  path — the momentum path keeps collapsing to BUY/HOLD/SELL.
+  `StubPipelineAdapter` accepts `research_context`, ignores it, and returns a stub
+  rating (keeps tests/dry-runs cheap).
 
 ### 5. Adjudication output
 
 `ops/research/vetting.py` orchestrates one memo's vetting:
 
 1. `brief = build_research_brief(memo)`.
-2. `result = adapter.propagate(memo.ticker, memo.as_of_date, research_context=brief)`
-   → `PipelineDecision` (BUY/HOLD/SELL) + `final_state`.
-3. **Verdict:** BUY → `confirm`; HOLD/SELL → `reject` (conservative: the debate
-   must actively affirm the buy).
-4. **Conviction + risk falsifiers:** a single bounded `bind_structured` call over
-   the graph's `risk_debate_state` + judge decision → `{conviction_tier, added_
-   falsifiers[]}`. Reuses the brain's structured-output plumbing and the
-   **mechanical validation gate** (`ops/research/memo_validation.py`) so a
-   malformed enrichment is rejected, not stored (same anti-garbage guarantee).
-5. **Merge:** on `confirm`, set `conviction_tier` to the graph's call, append the
-   validated risk falsifiers to `memo.falsifiers`, attach `VettingResult`, set
-   status `open`. On `reject`, attach `VettingResult`, set status `rejected`.
+2. `adapter.propagate(memo.ticker, memo.as_of_date, research_context=brief)` runs
+   the graph and returns the graph's **native 5-tier rating**
+   (Buy/Overweight/Hold/Underweight/Sell) plus `final_state`. The vetting path
+   reads the *ungraded* rating (from `process_signal`/`final_trade_decision`),
+   **not** the momentum adapter's collapsed BUY/HOLD/SELL. The adapter is extended
+   to expose the fine rating for this path; the momentum path keeps collapsing.
+3. **Verdict + conviction — straight from the graph's native rating. No extra LLM
+   call, no agent-prompt change.** The graph's decision managers
+   (`research_manager.py` / `portfolio_manager.py`) already grade conviction; we
+   simply stop discarding it and map it to our tiers **in our own code**:
+
+   | Graph rating | Verdict | Our conviction |
+   |---|---|---|
+   | Buy | confirm | high |
+   | Overweight | confirm | medium |
+   | Hold / Underweight / Sell | reject | — |
+
+   Strictness is a knob (a stricter policy could confirm only `Buy`); the table is
+   the default. No agent ever learns our `starter/medium/high` taxonomy — the
+   mapping lives entirely in `vetting.py`.
+4. **Risk-falsifier extraction (structured, validated) — option B.** A single
+   bounded `bind_structured` call over the graph's `risk_debate_state` + judge
+   decision → `list[Falsifier]` in the memo's own schema (machine-checkable:
+   `check_type` + `metric`/`operator`/`threshold`). Each candidate is passed
+   through the **mechanical validation gate** (the same falsifier-validity check
+   used on brain memos) so the debate can only *add* well-formed, monitorable exit
+   conditions — prose-only or malformed "falsifiers" are dropped. This is additive
+   and independent of the verdict/conviction in step 3.
+5. **Merge:** on `confirm`, set `conviction_tier` from the step-3 map, append the
+   validated risk falsifiers (step 4) to `memo.falsifiers`, attach `VettingResult`
+   (verdict, native rating, conviction, added-falsifier indices, judge `rationale`,
+   `vetted_by_model`), set status `open`. On `reject`, attach `VettingResult`
+   (rationale explains why), set status `rejected`. **A failed step-4 extraction
+   does not block a confirm** — verdict/conviction come only from step 3, so on
+   extraction failure we confirm with the brain's falsifiers alone and note it in
+   the rationale.
 
 No brain-recommendation field is needed on `Memo`: the vetting queue is exactly the
 `pending_vetting` set (all brain-buys), since `pass` memos go straight to `passed`
@@ -210,8 +237,11 @@ weekday 16:25 (existing)
 - A graph run that fails/empties for one memo marks nothing; the memo stays
   `pending_vetting`. Repeated failures on one name are visible via the audit event
   (a later change could add an attempt cap → `rejected` with reason).
-- The validation gate rejects malformed enrichment; the memo stays
-  `pending_vetting` for retry rather than storing garbage.
+- Verdict/conviction come from the graph's native rating, so they never "fail"
+  once the graph ran. The risk-falsifier extraction is additive: if its structured
+  call fails or produces only malformed falsifiers, the memo is still
+  confirmed/merged with the brain's falsifiers alone (noted in the rationale) — a
+  bad enrichment call never blocks a graph-confirmed buy and never stores garbage.
 - ds4 backend torn down in a `finally` bracketing both overnight stages.
 
 ## Testing
@@ -223,14 +253,19 @@ weekday 16:25 (existing)
   untouched); non-empty context appears in the fundamentals + bull/bear prompts.
 - **Adapter:** `propagate(..., research_context=...)` threads through to
   `create_initial_state`; `StubPipelineAdapter` ignores it.
-- **Verdict mapping:** BUY→confirm, HOLD/SELL→reject.
-- **Merge:** confirm sets status `open`, applies graph conviction, appends
-  validated falsifiers, attaches `VettingResult`; reject sets `rejected`, appends
-  nothing, still attaches provenance.
+- **Verdict + conviction mapping (native rating):** Buy→confirm/high,
+  Overweight→confirm/medium, Hold/Underweight/Sell→reject — the fine rating is
+  preserved (not collapsed) on the vetting path.
+- **Merge:** confirm sets status `open`, applies the mapped conviction, appends
+  validated risk falsifiers, attaches `VettingResult`; reject sets `rejected`,
+  appends nothing, still attaches provenance.
 - **Gate:** a `pending_vetting` memo is NOT returned by `open_memos()` (not traded);
   becomes tradeable only after confirm. `_entry_pass` unchanged behavior against
   the new lifecycle.
-- **Validation:** malformed enrichment → memo stays `pending_vetting`, no promote.
+- **Falsifier extraction:** well-formed debate falsifiers are validated + appended;
+  prose-only/malformed ones dropped; a total extraction failure still confirms
+  (brain falsifiers only) with a rationale note — never blocks the buy, never
+  stores garbage.
 - **Scheduling:** vetting runs after drain within the deadline, deadline/shutdown
   stops between memos, error recorded not raised, ds4 shutdown in finally.
 - **Store:** `pending_vetting_memos()` returns only pending-vetting buys oldest-first.
@@ -258,5 +293,11 @@ the vetting stage promotes memos. Therefore:
   brain won't even reach vetting (no buy memo). The graph is more robust
   (incremental tool state) but not immune; failures leave the memo
   `pending_vetting`, surfaced by the audit event.
-- **Conviction source.** Graph conviction comes from a bounded structured pass over
-  the risk debate, not the brain's tier — deliberate (the debate is the decider).
+- **Conviction source.** Conviction comes from the graph's **native 5-tier rating**
+  (Buy→high, Overweight→medium) — not the brain's tier and not a separate LLM pass.
+  The debate's manager already grades conviction; we stop discarding it (the adapter
+  currently collapses it to BUY/HOLD/SELL). The Buy/Overweight→confirm strictness is
+  a tunable knob.
+- **Two ds4 LLM calls per vetted name.** The graph run (native rating + conviction,
+  free) plus one bounded risk-falsifier extraction pass (option B). The extraction
+  is additive and never blocks a confirm.

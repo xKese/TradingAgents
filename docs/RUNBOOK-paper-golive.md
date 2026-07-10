@@ -159,15 +159,20 @@ spendable buying power (currently $0). The first 20 live fills are code-capped a
 
 ## Deploy (live worktree)
 
-The daemon and the weekly screen run from `~/Code/TradingAgents-live` (a git
-worktree pinned to `main`, with its own venv) — NEVER from the dev checkout.
-This is the fix for the 2026-07-06 deploy hazard: a branch switch in the dev
-checkout used to change what the daemon ran on its next relaunch. Both plists
-(`com.tradingagents.ops`, `com.tradingagents.screen`) point at the live
-worktree's interpreter and WorkingDirectory; their `EnvironmentVariables`
-blocks carry the notify/heartbeat/LLM credentials — re-rendering with
-`install-service`/`install-screen-service` resets that block to template
-defaults, so re-apply the env keys after any re-render.
+The daemon runs from `~/Code/TradingAgents-live` (a git worktree pinned to
+`main`, with its own venv) — NEVER from the dev checkout. This is the fix for
+the 2026-07-06 deploy hazard: a branch switch in the dev checkout used to
+change what the daemon ran on its next relaunch. The `com.tradingagents.ops`
+plist points at the live worktree's interpreter and WorkingDirectory; its
+`EnvironmentVariables` block carries the notify/heartbeat/LLM credentials —
+re-rendering with `install-service` resets that block to template defaults,
+so re-apply the env keys after any re-render.
+
+The screen + research drain now run inside this same always-on service (see
+[`docs/research_cadence.md`](research_cadence.md)) rather than as separate
+plists. The two Saturday plists (`com.tradingagents.screen`,
+`com.tradingagents.research`) are retired; if either is still loaded on the
+deploy machine, `launchctl unload` it and delete the plist file.
 
 Redeploy after merging to main:
 
@@ -175,9 +180,10 @@ Redeploy after merging to main:
     ~/Code/TradingAgents-live/.venv/bin/pip install -e ~/Code/TradingAgents-live   # only if deps changed
     launchctl kickstart -k gui/$(id -u)/com.tradingagents.ops
 
-The screen job (`com.tradingagents.screen`, Saturday 10:00 local) picks up
-new code on its next run automatically; kickstart it manually to run early.
-Rule: the dev checkout (`~/Code/TradingAgents`) never runs services.
+Kickstarting `com.tradingagents.ops` picks up new code immediately; otherwise
+it takes effect at the next scheduled tick, including the nightly 00:00 ET
+`research_overnight` job. Rule: the dev checkout (`~/Code/TradingAgents`)
+never runs services.
 
 Momentum sunset review due ~2026-08-30 (8-week paper gate): keep / pause /
 retire on its track record. See

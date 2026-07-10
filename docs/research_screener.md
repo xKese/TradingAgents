@@ -22,9 +22,11 @@ First run of a quarter is slow (one yfinance history call per universe name
 for ADV, then per-name company-facts + price history). Subsequent runs reuse
 the quarterly universe cache. Smoke-test with `--limit 25 --dry-run`.
 
-Cadence: weekly, outside market hours. Example launchd/cron: Saturday 09:00
-local. There is deliberately no always-on service for this yet — the
-monitoring loop is build-order step 6.
+Cadence: every `research_screen_interval_days` (default 3) days, as the
+screen half of the nightly `research_overnight` job inside the always-on
+`ops run` service (00:00 America/New_York) — see
+[`docs/research_cadence.md`](research_cadence.md). `ops screen` is also a
+standalone command for manual/debug runs, ignoring that gate.
 
 ## Env vars
 

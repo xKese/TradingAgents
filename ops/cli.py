@@ -92,86 +92,6 @@ def install_service(output_path: str, log_dir: str) -> None:
     )
 
 
-@cli.command("install-screen-service")
-@click.option("--output", "output_path",
-              default="~/Library/LaunchAgents/com.tradingagents.screen.plist",
-              show_default=True, type=click.Path(dir_okay=False),
-              help="Where to write the rendered screen launchd plist")
-@click.option("--log-dir", "log_dir",
-              default="~/.local/state/tradingagents/logs", show_default=True,
-              help="Directory for the screen job's stdout/stderr logs")
-def install_screen_service(output_path: str, log_dir: str) -> None:
-    """Render the weekly screen launchd plist and print the load command.
-
-    Writes the file only — never invokes launchctl."""
-    import os
-    import sys
-    from pathlib import Path
-
-    from ops.deploy import render_screen_plist
-
-    sec_edgar = os.environ.get("SEC_EDGAR_USER_AGENT", "").strip()
-    if not sec_edgar:
-        # An empty value baked into the plist makes every Saturday run die
-        # with EdgarNotConfiguredError before it can even notify.
-        raise click.ClickException(
-            "SEC_EDGAR_USER_AGENT is not set — the weekly screen would fail "
-            "on every run. Export it first (SEC fair-access format: "
-            "'Name email@example.com'), then re-run."
-        )
-    repo_root = str(Path(__file__).resolve().parents[1])
-    log_dir = os.path.abspath(os.path.expanduser(log_dir))
-    rendered = render_screen_plist(
-        python_path=sys.executable,
-        repo_dir=repo_root,
-        log_dir=log_dir,
-        sec_edgar_user_agent=sec_edgar,
-    )
-    _install_plist(rendered, output_path, log_dir)
-
-
-@cli.command("install-research-service")
-@click.option("--output", "output_path",
-              default="~/Library/LaunchAgents/com.tradingagents.research.plist",
-              show_default=True, type=click.Path(dir_okay=False),
-              help="Where to write the rendered research launchd plist")
-@click.option("--log-dir", "log_dir",
-              default="~/.local/state/tradingagents/logs", show_default=True,
-              help="Directory for the research job's stdout/stderr logs")
-def install_research_service(output_path: str, log_dir: str) -> None:
-    """Render the Saturday-12:00 research-drain launchd plist and print the
-    load command. Runs two hours after install-screen-service's Saturday
-    10:00 job, draining the pending-hits queue it fills.
-
-    Writes the file only — never invokes launchctl."""
-    import os
-    import sys
-    from pathlib import Path
-
-    from ops.deploy import render_research_plist
-
-    sec_edgar = os.environ.get("SEC_EDGAR_USER_AGENT", "").strip()
-    if not sec_edgar:
-        # Same guard as install-screen-service: an empty value baked into
-        # the plist makes every Saturday research batch die with
-        # EdgarNotConfiguredError before it can even notify.
-        raise click.ClickException(
-            "SEC_EDGAR_USER_AGENT is not set — the weekly research job would "
-            "fail on every run. Export it first (SEC fair-access format: "
-            "'Name email@example.com'), then re-run."
-        )
-    repo_root = str(Path(__file__).resolve().parents[1])
-    log_dir = os.path.abspath(os.path.expanduser(log_dir))
-    rendered = render_research_plist(
-        python_path=sys.executable,
-        repo_dir=repo_root,
-        log_dir=log_dir,
-        sec_edgar_user_agent=sec_edgar,
-        managed_backend=os.environ.get("OPS_LLM_MANAGED_BACKEND", ""),
-    )
-    _install_plist(rendered, output_path, log_dir)
-
-
 @cli.command("notify-once")
 @click.option("--journal", "journal_path", default=None,
               type=click.Path(dir_okay=False),
@@ -399,7 +319,7 @@ def research_write_off(symbol: str, price: str, note: str | None) -> None:
 def research_run(max_names: int, do_notify: bool = False) -> None:
     """Deep-research pending screen hits into structured memos (local models)."""
     from ops.llm_backend import build_managed_backend, load_managed_backend_config
-    from ops.research.brain import ResearchError, research_hit
+    from ops.research.drain import drain_pending
     from ops.research.models import build_stage_llm
     from ops.research.store import ScreenStore
     from tradingagents.memos.store import MemoStore
@@ -430,32 +350,13 @@ def research_run(max_names: int, do_notify: bool = False) -> None:
         backend = build_managed_backend(load_managed_backend_config())
         try:
             backend.ensure_up()
-            for hit in hits:
-                try:
-                    outcome = research_hit(
-                        hit, evidence_llm=evidence_llm, thesis_llm=thesis_llm,
-                        memo_store=memo_store,
-                        thesis_model_spec=config.research_thesis_model,
-                    )
-                except ResearchError:
-                    raise  # configuration problem: abort the whole batch
-                except Exception as exc:
-                    store.mark_failed(hit["id"])
-                    failed += 1
-                    click.echo(f"{hit['symbol']}: FAILED ({type(exc).__name__}: {exc})")
-                    continue
-                if outcome.status == "researched":
-                    store.mark_researched(hit["id"])
-                    researched += 1
-                    click.echo(
-                        f"{outcome.symbol}: memo {outcome.memo_id} "
-                        f"({outcome.recommendation}; evidence {outcome.evidence_kept} kept"
-                        f"/{outcome.evidence_dropped} dropped)"
-                    )
-                else:
-                    store.mark_failed(hit["id"])
-                    failed += 1
-                    click.echo(f"{outcome.symbol}: FAILED — " + "; ".join(outcome.errors))
+            summary = drain_pending(
+                store=store, memo_store=memo_store,
+                evidence_llm=evidence_llm, thesis_llm=thesis_llm,
+                thesis_model_spec=config.research_thesis_model,
+                max_names=max_names, echo=click.echo,
+            )
+            researched, failed = summary.researched, summary.failed
         finally:
             backend.shutdown()
     except edgar.EdgarNotConfiguredError as exc:
@@ -503,6 +404,57 @@ def research_run(max_names: int, do_notify: bool = False) -> None:
         ))
     if failed == len(hits):
         raise SystemExit(1)
+
+
+@research.command("kick")
+def research_kick() -> None:
+    """One-shot demo: screen now (ignore the 3-day gate), drain the whole
+    pending queue, then run the research trade step — so paper positions
+    appear in a single manual run. Independent of the nightly schedule."""
+    from datetime import date
+
+    from ops.llm_backend import build_managed_backend, load_managed_backend_config
+    from ops.quotes import make_yfinance_quote_source
+    from ops.research.drain import drain_pending
+    from ops.research.models import build_stage_llm
+    from ops.research.run import run_screen
+    from ops.research.store import ScreenStore
+    from ops.research.trading import trade_research_sleeve
+    from tradingagents.dataflows import edgar
+    from tradingagents.memos.store import MemoStore
+
+    config = load_config()
+    edgar.get_user_agent()  # fail fast on missing SEC user agent
+
+    click.echo("kick: screening...")
+    run_screen(config=config, asof=date.today())
+
+    store = ScreenStore(config.screen_store_path)
+    memo_store = MemoStore(config.memo_store_path)
+    evidence_llm = build_stage_llm(config.research_evidence_model)
+    thesis_llm = build_stage_llm(config.research_thesis_model)
+    backend = build_managed_backend(load_managed_backend_config())
+    try:
+        backend.ensure_up()
+        summary = drain_pending(
+            store=store, memo_store=memo_store,
+            evidence_llm=evidence_llm, thesis_llm=thesis_llm,
+            thesis_model_spec=config.research_thesis_model, echo=click.echo,
+        )
+    finally:
+        backend.shutdown()
+    click.echo(f"kick: drained {summary.researched} researched, "
+               f"{summary.failed} failed")
+
+    with Journal(config.research_journal_path) as research_journal, \
+            Journal(config.journal_path) as main_journal:
+        trade_research_sleeve(
+            memo_store=memo_store, research_journal=research_journal,
+            main_journal=main_journal,
+            quote_source=make_yfinance_quote_source(),
+            starting_cash=config.research_starting_cash, asof=date.today(),
+        )
+    click.echo("kick: done")
 
 
 @research.command("monitor")

@@ -654,3 +654,175 @@ def test_daily_overview_tick_writes_file_and_records_gate_event(tmp_path, monkey
         assert len(gate_events_again) == 1
     finally:
         journal.close()
+
+
+def test_overnight_tick_screens_when_due_then_drains(monkeypatch, tmp_path):
+    import ops.main as main_mod
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    class _NoBackend:
+        def ensure_up(self): pass
+        def shutdown(self): pass
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: _NoBackend())
+
+    from datetime import date as _date
+
+    from ops.research.store import ScreenStore
+
+    events_seen = []
+
+    def _fake_screen(**kw):
+        events_seen.append("screen")
+        # A real screen would enqueue hits; the empty-queue guard added in
+        # _research_overnight_tick short-circuits before touching ds4 if the
+        # queue is still empty after screening, so simulate a hit here to
+        # reach the drain step.
+        ScreenStore(str(tmp_path / "screen.sqlite")).enqueue_hit(
+            "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="screen",
+        )
+
+    monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
+    monkeypatch.setattr("ops.research.drain.drain_pending",
+                        lambda **kw: (events_seen.append("drain"),
+                                      DrainSummary(3, 0, 0, False))[1])
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        # No prior screen run -> screen is due.
+        main_mod._research_overnight_tick(journal, config)
+        assert events_seen == ["screen", "drain"]
+        assert journal.has_event_today(main_mod.events.KIND_RESEARCH_DRAIN_RUN)
+
+
+def test_overnight_tick_skips_screen_when_recent(monkeypatch, tmp_path):
+    import ops.main as main_mod
+    from datetime import date
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    class _NoBackend:
+        def ensure_up(self): pass
+        def shutdown(self): pass
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: _NoBackend())
+
+    # A screen run recorded just now -> interval (3 days) not elapsed.
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=date.today(), universe_size=0, results=[])
+    # Seed a pending hit from a prior run so the queue isn't empty — the
+    # empty-queue guard would otherwise skip the drain entirely, which is
+    # not what this test is exercising (it's testing the screen-skip path).
+    store.enqueue_hit("AAPL", asof=date.today(), payload={"symbol": "AAPL"}, source="test")
+
+    seen = []
+    monkeypatch.setattr("ops.research.run.run_screen",
+                        lambda **kw: seen.append("screen"))
+    monkeypatch.setattr("ops.research.drain.drain_pending",
+                        lambda **kw: (seen.append("drain"),
+                                      DrainSummary(0, 0, 0, False))[1])
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+    assert seen == ["drain"]  # screened recently -> only drain
+
+
+def test_overnight_tick_empty_queue_skips_backend(monkeypatch, tmp_path):
+    """The ~2-of-3 nights case: no screen due and the pending queue is
+    already empty. The tick must record a zeroed drain_run event and return
+    before ever touching the ds4 backend (ensure_up must not be called)."""
+    import ops.main as main_mod
+    from datetime import date
+    from ops.config import load_config
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    class _SpyBackend:
+        def ensure_up(self):
+            raise AssertionError("ensure_up must not be called on an empty queue")
+
+        def shutdown(self):
+            raise AssertionError("shutdown must not be called on an empty queue")
+
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: _SpyBackend())
+
+    # A screen run recorded just now -> interval (3 days) not elapsed, so
+    # screen is skipped. No hits were ever enqueued -> queue is empty.
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=date.today(), universe_size=0, results=[])
+    assert store.pending_hits() == []
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+
+        drain_events = [
+            e for e in journal.read_events()
+            if e["kind"] == main_mod.events.KIND_RESEARCH_DRAIN_RUN
+        ]
+        assert len(drain_events) == 1
+        payload = drain_events[0]["payload"]
+        assert payload["researched"] == 0
+        assert payload["failed"] == 0
+        assert payload["still_pending"] == 0
+        assert payload["hit_deadline"] is False
+        assert payload["screened_this_run"] is False
+
+        error_events = [
+            e for e in journal.read_events()
+            if e["kind"] == main_mod.events.KIND_RESEARCH_DRAIN_ERROR
+        ]
+        assert error_events == []
+
+
+def test_overnight_tick_records_error_event_not_raises(monkeypatch, tmp_path):
+    import ops.main as main_mod
+    from ops.config import load_config
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.run.run_screen",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)  # must not raise
+        assert journal.has_event_today(main_mod.events.KIND_RESEARCH_DRAIN_ERROR)
+
+
+def test_full_scheduler_registers_overnight_job():
+    """Mirrors test_research_trade_job_registered_and_gated — a MagicMock
+    journal/config is enough to verify registration without touching the
+    paper-trading _startup path (real backend/broker wiring is out of scope
+    here; that path is exercised elsewhere)."""
+    from unittest.mock import MagicMock
+    from ops.main import _start_full_scheduler
+
+    sched = _start_full_scheduler(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        config=MagicMock(),
+    )
+    try:
+        job = sched.get_job("research_overnight")
+        assert job is not None
+    finally:
+        sched.shutdown(wait=False)

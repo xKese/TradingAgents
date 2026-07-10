@@ -12,10 +12,11 @@ section: the question was tested, not assumed.
 The **momentum pipeline** is the upstream TradingAgents multi-agent graph — 4
 analysts + a bull/bear + risk debate over LLM tool-calls — and it emits a fast
 daily **BUY/HOLD/SELL signal**. The **research brain** is a purpose-built
-two-stage pipeline that emits a deep weekly **structured memo** (thesis, cited
-evidence, machine-checkable falsifiers, targets, conviction tier). They are
-different tools for different jobs. **Everything downstream of their output is
-shared and does not care which produced it.**
+two-stage pipeline that emits a deep **structured memo** (thesis, cited
+evidence, machine-checkable falsifiers, targets, conviction tier) on an
+every-3-days screen + nightly-drain cadence. They are different tools for
+different jobs. **Everything downstream of their output is shared and does
+not care which produced it.**
 
 ## The shared spine (producer-agnostic)
 
@@ -59,8 +60,11 @@ shared base.** The split is at the *reasoning* layer only.
   (2) **bear-case-first thesis + memo emission** (`bind_structured` into
   `MemoDraft`). Plain Python decides what to read; the LLM only ever answers
   bounded structured-output prompts. **No agentic tool loop.**
-- **Its job:** a deep **structured memo** for one screener passer, **weekly**
-  (Saturday, `ops research run --max-names 10`).
+- **Its job:** a deep **structured memo** for one screener passer. The screen
+  re-runs every `research_screen_interval_days` (default 3) days, and a
+  nightly 00:00–08:00 America/New_York deadline-boxed drain inside `ops run`
+  works through the resulting queue. See
+  [`docs/research_cadence.md`](research_cadence.md) for the full runbook.
 - **Its output:** a validated `Memo` — thesis, cited evidence, machine-checkable
   falsifiers, price targets, conviction tier — or a rejection (garbage is not
   stored).
@@ -84,8 +88,9 @@ graph on ds4 @ 1M context:
 
 The tool-calling loop **converges cleanly** — bounded, decelerating (not
 spiralling), robust even when a tool fails (Reddit rate-limited mid-run and the
-loop continued). At 10 names/Saturday that is ~5 hours — affordable. So "ds4
-can't loop on tools" is **false** and is not the reason for the split.
+loop continued). At ~30 min/name that is affordable inside the nightly
+00:00–08:00 drain window. So "ds4 can't loop on tools" is **false** and is
+not the reason for the split.
 
 ### The real reason: different jobs + measured efficiency
 
@@ -121,8 +126,8 @@ To stop the conflation, name them explicitly:
 
 - **"the momentum pipeline"** or **"the multi-agent graph"** — the daily
   BUY/HOLD/SELL signal (`tradingagents/graph/`).
-- **"the research brain"** or **"the two-stage memo pipeline"** — the weekly
-  structured memo (`ops/research/brain.py`).
+- **"the research brain"** or **"the two-stage memo pipeline"** — the
+  structured memo, every 3 days + nightly drain (`ops/research/brain.py`).
 
 Avoid the bare phrase "the deep research pipeline" — it is ambiguous.
 

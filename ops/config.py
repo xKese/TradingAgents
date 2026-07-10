@@ -90,6 +90,9 @@ class OpsConfig:
     memo_store_path: str = field(default_factory=_default_memo_store_path)
     research_evidence_model: str = _DEFAULT_RESEARCH_MODEL
     research_thesis_model: str = _DEFAULT_RESEARCH_MODEL
+    research_screen_interval_days: int = 3
+    research_drain_deadline_hour: int = 8   # local America/New_York
+    research_screen_ttl_days: int = 7        # skip symbols screened within this window
     # Cost dial: max full-pipeline (LLM) analyses per day; risk is capped separately.
     daily_analysis_budget: int = 8
     # Exit engine (spec Component 6). Entry is top-daily_analysis_budget;
@@ -159,6 +162,16 @@ class OpsConfig:
             raise ValueError(
                 f"research_starting_cash must be > 0, got {self.research_starting_cash}"
             )
+        for fname in ("research_screen_interval_days", "research_screen_ttl_days"):
+            val = getattr(self, fname)
+            if val <= 0:
+                raise ValueError(f"{fname} must be > 0, got {val}")
+        if not (0 <= self.research_drain_deadline_hour < 9):
+            raise ValueError(
+                "research_drain_deadline_hour must be in 0..8 — the overnight "
+                "drain must free ds4 before the momentum orchestrator's first "
+                f"tick at 09:00 America/New_York, got {self.research_drain_deadline_hour}"
+            )
         from ops.research.models import parse_model_spec
 
         for fname in ("research_evidence_model", "research_thesis_model"):
@@ -203,6 +216,18 @@ def load_config() -> OpsConfig:
     max_open_positions = _env_int("OPS_MAX_OPEN_POSITIONS")
     if max_open_positions is not None:
         kwargs["max_open_positions"] = max_open_positions
+
+    screen_interval = _env_int("OPS_RESEARCH_SCREEN_INTERVAL_DAYS")
+    if screen_interval is not None:
+        kwargs["research_screen_interval_days"] = screen_interval
+
+    drain_deadline_hour = _env_int("OPS_RESEARCH_DRAIN_DEADLINE_HOUR")
+    if drain_deadline_hour is not None:
+        kwargs["research_drain_deadline_hour"] = drain_deadline_hour
+
+    screen_ttl = _env_int("OPS_RESEARCH_SCREEN_TTL_DAYS")
+    if screen_ttl is not None:
+        kwargs["research_screen_ttl_days"] = screen_ttl
 
     cash_reserve_pct = _env_decimal("OPS_CASH_RESERVE_PCT")
     if cash_reserve_pct is not None:

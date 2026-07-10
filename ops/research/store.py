@@ -8,7 +8,9 @@ Hit lifecycle: ``pending`` (awaiting deep research — build-order step 5
 consumes these) -> ``researched`` (a memo exists) | ``failed`` (research
 rejected) | ``expired`` (went stale). A pending symbol is never duplicated by
 later runs; once researched/failed/expired it may be queued again by a fresh
-screen pass.
+screen pass — unless a positive ``ttl_days`` is supplied (as ``run_screen``
+does via ``research_screen_ttl_days``, default 7), in which case a symbol
+screened within that window is not re-queued regardless of status.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import json
 import sqlite3
 import threading
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS screen_hits (
     UNIQUE(run_id, symbol)
 );
 CREATE INDEX IF NOT EXISTS idx_hits_status ON screen_hits(status);
+CREATE INDEX IF NOT EXISTS idx_hits_symbol_created ON screen_hits(symbol, created_at);
 """
 
 
@@ -66,9 +69,21 @@ class ScreenStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _screened_within(self, conn, symbol: str, ttl_days: int) -> bool:
+        """True if any screen_hit for this symbol (any status) is newer than
+        ttl_days. ttl_days <= 0 disables the check."""
+        if ttl_days <= 0:
+            return False
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
+        row = conn.execute(
+            "SELECT 1 FROM screen_hits WHERE symbol = ? AND created_at >= ? LIMIT 1",
+            (symbol, cutoff),
+        ).fetchone()
+        return row is not None
+
     def record_run(
         self, *, asof: date, universe_size: int, results: list[ScreenResult],
-        coverage: dict | None = None,
+        coverage: dict | None = None, ttl_days: int = 0,
     ) -> str:
         run_id = f"screen-{asof.isoformat()}-{uuid4().hex[:8]}"
         passed = [r for r in results if r.passed]
@@ -85,7 +100,7 @@ class ScreenStore:
                     "SELECT 1 FROM screen_hits WHERE symbol = ? AND status = 'pending' LIMIT 1",
                     (result.symbol,),
                 ).fetchone()
-                if already_pending:
+                if already_pending or self._screened_within(conn, result.symbol, ttl_days):
                     continue
                 conn.execute(
                     "INSERT INTO screen_hits (run_id, symbol, asof, status, payload, created_at)"
@@ -99,12 +114,16 @@ class ScreenStore:
 
     def enqueue_hit(
         self, symbol: str, *, asof: date, payload: dict, source: str = "monitor",
+        ttl_days: int = 0,
     ) -> int | None:
         """Queue one ad-hoc research hit (monitoring escalation path).
 
         Same dedupe rule as record_run: a symbol already pending is not
-        re-queued. The payload must be _screen_summary-compatible — the
-        caller (ops/research/monitor.py) owns that contract.
+        re-queued. When a positive ``ttl_days`` is supplied, a symbol
+        screened within that window is also skipped regardless of status
+        (same TTL semantics as record_run). The payload must be
+        _screen_summary-compatible — the caller (ops/research/monitor.py)
+        owns that contract.
         """
         symbol = symbol.upper()
         with self._lock, self._connect() as conn:
@@ -112,7 +131,7 @@ class ScreenStore:
                 "SELECT 1 FROM screen_hits WHERE symbol = ? AND status = 'pending'",
                 (symbol,),
             ).fetchone()
-            if pending:
+            if pending or self._screened_within(conn, symbol, ttl_days):
                 return None
             run_id = f"{source}-{asof.isoformat()}-{uuid4().hex[:8]}"
             now = _now_iso()

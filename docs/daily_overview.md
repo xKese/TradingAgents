@@ -10,11 +10,11 @@ reachability.
 | job | where | when | what |
 |---|---|---|---|
 | daily_overview | ops daemon (APScheduler) | 16:35 ET mon-fri | full-day cross-sleeve overview |
-| daily_overview_saturday | ops daemon (APScheduler) | Sat 18:00 ET | same overview, after the Saturday research brain (screen 10:00, research run 12:00) |
+| daily_overview_saturday | ops daemon (APScheduler) | Sat 18:00 ET | same overview, timed after that morning's `research_overnight` drain (00:00-08:00 ET, see docs/research_cadence.md) so weekend research activity isn't invisible until Monday |
 | ops digest | manual | — | on-demand overview for any date; debug/inspection companion |
 
 Both daemon jobs call the same `_daily_overview_tick`; the daily-vs-Saturday split just
-puts the Saturday run after that day's research batch jobs so it can see them. Both jobs
+puts the Saturday run after that morning's `research_overnight` drain so it can see it. Both jobs
 are registered only in the full scheduler (`_start_full_scheduler`) and only when a
 `config` is available — they are **not** registered in the degraded guardian-only
 scheduler (`_start_guardian_only`), so a broker-down day still gets guardian stop-checks

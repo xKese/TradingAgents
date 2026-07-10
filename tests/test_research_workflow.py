@@ -18,6 +18,7 @@ from tradingagents.research_platform.research_workflow import (
     run_ticker_research,
 )
 from tradingagents.research_platform.risk_contracts import RiskDecision, RiskPolicy
+from tradingagents.research_platform.run_archive import JsonResearchRunArchive
 
 
 class FakeProvider:
@@ -119,6 +120,7 @@ def _signal() -> TradeSignal:
 def test_run_ticker_research_fetches_stores_reviews_backtests_and_writes_report(tmp_path):
     provider = FakeProvider()
     store = JsonArtifactStore(tmp_path / "cache")
+    archive = JsonResearchRunArchive(tmp_path / "cache")
 
     result = run_ticker_research(
         config=ResearchWorkflowConfig(
@@ -132,6 +134,7 @@ def test_run_ticker_research_fetches_stores_reviews_backtests_and_writes_report(
         signal=_signal(),
         risk_policy=RiskPolicy(max_single_position_pct=0.10),
         output_dir=tmp_path / "reports",
+        archive=archive,
     )
 
     identity, start, end, as_of = provider.price_request
@@ -141,6 +144,8 @@ def test_run_ticker_research_fetches_stores_reviews_backtests_and_writes_report(
     assert as_of == date(2026, 1, 5)
     assert result.report_path is not None
     assert result.report_path.exists()
+    assert result.archived_run is not None
+    assert archive.load_latest_bundle("NVDA") == result.bundle
     assert "## Market Snapshot" in result.markdown
     assert "## Risk Review" in result.markdown
     assert result.bundle.risk_review.decision == RiskDecision.REDUCE

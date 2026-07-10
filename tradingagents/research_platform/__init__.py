@@ -43,6 +43,7 @@ from .risk_contracts import (
     RiskSeverity,
     evaluate_basic_risk,
 )
+from .run_archive import JsonResearchRunArchive, ResearchRunArchive, ResearchRunSummary
 
 __all__ = [
     "AgentOutputEnvelope",
@@ -68,6 +69,9 @@ __all__ = [
     "InvestmentThesis",
     "NewsItem",
     "PriceBar",
+    "JsonResearchRunArchive",
+    "ResearchRunArchive",
+    "ResearchRunSummary",
     "RiskDecision",
     "RiskLimitBreach",
     "RiskPolicy",

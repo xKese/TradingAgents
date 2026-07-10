@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +37,7 @@ from .research_report import (
     write_research_report,
 )
 from .risk_contracts import RiskPolicy, RiskReview, evaluate_basic_risk
+from .run_archive import ResearchRunArchive, ResearchRunSummary
 
 
 class ResearchWorkflowConfig(BaseModel):
@@ -63,6 +64,7 @@ class ResearchWorkflowResult(BaseModel):
     bundle: ResearchReportBundle
     markdown: str
     report_path: Path | None = None
+    archived_run: ResearchRunSummary | None = None
 
 
 def run_ticker_research(
@@ -73,6 +75,7 @@ def run_ticker_research(
     signal: TradeSignal | None = None,
     risk_policy: RiskPolicy | None = None,
     output_dir: str | Path | None = None,
+    archive: ResearchRunArchive | None = None,
 ) -> ResearchWorkflowResult:
     """Fetch data, build artifacts, optionally review/backtest, and render a report."""
 
@@ -163,7 +166,13 @@ def run_ticker_research(
     )
     markdown = render_research_report(bundle)
     report_path = write_research_report(bundle, output_dir) if output_dir is not None else None
-    return ResearchWorkflowResult(bundle=bundle, markdown=markdown, report_path=report_path)
+    archived_run = archive.save_bundle(bundle) if archive is not None else None
+    return ResearchWorkflowResult(
+        bundle=bundle,
+        markdown=markdown,
+        report_path=report_path,
+        archived_run=archived_run,
+    )
 
 
 def build_agent_outputs(

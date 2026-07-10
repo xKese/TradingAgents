@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .artifact_store import JsonArtifactStore
+from .run_archive import JsonResearchRunArchive
 
 _EARLIEST_DATE = date(1900, 1, 1)
 
@@ -29,6 +30,9 @@ def discover_cached_symbols(store: JsonArtifactStore) -> list[str]:
         directory = store.root / kind
         if directory.exists():
             symbols.update(path.stem for path in directory.glob("*.jsonl"))
+    runs_directory = store.root / "runs"
+    if runs_directory.exists():
+        symbols.update(path.name for path in runs_directory.iterdir() if path.is_dir())
     return sorted(symbols)
 
 
@@ -60,15 +64,17 @@ def build_cockpit_snapshot(store: JsonArtifactStore, symbol: str) -> dict[str, A
 
     market = _market_summary(bars)
     latest_fundamentals = fundamentals[-1] if fundamentals else None
+    latest_run = JsonResearchRunArchive(store.root).load_latest_bundle(normalized_symbol)
     return {
         "symbol": normalized_symbol,
-        "has_data": bool(bars or fundamentals or news or agent_outputs),
+        "has_data": bool(bars or fundamentals or news or agent_outputs or latest_run),
         "market": market,
         "fundamentals": (
             latest_fundamentals.model_dump(mode="json") if latest_fundamentals is not None else None
         ),
         "news": [item.model_dump(mode="json") for item in news[:12]],
         "agent_outputs": [item.model_dump(mode="json") for item in agent_outputs[:12]],
+        "latest_run": _run_summary(latest_run),
         "artifact_counts": {
             "price_bars": len(bars),
             "fundamental_snapshots": len(fundamentals),
@@ -97,6 +103,31 @@ def _market_summary(bars: list[Any]) -> dict[str, Any] | None:
         ],
     }
 
+
+
+def _run_summary(bundle: Any | None) -> dict[str, Any] | None:
+    if bundle is None:
+        return None
+
+    backtest = bundle.backtest_result
+    return {
+        "as_of_date": bundle.as_of_date.isoformat(),
+        "generated_at": bundle.generated_at.isoformat(),
+        "signal": bundle.signal.model_dump(mode="json") if bundle.signal is not None else None,
+        "risk_review": (
+            bundle.risk_review.model_dump(mode="json") if bundle.risk_review is not None else None
+        ),
+        "backtest": (
+            {
+                "metrics": backtest.metrics.model_dump(mode="json"),
+                "trade_count": len(backtest.trades),
+                "round_trip_count": len(backtest.round_trips),
+                "warning_count": len(backtest.warning_events) or len(backtest.warnings),
+            }
+            if backtest is not None
+            else None
+        ),
+    }
 
 class CockpitRequestHandler(BaseHTTPRequestHandler):
     """Serve the local cockpit and its read-only JSON endpoints."""
@@ -238,6 +269,8 @@ _APP_HTML = r'''<!doctype html>
       <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
       <div class="panel"><div class="panel-title"><h2>Structured Research</h2><span class="panel-meta" id="agentsMeta"></span></div><ul class="items" id="agents"></ul></div>
       <div class="panel"><div class="panel-title"><h2>News</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
+      <div class="panel"><div class="panel-title"><h2>Decision and Risk</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Backtest Snapshot</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
     </section>
   </main>
   <script>
@@ -248,13 +281,14 @@ _APP_HTML = r'''<!doctype html>
     const escape = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[char]));
     function renderMetrics(snapshot) {
       const market = snapshot.market;
+      const latestRun = snapshot.latest_run;
       const cards = market ? [
         ['Last Close', money(market.last_close, market.currency), market.last_date],
         ['Period Return', pct(market.period_return_pct), `${market.bar_count} cached bars`, market.period_return_pct >= 0 ? 'positive' : 'negative'],
         ['Latest Volume', market.latest_volume == null ? 'N/A' : Number(market.latest_volume).toLocaleString(), market.first_date],
-        ['Research Artifacts', Object.values(snapshot.artifact_counts).reduce((a, b) => a + b, 0), `${snapshot.artifact_counts.agent_outputs} structured outputs`]
+        ['Latest Decision', latestRun?.risk_review?.decision || latestRun?.signal?.direction || 'N/A', latestRun ? `Archived ${latestRun.as_of_date.slice(0,10)}` : `${snapshot.artifact_counts.agent_outputs} structured outputs`]
       ] : [
-        ['Last Close', 'N/A', 'No cached price data'], ['Period Return', 'N/A', 'No cached price data'], ['Latest Volume', 'N/A', 'No cached price data'], ['Research Artifacts', 0, 'Run local research to populate cache']
+        ['Last Close', 'N/A', 'No cached price data'], ['Period Return', 'N/A', 'No cached price data'], ['Latest Volume', 'N/A', 'No cached price data'], ['Latest Decision', latestRun?.risk_review?.decision || latestRun?.signal?.direction || 'N/A', latestRun ? `Archived ${latestRun.as_of_date.slice(0,10)}` : 'No archived decision']
       ];
       $('metrics').innerHTML = cards.map(([label, value, detail, cls]) => `<div class="metric"><div class="metric-label">${escape(label)}</div><div class="metric-value ${cls || 'neutral'}">${escape(value)}</div><div class="metric-detail">${escape(detail)}</div></div>`).join('');
     }
@@ -273,21 +307,42 @@ _APP_HTML = r'''<!doctype html>
     }
     function renderAgents(outputs) {
       $('agentsMeta').textContent = `${outputs.length} available`;
-      $('agents').innerHTML = outputs.length ? outputs.map(output => `<li class="item"><div class="item-title">${escape(output.headline)}</div><div class="item-meta">${escape(output.agent_role)} · ${escape(output.output_type)} · ${escape(output.as_of_date)}</div><div class="item-summary">${escape(output.summary)}</div>${output.risks && output.risks.length ? `<div class="tags">${output.risks.slice(0,3).map(risk => `<span class="tag">Risk: ${escape(risk)}</span>`).join('')}</div>` : ''}</li>`).join('') : '<li class="empty">No structured agent outputs available.</li>';
+      $('agents').innerHTML = outputs.length ? outputs.map(output => `<li class="item"><div class="item-title">${escape(output.headline)}</div><div class="item-meta">${escape(output.agent_role)} - ${escape(output.output_type)} - ${escape(output.as_of_date)}</div><div class="item-summary">${escape(output.summary)}</div>${output.risks && output.risks.length ? `<div class="tags">${output.risks.slice(0,3).map(risk => `<span class="tag">Risk: ${escape(risk)}</span>`).join('')}</div>` : ''}</li>`).join('') : '<li class="empty">No structured agent outputs available.</li>';
     }
     function renderNews(items) {
       $('newsMeta').textContent = `${items.length} latest`;
-      $('news').innerHTML = items.length ? items.map(item => `<li class="item"><div class="item-title">${item.url ? `<a href="${escape(item.url)}" target="_blank" rel="noreferrer">${escape(item.title)}</a>` : escape(item.title)}</div><div class="item-meta">${escape(item.provider)} · ${escape(item.published_at.slice(0,10))}</div>${item.summary ? `<div class="item-summary">${escape(item.summary)}</div>` : ''}</li>`).join('') : '<li class="empty">No cached news available.</li>';
+      $('news').innerHTML = items.length ? items.map(item => `<li class="item"><div class="item-title">${item.url ? `<a href="${escape(item.url)}" target="_blank" rel="noreferrer">${escape(item.title)}</a>` : escape(item.title)}</div><div class="item-meta">${escape(item.provider)} - ${escape(item.published_at.slice(0,10))}</div>${item.summary ? `<div class="item-summary">${escape(item.summary)}</div>` : ''}</li>`).join('') : '<li class="empty">No cached news available.</li>';
+    }
+    function renderDecision(run) {
+      if (!run || !run.signal) { $('decision').innerHTML = '<div class="empty">No archived trade decision available.</div>'; $('decisionMeta').textContent = ''; return; }
+      const signal = run.signal, review = run.risk_review;
+      const rows = [
+        ['Signal', signal.direction], ['Horizon', signal.horizon], ['Confidence', pct(signal.confidence)], ['Proposed Position', pct(signal.proposed_position_pct)],
+        ['Risk Decision', review ? review.decision : 'Not reviewed'], ['Approved Position', review ? pct(review.approved_position_pct) : 'N/A'],
+        ['Risk Breaches', review ? review.breaches.length : 'N/A'], ['Run As Of', run.as_of_date.slice(0, 10)]
+      ];
+      $('decision').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
+      $('decisionMeta').textContent = `Generated ${run.generated_at.slice(0,16).replace('T', ' ')}`;
+    }
+    function renderBacktest(run) {
+      if (!run || !run.backtest) { $('backtest').innerHTML = '<div class="empty">No archived backtest available.</div>'; $('backtestMeta').textContent = ''; return; }
+      const backtest = run.backtest, metrics = backtest.metrics;
+      const rows = [
+        ['Total Return', pct(metrics.total_return_pct)], ['Max Drawdown', pct(metrics.max_drawdown_pct)], ['Sharpe', text(metrics.sharpe == null ? null : Number(metrics.sharpe).toFixed(2))], ['Win Rate', pct(metrics.win_rate_pct)],
+        ['Profit Factor', text(metrics.profit_factor == null ? null : Number(metrics.profit_factor).toFixed(2))], ['Trades', backtest.trade_count], ['Closed Round Trips', backtest.round_trip_count], ['Warnings', backtest.warning_count]
+      ];
+      $('backtest').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
+      $('backtestMeta').textContent = 'Latest archived run';
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No cached ticker found. Run the local research workflow with an artifact store first.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); return; }
+      if (!symbol) { $('status').textContent = 'No cached ticker found. Run the local research workflow with an artifact store first.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); return; }
       $('status').textContent = `Loading ${symbol} from local cache...`;
       try {
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local cache loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news);
+        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run);
       } catch (error) { $('status').textContent = 'Unable to load the local research cache.'; }
     }
     async function start() {

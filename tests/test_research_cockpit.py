@@ -1,8 +1,19 @@
 from datetime import date, datetime, timezone
 
 from tradingagents.research_platform.agent_artifacts import agent_output_from_analyst_note
-from tradingagents.research_platform.agent_contracts import AnalystNote, ConfidenceLevel
+from tradingagents.research_platform.agent_contracts import (
+    AnalystNote,
+    ConfidenceLevel,
+    TradeDirection,
+    TradeHorizon,
+    TradeSignal,
+)
 from tradingagents.research_platform.artifact_store import JsonArtifactStore
+from tradingagents.research_platform.backtest_contracts import (
+    BacktestConfig,
+    BacktestMetrics,
+    BacktestResult,
+)
 from tradingagents.research_platform.cockpit import build_cockpit_snapshot, discover_cached_symbols
 from tradingagents.research_platform.data_contracts import (
     DataProvenance,
@@ -10,6 +21,9 @@ from tradingagents.research_platform.data_contracts import (
     NewsItem,
     PriceBar,
 )
+from tradingagents.research_platform.research_report import ResearchReportBundle
+from tradingagents.research_platform.risk_contracts import RiskDecision, RiskReview
+from tradingagents.research_platform.run_archive import JsonResearchRunArchive
 
 
 def _provenance() -> DataProvenance:
@@ -109,3 +123,46 @@ def test_cockpit_snapshot_has_clear_empty_state(tmp_path):
         "news_items": 0,
         "agent_outputs": 0,
     }
+
+
+def test_cockpit_includes_latest_archived_decision_and_backtest(tmp_path):
+    archive = JsonResearchRunArchive(tmp_path)
+    archive.save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
+            signal=TradeSignal(
+                symbol="NVDA",
+                as_of_date=date(2026, 1, 5),
+                direction=TradeDirection.BUY,
+                horizon=TradeHorizon.MEDIUM,
+                confidence=0.8,
+                rationale="Fixture signal.",
+                proposed_position_pct=0.05,
+            ),
+            risk_review=RiskReview(
+                symbol="NVDA",
+                as_of_date=date(2026, 1, 5),
+                decision=RiskDecision.APPROVE,
+                approved_position_pct=0.05,
+            ),
+            backtest_result=BacktestResult(
+                config=BacktestConfig(
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 1, 5),
+                    initial_cash=1000,
+                    symbols=["NVDA"],
+                ),
+                metrics=BacktestMetrics(total_return_pct=0.08, max_drawdown_pct=0.03),
+            ),
+        )
+    )
+
+    snapshot = build_cockpit_snapshot(JsonArtifactStore(tmp_path), "NVDA")
+
+    assert discover_cached_symbols(JsonArtifactStore(tmp_path)) == ["NVDA"]
+    assert snapshot["has_data"] is True
+    assert snapshot["latest_run"]["signal"]["direction"] == "buy"
+    assert snapshot["latest_run"]["risk_review"]["decision"] == "approve"
+    assert snapshot["latest_run"]["backtest"]["metrics"]["total_return_pct"] == 0.08

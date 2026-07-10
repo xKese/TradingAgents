@@ -13,6 +13,7 @@ from .artifact_store import JsonArtifactStore
 from .data_contracts import DataProvider
 from .research_workflow import ResearchWorkflowConfig, run_ticker_research
 from .risk_contracts import RiskPolicy
+from .run_archive import JsonResearchRunArchive
 from .yfinance_provider import YFinanceDataUnavailableError, YFinanceProvider
 
 
@@ -80,6 +81,7 @@ def main(
         print(f"Data provider error: {exc}", file=sys.stderr)
         return 2
     store = JsonArtifactStore(args.cache_dir) if args.cache_dir else None
+    archive = JsonResearchRunArchive(args.cache_dir) if args.cache_dir else None
     signal = _build_manual_signal(args)
     policy = RiskPolicy(
         max_single_position_pct=args.max_single_position_pct,
@@ -118,6 +120,7 @@ def main(
             signal=signal,
             risk_policy=policy,
             output_dir=Path(args.output_dir),
+            archive=archive,
         )
     except YFinanceDataUnavailableError as exc:
         print(f"Data provider error: {exc}", file=sys.stderr)
@@ -126,6 +129,8 @@ def main(
         print("Report rendered but no output path was requested.")
     else:
         print(f"Report written: {result.report_path}")
+    if result.archived_run is not None:
+        print(f"Research run archived: {result.archived_run.run_id}")
     if signal is None:
         print("No manual signal supplied; report includes data and deterministic notes only.")
     elif result.bundle.risk_review is not None:

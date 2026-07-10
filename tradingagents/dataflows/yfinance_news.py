@@ -25,12 +25,7 @@ def _extract_article_data(article: dict) -> dict:
         url_obj = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
         link = url_obj.get("url", "")
 
-        # Get publish date
-        pub_date_str = content.get("pubDate", "")
-        pub_date = None
-        if pub_date_str:
-            with contextlib.suppress(ValueError, AttributeError):
-                pub_date = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+        pub_date = _parse_iso_publish_time(content.get("pubDate"))
 
         return {
             "title": title,
@@ -40,14 +35,11 @@ def _extract_article_data(article: dict) -> dict:
             "pub_date": pub_date,
         }
     else:
-        # Fallback for flat structure. Parse the epoch publish time so flat
-        # articles are date-filterable too (otherwise they bypass the
-        # historical window and leak future news, #992/#1007).
         pub_date = None
         ts = article.get("providerPublishTime")
-        if ts:
-            with contextlib.suppress(ValueError, OSError, TypeError):
-                pub_date = datetime.fromtimestamp(ts)
+        if ts is not None:
+            with contextlib.suppress(ValueError, OSError, OverflowError, TypeError):
+                pub_date = datetime.fromtimestamp(ts, tz=timezone.utc)
         return {
             "title": article.get("title", "No title"),
             "summary": article.get("summary", ""),
@@ -62,6 +54,18 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _parse_iso_publish_time(value: object) -> datetime | None:
+    """Parse a Yahoo ISO publication time and normalize it to UTC."""
+    if not isinstance(value, str) or not value:
+        return None
+
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        return _as_utc(datetime.fromisoformat(normalized))
+    except (ValueError, OverflowError):
+        return None
 
 
 def _in_news_window(pub_date, start_dt, end_dt) -> bool:

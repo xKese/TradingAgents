@@ -4,7 +4,6 @@ into a historical window.
 Regressions for #992 (flat articles bypassed the date filter), #1007 (global
 news injected future articles), #993 (empty-after-filter returned a blank body).
 """
-import time
 from datetime import datetime, timezone
 
 import pytest
@@ -13,17 +12,58 @@ import tradingagents.dataflows.yfinance_news as ynews
 
 
 def _epoch(date_str):
-    return int(time.mktime(datetime.strptime(date_str, "%Y-%m-%d").timetuple()))
+    parsed = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
 
 
 @pytest.mark.unit
-def test_flat_article_publish_time_is_parsed():
-    # #992: flat articles now carry a pub_date (was always None -> unfilterable).
+def test_flat_article_publish_time_is_parsed_as_utc():
     data = ynews._extract_article_data(
-        {"title": "X", "publisher": "P", "link": "l", "providerPublishTime": _epoch("2025-05-09")}
+        {
+            "title": "X",
+            "publisher": "P",
+            "link": "l",
+            "providerPublishTime": _epoch("2025-05-09"),
+        }
     )
-    assert data["pub_date"] is not None
-    assert data["pub_date"].strftime("%Y-%m-%d") == "2025-05-09"
+
+    assert data["pub_date"] == datetime(2025, 5, 9, tzinfo=timezone.utc)
+    assert data["pub_date"].tzinfo is timezone.utc
+
+
+@pytest.mark.unit
+def test_nested_offset_publish_time_is_normalized_to_utc():
+    data = ynews._extract_article_data(
+        {"content": {"pubDate": "2025-05-09T20:00:00-04:00"}}
+    )
+
+    assert data["pub_date"] == datetime(2025, 5, 10, tzinfo=timezone.utc)
+    assert data["pub_date"].tzinfo is timezone.utc
+
+
+@pytest.mark.unit
+def test_nested_naive_publish_time_is_interpreted_as_utc():
+    data = ynews._extract_article_data(
+        {"content": {"pubDate": "2025-05-09T12:30:00"}}
+    )
+
+    assert data["pub_date"] == datetime(
+        2025, 5, 9, 12, 30, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "article",
+    [
+        {"content": {"pubDate": "not-a-date"}},
+        {"providerPublishTime": "not-an-epoch"},
+        {"content": {}},
+        {},
+    ],
+)
+def test_missing_or_malformed_publish_time_remains_undated(article):
+    assert ynews._extract_article_data(article)["pub_date"] is None
 
 
 @pytest.mark.unit

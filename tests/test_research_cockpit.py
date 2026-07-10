@@ -24,6 +24,7 @@ from tradingagents.research_platform.data_contracts import (
 from tradingagents.research_platform.research_report import ResearchReportBundle
 from tradingagents.research_platform.risk_contracts import RiskDecision, RiskReview
 from tradingagents.research_platform.run_archive import JsonResearchRunArchive
+from tradingagents.research_platform.watchlist import JsonWatchlistStore
 
 
 def _provenance() -> DataProvenance:
@@ -166,3 +167,31 @@ def test_cockpit_includes_latest_archived_decision_and_backtest(tmp_path):
     assert snapshot["latest_run"]["signal"]["direction"] == "buy"
     assert snapshot["latest_run"]["risk_review"]["decision"] == "approve"
     assert snapshot["latest_run"]["backtest"]["metrics"]["total_return_pct"] == 0.08
+
+
+def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    watchlist = JsonWatchlistStore(tmp_path)
+    watchlist.add("MSFT")
+    archive = JsonResearchRunArchive(tmp_path)
+    older = archive.save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 4, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+        )
+    )
+    archive.save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
+        )
+    )
+
+    snapshot = build_cockpit_snapshot(store, "NVDA", run_id=older.run_id)
+
+    assert discover_cached_symbols(store, watchlist) == ["MSFT", "NVDA"]
+    assert snapshot["latest_run"]["run_id"] == older.run_id
+    assert snapshot["latest_run"]["as_of_date"] == "2026-01-04T00:00:00+00:00"
+    assert len(snapshot["runs"]) == 2

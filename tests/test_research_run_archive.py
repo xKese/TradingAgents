@@ -40,6 +40,8 @@ def test_json_run_archive_saves_and_loads_latest_bundle(tmp_path):
     assert bundle.generated_at == datetime(2026, 1, 5, 10, tzinfo=timezone.utc)
     assert bundle.signal is not None
     assert bundle.signal.direction == TradeDirection.BUY
+    assert archive.load_bundle("NVDA", newer.run_id) == bundle
+    assert archive.load_bundle("NVDA", "../outside") is None
 
 
 def test_json_run_archive_ignores_corrupt_bundle_files(tmp_path):

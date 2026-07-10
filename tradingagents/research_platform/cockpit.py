@@ -18,11 +18,15 @@ from urllib.parse import parse_qs, urlparse
 
 from .artifact_store import JsonArtifactStore
 from .run_archive import JsonResearchRunArchive
+from .watchlist import JsonWatchlistStore
 
 _EARLIEST_DATE = date(1900, 1, 1)
 
 
-def discover_cached_symbols(store: JsonArtifactStore) -> list[str]:
+def discover_cached_symbols(
+    store: JsonArtifactStore,
+    watchlist: JsonWatchlistStore | None = None,
+) -> list[str]:
     """Return symbols which have at least one cached artifact file."""
 
     symbols: set[str] = set()
@@ -33,10 +37,17 @@ def discover_cached_symbols(store: JsonArtifactStore) -> list[str]:
     runs_directory = store.root / "runs"
     if runs_directory.exists():
         symbols.update(path.name for path in runs_directory.iterdir() if path.is_dir())
+    if watchlist is not None:
+        symbols.update(entry.symbol for entry in watchlist.list_entries())
     return sorted(symbols)
 
 
-def build_cockpit_snapshot(store: JsonArtifactStore, symbol: str) -> dict[str, Any]:
+def build_cockpit_snapshot(
+    store: JsonArtifactStore,
+    symbol: str,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     """Build one JSON-ready, read-only cockpit view from local artifacts."""
 
     normalized_symbol = symbol.strip().upper()
@@ -64,7 +75,16 @@ def build_cockpit_snapshot(store: JsonArtifactStore, symbol: str) -> dict[str, A
 
     market = _market_summary(bars)
     latest_fundamentals = fundamentals[-1] if fundamentals else None
-    latest_run = JsonResearchRunArchive(store.root).load_latest_bundle(normalized_symbol)
+    archive = JsonResearchRunArchive(store.root)
+    runs = archive.list_runs(normalized_symbol)
+    selected_run_id = run_id or (runs[0].run_id if runs else None)
+    latest_run = (
+        archive.load_bundle(normalized_symbol, selected_run_id)
+        if selected_run_id is not None
+        else None
+    )
+    if selected_run_id is not None and latest_run is None:
+        raise ValueError("run_id was not found for this symbol")
     return {
         "symbol": normalized_symbol,
         "has_data": bool(bars or fundamentals or news or agent_outputs or latest_run),
@@ -74,7 +94,8 @@ def build_cockpit_snapshot(store: JsonArtifactStore, symbol: str) -> dict[str, A
         ),
         "news": [item.model_dump(mode="json") for item in news[:12]],
         "agent_outputs": [item.model_dump(mode="json") for item in agent_outputs[:12]],
-        "latest_run": _run_summary(latest_run),
+        "latest_run": _run_summary(latest_run, run_id=selected_run_id),
+        "runs": [item.model_dump(mode="json") for item in runs[:20]],
         "artifact_counts": {
             "price_bars": len(bars),
             "fundamental_snapshots": len(fundamentals),
@@ -105,12 +126,17 @@ def _market_summary(bars: list[Any]) -> dict[str, Any] | None:
 
 
 
-def _run_summary(bundle: Any | None) -> dict[str, Any] | None:
+def _run_summary(
+    bundle: Any | None,
+    *,
+    run_id: str | None,
+) -> dict[str, Any] | None:
     if bundle is None:
         return None
 
     backtest = bundle.backtest_result
     return {
+        "run_id": run_id,
         "as_of_date": bundle.as_of_date.isoformat(),
         "generated_at": bundle.generated_at.isoformat(),
         "signal": bundle.signal.model_dump(mode="json") if bundle.signal is not None else None,
@@ -133,6 +159,7 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
     """Serve the local cockpit and its read-only JSON endpoints."""
 
     store: JsonArtifactStore
+    watchlist: JsonWatchlistStore
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
@@ -143,16 +170,66 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"status": "ok"})
             return
         if parsed.path == "/api/symbols":
-            self._send_json(HTTPStatus.OK, {"symbols": discover_cached_symbols(self.store)})
+            self._send_json(
+                HTTPStatus.OK,
+                {"symbols": discover_cached_symbols(self.store, self.watchlist)},
+            )
+            return
+        if parsed.path == "/api/watchlist":
+            self._send_json(
+                HTTPStatus.OK,
+                {"entries": [entry.model_dump(mode="json") for entry in self.watchlist.list_entries()]},
+            )
             return
         if parsed.path == "/api/snapshot":
-            symbol = parse_qs(parsed.query).get("symbol", [""])[0]
+            query = parse_qs(parsed.query)
+            symbol = query.get("symbol", [""])[0]
+            run_id = query.get("run_id", [None])[0]
             try:
-                self._send_json(HTTPStatus.OK, build_cockpit_snapshot(self.store, symbol))
+                self._send_json(
+                    HTTPStatus.OK,
+                    build_cockpit_snapshot(self.store, symbol, run_id=run_id),
+                )
             except ValueError as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+
+    def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        if urlparse(self.path).path != "/api/watchlist":
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+        try:
+            payload = self._read_json_body()
+            entry = self.watchlist.add(str(payload.get("symbol", "")))
+        except (UnicodeDecodeError, ValueError) as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        self._send_json(HTTPStatus.CREATED, {"entry": entry.model_dump(mode="json")})
+
+    def do_DELETE(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/watchlist":
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+        symbol = parse_qs(parsed.query).get("symbol", [""])[0]
+        try:
+            removed = self.watchlist.remove(symbol)
+        except ValueError as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        self._send_json(HTTPStatus.OK, {"removed": removed})
+
+    def _read_json_body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError("expected a JSON request body") from error
+        if not isinstance(payload, dict):
+            raise ValueError("expected a JSON object")
+        return payload
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         """Keep normal browser navigation out of the terminal."""
@@ -179,11 +256,13 @@ def create_cockpit_server(
     """Create a local server without starting it, suitable for tests and CLI use."""
 
     store = JsonArtifactStore(data_dir)
+    watchlist = JsonWatchlistStore(data_dir)
 
     class BoundCockpitRequestHandler(CockpitRequestHandler):
         pass
 
     BoundCockpitRequestHandler.store = store
+    BoundCockpitRequestHandler.watchlist = watchlist
     return ThreadingHTTPServer((host, port), BoundCockpitRequestHandler)
 
 
@@ -220,16 +299,16 @@ _APP_HTML = r'''<!doctype html>
     :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #15212b; background: #f4f7f8; }
     * { box-sizing: border-box; }
     body { margin: 0; background: #f4f7f8; }
-    button, select { font: inherit; }
+    button, input, select { font: inherit; }
     .shell { max-width: 1440px; margin: 0 auto; padding: 28px 32px 44px; }
     .topbar { display: flex; justify-content: space-between; gap: 20px; align-items: end; border-bottom: 1px solid #d5dfe3; padding-bottom: 20px; }
     h1 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 700; letter-spacing: 0; }
     .eyebrow { margin: 0 0 7px; color: #39706e; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
     .control { display: flex; gap: 8px; align-items: center; }
-    select, button { height: 36px; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #15212b; padding: 0 11px; }
-    select { min-width: 150px; }
+    input, select, button { height: 36px; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #15212b; padding: 0 11px; }
+    select { min-width: 150px; } input { width: 104px; }
     button { cursor: pointer; font-weight: 650; }
-    button:hover { border-color: #39706e; background: #edf8f7; }
+    button:hover { border-color: #39706e; background: #edf8f7; } button:disabled { cursor: not-allowed; color: #9aa8ad; background: #f4f7f8; }
     .status { min-height: 20px; color: #64747d; font-size: 13px; margin: 16px 0 12px; }
     .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid #d5dfe3; border-radius: 6px; background: #fff; }
     .metric { min-height: 102px; padding: 18px; border-right: 1px solid #d5dfe3; }
@@ -240,7 +319,7 @@ _APP_HTML = r'''<!doctype html>
     .positive { color: #087f5b; } .negative { color: #bf3f46; } .neutral { color: #15212b; }
     .workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .85fr); gap: 18px; margin-top: 18px; }
     .panel { background: #fff; border: 1px solid #d5dfe3; border-radius: 6px; overflow: hidden; }
-    .panel-title { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 15px 17px; border-bottom: 1px solid #d5dfe3; }
+    .panel-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px; padding: 15px 17px; border-bottom: 1px solid #d5dfe3; }
     h2 { margin: 0; font-size: 15px; letter-spacing: 0; } .panel-meta { color: #64747d; font-size: 12px; }
     .chart { height: 248px; padding: 16px 18px 12px; } svg { display: block; width: 100%; height: 100%; overflow: visible; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; } .grid > div { padding: 14px 17px; border-bottom: 1px solid #e4ebed; }
@@ -253,14 +332,20 @@ _APP_HTML = r'''<!doctype html>
     .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; } .tag { padding: 3px 6px; border: 1px solid #cbd8db; border-radius: 4px; color: #39706e; font-size: 11px; font-weight: 650; }
     .empty { padding: 40px 18px; color: #64747d; text-align: center; } a { color: #176f6c; }
     @media (max-width: 860px) { .shell { padding: 20px 16px 32px; } .topbar { align-items: stretch; flex-direction: column; } .metrics { grid-template-columns: 1fr 1fr; } .metric:nth-child(2) { border-right: 0; } .metric:nth-child(-n+2) { border-bottom: 1px solid #d5dfe3; } .workspace { grid-template-columns: 1fr; } }
-    @media (max-width: 460px) { .control { width: 100%; } select { flex: 1; min-width: 0; } .metrics { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid #d5dfe3; } .metric:last-child { border-bottom: 0; } .grid { grid-template-columns: 1fr; } .grid > div:nth-child(odd) { border-right: 0; } }
+    @media (max-width: 460px) { .control { width: 100%; flex-wrap: wrap; } .control #symbol { flex: 1 0 100%; width: 100%; } .control #watchSymbol { flex: 1 1 100px; min-width: 100px; } .control button { flex: 0 0 auto; } .metrics { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid #d5dfe3; } .metric:last-child { border-bottom: 0; } .grid { grid-template-columns: 1fr; } .grid > div:nth-child(odd) { border-right: 0; } }
   </style>
 </head>
 <body>
   <main class="shell">
     <div class="topbar">
       <div><p class="eyebrow">Local-first equity research</p><h1 id="title">Research Cockpit</h1></div>
-      <div class="control"><select id="symbol" aria-label="Ticker symbol"></select><button id="refresh" type="button">Refresh</button></div>
+      <div class="control">
+        <select id="symbol" aria-label="Ticker symbol"></select>
+        <input id="watchSymbol" aria-label="Add ticker to watchlist" placeholder="Ticker">
+        <button id="addSymbol" type="button">Add</button>
+        <button id="removeSymbol" type="button">Remove</button>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
     </div>
     <p class="status" id="status">Loading local research cache...</p>
     <section class="metrics" aria-label="Market summary" id="metrics"></section>
@@ -269,6 +354,8 @@ _APP_HTML = r'''<!doctype html>
       <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
       <div class="panel"><div class="panel-title"><h2>Structured Research</h2><span class="panel-meta" id="agentsMeta"></span></div><ul class="items" id="agents"></ul></div>
       <div class="panel"><div class="panel-title"><h2>News</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
+
+      <div class="panel"><div class="panel-title"><h2>Research Runs</h2><select id="runHistory" aria-label="Archived research run"></select></div><div class="empty" id="runHistoryDetail"></div></div>
       <div class="panel"><div class="panel-title"><h2>Decision and Risk</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
       <div class="panel"><div class="panel-title"><h2>Backtest Snapshot</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
     </section>
@@ -334,25 +421,78 @@ _APP_HTML = r'''<!doctype html>
       $('backtest').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
       $('backtestMeta').textContent = 'Latest archived run';
     }
+    let activeRunId = null;
+    let watchlistSymbols = new Set();
+    function renderRunHistory(runs, selectedRunId) {
+      const selector = $('runHistory');
+      if (!runs.length) {
+        selector.innerHTML = '<option value="">No archived runs</option>';
+        selector.disabled = true;
+        $('runHistoryDetail').textContent = 'No archived research runs available.';
+        return;
+      }
+      selector.disabled = false;
+      selector.innerHTML = '<option value="">Latest archived run</option>' + runs.map(run => `<option value="${escape(run.run_id)}">${escape(run.as_of_date.slice(0,10))} - ${escape(run.generated_at.slice(0,16).replace('T', ' '))}</option>`).join('');
+      selector.value = selectedRunId || '';
+      const selected = runs.find(run => run.run_id === selectedRunId) || runs[0];
+      const scopes = [selected.has_signal ? 'signal' : null, selected.has_risk_review ? 'risk' : null, selected.has_backtest ? 'backtest' : null].filter(Boolean);
+      $('runHistoryDetail').textContent = `${runs.length} archived run${runs.length === 1 ? '' : 's'} - ${scopes.join(', ') || 'data snapshot'}`;
+    }
+    async function refreshSymbols(preferredSymbol) {
+      const payload = await fetch('/api/symbols').then(response => response.json());
+      const current = preferredSymbol || $('symbol').value;
+      $('symbol').innerHTML = payload.symbols.length ? payload.symbols.map(symbol => `<option value="${escape(symbol)}">${escape(symbol)}</option>`).join('') : '<option value="">No symbols</option>';
+      if (payload.symbols.includes(current)) $('symbol').value = current;
+    }
+    async function refreshWatchlist() {
+      const payload = await fetch('/api/watchlist').then(response => response.json());
+      watchlistSymbols = new Set(payload.entries.map(entry => entry.symbol));
+      $('removeSymbol').disabled = !watchlistSymbols.has($('symbol').value);
+    }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No cached ticker found. Run the local research workflow with an artifact store first.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); return; }
-      $('status').textContent = `Loading ${symbol} from local cache...`;
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); return; }
+      $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
-        const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}`).then(response => response.ok ? response.json() : Promise.reject(response));
+        const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
+        const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
-        $('status').textContent = snapshot.has_data ? `Local cache loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run);
-      } catch (error) { $('status').textContent = 'Unable to load the local research cache.'; }
+        $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
+        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId);
+        await refreshWatchlist();
+      } catch (error) { $('status').textContent = 'Unable to load local research storage.'; }
+    }
+    async function addToWatchlist() {
+      const symbol = $('watchSymbol').value.trim();
+      if (!symbol) return;
+      await fetch('/api/watchlist', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
+      $('watchSymbol').value = '';
+      activeRunId = null;
+      await refreshSymbols(symbol.toUpperCase());
+      await loadSnapshot();
+    }
+    async function removeFromWatchlist() {
+      const symbol = $('symbol').value;
+      if (!symbol) return;
+      await fetch(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, {method:'DELETE'});
+      activeRunId = null;
+      await refreshSymbols();
+      await loadSnapshot();
     }
     async function start() {
       try {
-        const payload = await fetch('/api/symbols').then(response => response.json());
-        $('symbol').innerHTML = payload.symbols.length ? payload.symbols.map(symbol => `<option value="${escape(symbol)}">${escape(symbol)}</option>`).join('') : '<option value="">No cached symbols</option>';
-      } catch (error) { $('symbol').innerHTML = '<option value="">Cache unavailable</option>'; }
+        await refreshSymbols();
+        await refreshWatchlist();
+      } catch (error) { $('symbol').innerHTML = '<option value="">Storage unavailable</option>'; }
       await loadSnapshot();
     }
-    $('refresh').addEventListener('click', loadSnapshot); $('symbol').addEventListener('change', loadSnapshot); start();
+    $('refresh').addEventListener('click', loadSnapshot);
+    $('symbol').addEventListener('change', async () => { activeRunId = null; await loadSnapshot(); });
+    $('runHistory').addEventListener('change', async () => { activeRunId = $('runHistory').value || null; await loadSnapshot(); });
+    $('addSymbol').addEventListener('click', addToWatchlist);
+    $('removeSymbol').addEventListener('click', removeFromWatchlist);
+    $('watchSymbol').addEventListener('keydown', async event => { if (event.key === 'Enter') await addToWatchlist(); });
+    start();
   </script>
 </body>
 </html>'''

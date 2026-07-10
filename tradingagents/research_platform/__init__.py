@@ -44,6 +44,7 @@ from .risk_contracts import (
     evaluate_basic_risk,
 )
 from .run_archive import JsonResearchRunArchive, ResearchRunArchive, ResearchRunSummary
+from .watchlist import JsonWatchlistStore, WatchlistEntry
 
 __all__ = [
     "AgentOutputEnvelope",
@@ -82,6 +83,7 @@ __all__ = [
     "TradeDirection",
     "TradeHorizon",
     "TradeSignal",
+    "WatchlistEntry",
     "evaluate_basic_risk",
     "validate_signal_timing",
 ]

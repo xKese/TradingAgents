@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -40,6 +41,9 @@ class ResearchRunArchive(Protocol):
     def load_latest_bundle(self, symbol: str) -> ResearchReportBundle | None:
         """Load the newest completed bundle for a symbol."""
 
+    def load_bundle(self, symbol: str, run_id: str) -> ResearchReportBundle | None:
+        """Load one archived bundle by its opaque local run ID."""
+
 
 class JsonResearchRunArchive:
     """Filesystem archive colocated with the JSONL artifact cache.
@@ -72,6 +76,11 @@ class JsonResearchRunArchive:
         if not summaries:
             return None
         return self._load_path(self._path(symbol, summaries[0].run_id))
+
+    def load_bundle(self, symbol: str, run_id: str) -> ResearchReportBundle | None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id):
+            return None
+        return self._load_path(self._path(symbol, run_id))
 
     def _load_path(self, path: Path) -> ResearchReportBundle | None:
         try:

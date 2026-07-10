@@ -138,6 +138,9 @@ class StubPipelineAdapter:
 
     ``research_context`` is accepted and ignored; ``ratings`` maps symbols
     to a stub native rating (default "Hold") so vetting tests stay cheap.
+    ``raw`` carries a non-empty stub ``risk_debate_state`` so the vetting
+    stage's falsifier-extraction path is exercisable in stub/dry-run mode
+    (a real graph always produces a debate on the confirm path).
     """
 
     def __init__(
@@ -152,8 +155,15 @@ class StubPipelineAdapter:
         self, symbol: str, asof_date: date, research_context: str = "",
     ) -> PipelineResult:
         decision = self._decisions.get(symbol, PipelineDecision.HOLD)
+        raw = {
+            "final_trade_decision": "",
+            "risk_debate_state": {
+                "history": f"stub risk debate for {symbol}",
+                "judge_decision": "stub judge decision",
+            },
+        }
         return PipelineResult(
-            symbol=symbol, date=asof_date, decision=decision, raw={},
+            symbol=symbol, date=asof_date, decision=decision, raw=raw,
             rating=self._ratings.get(symbol, "Hold"),
         )
 

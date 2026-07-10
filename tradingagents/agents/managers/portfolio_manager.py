@@ -19,6 +19,10 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.ibkr import get_portfolio_context_from_state
+
+
+_PORTFOLIO_INSTRUCTIONS = """Use the live portfolio context when translating analysis into action. Never say "initiate" for an owned ticker. Distinguish Hold existing, Add, Trim, Exit, and Avoid; reconcile sizing with current whole shares, portfolio weight, available cash, and concentration. Do not let average cost override current evidence."""
 
 
 def create_portfolio_manager(llm):
@@ -31,6 +35,12 @@ def create_portfolio_manager(llm):
         risk_debate_state = state["risk_debate_state"]
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
+        portfolio_context = get_portfolio_context_from_state(state)
+        portfolio_block = (
+            f"- Live account context:\n{portfolio_context}\n- Account-aware rules: {_PORTFOLIO_INSTRUCTIONS}\n"
+            if portfolio_context
+            else ""
+        )
 
         past_context = state.get("past_context", "")
         lessons_line = (
@@ -55,6 +65,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
+{portfolio_block}
 {lessons_line}
 **Risk Analysts Debate History:**
 {history}

@@ -15,6 +15,10 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.ibkr import get_portfolio_context_from_state
+
+
+_PORTFOLIO_INSTRUCTIONS = """Use the live portfolio context when translating analysis into action. Never say "initiate" for an owned ticker. Distinguish Hold existing, Add, Trim, Exit, and Avoid; reconcile sizing with current whole shares, portfolio weight, available cash, and concentration. Do not let average cost override current evidence."""
 
 
 def create_trader(llm):
@@ -24,6 +28,12 @@ def create_trader(llm):
         company_name = state["company_of_interest"]
         instrument_context = get_instrument_context_from_state(state)
         investment_plan = state["investment_plan"]
+        portfolio_context = get_portfolio_context_from_state(state)
+        portfolio_block = (
+            f"\n\n{portfolio_context}\n\n{_PORTFOLIO_INSTRUCTIONS}"
+            if portfolio_context
+            else ""
+        )
 
         messages = [
             {
@@ -44,6 +54,7 @@ def create_trader(llm):
                     f"social media sentiment. Use this plan as a foundation for evaluating your next "
                     f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n\n"
                     f"Leverage these insights to make an informed and strategic decision."
+                    f"{portfolio_block}"
                 ),
             },
         ]

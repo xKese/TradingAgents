@@ -30,10 +30,16 @@ class PipelineResult:
     date: date
     decision: PipelineDecision
     raw: dict = field(default_factory=dict)
+    # Native 5-tier rating word (Buy/Overweight/Hold/Underweight/Sell) from
+    # the graph's signal processor. The vetting path reads this ungraded
+    # rating; the momentum path keeps consuming the collapsed `decision`.
+    rating: str = ""
 
 
 class PipelineAdapter(Protocol):
-    def propagate(self, symbol: str, asof_date: date) -> PipelineResult: ...
+    def propagate(
+        self, symbol: str, asof_date: date, research_context: str = "",
+    ) -> PipelineResult: ...
 
     def session(self):
         """Context manager bracketing a batch of analyses.
@@ -101,15 +107,22 @@ class TradingAgentsPipelineAdapter:
     def _build_graph(self) -> TradingAgentsGraph:
         return TradingAgentsGraph(**self._kwargs)
 
-    def propagate(self, symbol: str, asof_date: date) -> PipelineResult:
+    def propagate(
+        self, symbol: str, asof_date: date, research_context: str = "",
+    ) -> PipelineResult:
         # Bring the managed backend up lazily — only when an analysis actually
         # runs, so ticks with no candidates never load a local model.
         self._backend.ensure_up()
         graph = self._ensure_graph()
-        raw, decision_text = graph.propagate(symbol, asof_date.isoformat())
+        raw, decision_text = graph.propagate(
+            symbol, asof_date.isoformat(), research_memo_context=research_context,
+        )
         decision = parse_decision(decision_text or "")
         raw_dict = raw if isinstance(raw, dict) else {"output": str(raw)}
-        return PipelineResult(symbol=symbol, date=asof_date, decision=decision, raw=raw_dict)
+        return PipelineResult(
+            symbol=symbol, date=asof_date, decision=decision, raw=raw_dict,
+            rating=(decision_text or "").strip(),
+        )
 
     @contextmanager
     def session(self) -> Iterator[TradingAgentsPipelineAdapter]:
@@ -121,14 +134,28 @@ class TradingAgentsPipelineAdapter:
 
 
 class StubPipelineAdapter:
-    """In-memory adapter for tests and dry-runs. Returns fixed decisions."""
+    """In-memory adapter for tests and dry-runs. Returns fixed decisions.
 
-    def __init__(self, decisions: dict[str, PipelineDecision] | None = None):
+    ``research_context`` is accepted and ignored; ``ratings`` maps symbols
+    to a stub native rating (default "Hold") so vetting tests stay cheap.
+    """
+
+    def __init__(
+        self,
+        decisions: dict[str, PipelineDecision] | None = None,
+        ratings: dict[str, str] | None = None,
+    ):
         self._decisions = decisions or {}
+        self._ratings = ratings or {}
 
-    def propagate(self, symbol: str, asof_date: date) -> PipelineResult:
+    def propagate(
+        self, symbol: str, asof_date: date, research_context: str = "",
+    ) -> PipelineResult:
         decision = self._decisions.get(symbol, PipelineDecision.HOLD)
-        return PipelineResult(symbol=symbol, date=asof_date, decision=decision, raw={})
+        return PipelineResult(
+            symbol=symbol, date=asof_date, decision=decision, raw={},
+            rating=self._ratings.get(symbol, "Hold"),
+        )
 
     @contextmanager
     def session(self) -> Iterator[StubPipelineAdapter]:

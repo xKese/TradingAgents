@@ -60,7 +60,7 @@ def test_real_adapter_constructs_graph_lazily(monkeypatch):
         def __init__(self, **kwargs):
             constructed.append(kwargs)
 
-        def propagate(self, ticker, dt):
+        def propagate(self, ticker, dt, research_memo_context=""):
             return ({}, "Buy")
 
     monkeypatch.setattr("ops.pipeline_adapter.TradingAgentsGraph", FakeGraph)
@@ -99,7 +99,7 @@ def test_propagate_ensures_backend_up_before_graph(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def propagate(self, ticker, dt):
+        def propagate(self, ticker, dt, research_memo_context=""):
             events.append("propagate")
             return ({}, "Buy")
 
@@ -137,7 +137,7 @@ def test_default_adapter_has_no_managed_backend(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def propagate(self, ticker, dt):
+        def propagate(self, ticker, dt, research_memo_context=""):
             return ({}, "Hold")
 
     monkeypatch.setattr("ops.pipeline_adapter.TradingAgentsGraph", FakeGraph)
@@ -145,6 +145,58 @@ def test_default_adapter_has_no_managed_backend(monkeypatch):
     with adapter.session():
         r = adapter.propagate("AAPL", date(2026, 6, 30))
     assert r.decision == PipelineDecision.HOLD
+
+
+def test_propagate_threads_research_context_and_exposes_native_rating(monkeypatch):
+    """Vetting path: the adapter forwards research_context to the graph and
+    surfaces the ungraded 5-tier rating; the momentum decision still
+    collapses (Overweight -> HOLD)."""
+    captured = {}
+
+    class FakeGraph:
+        def __init__(self, **kwargs):
+            pass
+
+        def propagate(self, symbol, trade_date, research_memo_context=""):
+            captured["research_memo_context"] = research_memo_context
+            return {"final_trade_decision": "Rating: Overweight"}, "Overweight"
+
+    monkeypatch.setattr("ops.pipeline_adapter.TradingAgentsGraph", FakeGraph)
+    adapter = TradingAgentsPipelineAdapter()
+    result = adapter.propagate("ACME", date(2026, 7, 9), research_context="BRIEF")
+    assert captured["research_memo_context"] == "BRIEF"
+    assert result.rating == "Overweight"
+    assert result.decision == PipelineDecision.HOLD  # momentum collapse preserved
+
+
+def test_propagate_default_context_is_empty(monkeypatch):
+    """Momentum callers pass no context; the graph must receive ""."""
+    captured = {}
+
+    class FakeGraph:
+        def __init__(self, **kwargs):
+            pass
+
+        def propagate(self, symbol, trade_date, research_memo_context=""):
+            captured["research_memo_context"] = research_memo_context
+            return {"final_trade_decision": "Rating: Hold"}, "Hold"
+
+    monkeypatch.setattr("ops.pipeline_adapter.TradingAgentsGraph", FakeGraph)
+    adapter = TradingAgentsPipelineAdapter()
+    adapter.propagate("ACME", date(2026, 7, 9))
+    assert captured["research_memo_context"] == ""
+
+
+def test_stub_adapter_accepts_and_ignores_research_context():
+    stub = StubPipelineAdapter(ratings={"ACME": "Buy"})
+    result = stub.propagate("ACME", date(2026, 7, 9), research_context="BRIEF")
+    assert result.rating == "Buy"
+    assert result.decision == PipelineDecision.HOLD
+
+
+def test_stub_adapter_default_rating_is_hold():
+    result = StubPipelineAdapter().propagate("X", date(2026, 7, 9))
+    assert result.rating == "Hold"
 
 
 def test_stub_session_is_noop():

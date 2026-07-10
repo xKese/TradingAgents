@@ -549,16 +549,25 @@ def get_user_selections():
             f"[green]Detected asset type:[/green] {asset_type.value}"
         )
 
-    # Step 2: Analysis date
-    default_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    console.print(
-        create_question_box(
-            "Step 2: Analysis Date",
-            "Enter the analysis date (YYYY-MM-DD)",
-            default_date,
+    # Step 2: Analysis date (skipped when TRADINGAGENTS_ANALYSIS_DATE is set;
+    # use "today" for current date)
+    date_from_env = os.environ.get("TRADINGAGENTS_ANALYSIS_DATE")
+    if date_from_env:
+        if date_from_env.lower() == "today":
+            analysis_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        else:
+            analysis_date = date_from_env
+        console.print(f"[green]✓ Analysis date from environment:[/green] {analysis_date}")
+    else:
+        default_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        console.print(
+            create_question_box(
+                "Step 2: Analysis Date",
+                "Enter the analysis date (YYYY-MM-DD)",
+                default_date,
+            )
         )
-    )
-    analysis_date = get_analysis_date()
+        analysis_date = get_analysis_date()
 
     # Step 3: Output language (skipped when set via TRADINGAGENTS_OUTPUT_LANGUAGE)
     if os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE"):
@@ -575,16 +584,29 @@ def get_user_selections():
         )
         output_language = ask_output_language()
 
-    # Step 4: Select analysts
-    console.print(
-        create_question_box(
-            "Step 4: Analysts Team", "Select your LLM analyst agents for the analysis"
+    # Step 4: Select analysts (skipped when TRADINGAGENTS_ANALYSTS is set;
+    # use "all" for all analysts, or comma-separated: "market,social,news,fundamentals")
+    analysts_from_env = os.environ.get("TRADINGAGENTS_ANALYSTS")
+    if analysts_from_env:
+        if analysts_from_env.lower() == "all":
+            from cli.models import AnalystType as _AT
+            selected_analysts = list(_AT)
+        else:
+            from cli.models import AnalystType as _AT
+            selected_analysts = [_AT(a.strip()) for a in analysts_from_env.split(",")]
+        console.print(
+            f"[green]✓ Analysts from environment:[/green] {', '.join(a.value for a in selected_analysts)}"
         )
-    )
-    selected_analysts = select_analysts(asset_type)
-    console.print(
-        f"[green]Selected analysts:[/green] {', '.join(analyst.value for analyst in selected_analysts)}"
-    )
+    else:
+        console.print(
+            create_question_box(
+                "Step 4: Analysts Team", "Select your LLM analyst agents for the analysis"
+            )
+        )
+        selected_analysts = select_analysts(asset_type)
+        console.print(
+            f"[green]Selected analysts:[/green] {', '.join(analyst.value for analyst in selected_analysts)}"
+        )
 
     # Step 5: Research depth (skipped when both round counts are set via env).
     # Research depth maps to the debate + risk round counts; when both are

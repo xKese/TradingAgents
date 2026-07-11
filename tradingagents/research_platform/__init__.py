@@ -42,6 +42,7 @@ from .narrative_provider import (
     ResearchNarrativeContext,
     ResearchNarrativeProvider,
 )
+from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import (
     LocalResearchJobRunner,
     ManualSignalRequest,
@@ -74,6 +75,7 @@ __all__ = [
     "BacktestTrade",
     "BacktestWarning",
     "BacktestWarningSeverity",
+    "build_report_workspace",
     "ConfidenceLevel",
     "DataProvider",
     "DataProvenance",
@@ -100,6 +102,7 @@ __all__ = [
     "ResearchNarrativeProvider",
     "ResearchRunArchive",
     "ResearchRunSummary",
+    "render_archived_report",
     "RiskDecision",
     "RiskLimitBreach",
     "RiskPolicy",

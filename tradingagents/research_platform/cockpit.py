@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from tradingagents.dataflows.utils import safe_ticker_component
+
 from .artifact_store import JsonArtifactStore
+from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .run_archive import JsonResearchRunArchive
 from .watchlist import JsonWatchlistStore
@@ -96,6 +99,7 @@ def build_cockpit_snapshot(
         "news": [item.model_dump(mode="json") for item in news[:12]],
         "agent_outputs": [item.model_dump(mode="json") for item in agent_outputs[:12]],
         "latest_run": _run_summary(latest_run, run_id=selected_run_id),
+        "report_workspace": build_report_workspace(latest_run),
         "runs": [item.model_dump(mode="json") for item in runs[:20]],
         "artifact_counts": {
             "price_bars": len(bars),
@@ -185,6 +189,9 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(HTTPStatus.OK, {"job": job.model_dump(mode="json")})
             return
+        if parsed.path.startswith("/api/reports/"):
+            self._serve_archived_report(parsed)
+            return
         if parsed.path == "/api/symbols":
             self._send_json(
                 HTTPStatus.OK,
@@ -211,6 +218,30 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
+
+    def _serve_archived_report(self, parsed) -> None:
+        parts = parsed.path.split("/")
+        if len(parts) != 5 or not parts[-1].endswith(".md"):
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "report not found"})
+            return
+        symbol = parts[3]
+        run_id = parts[4][:-3]
+        bundle = JsonResearchRunArchive(self.store.root).load_bundle(symbol, run_id)
+        try:
+            report = render_archived_report(bundle)
+        except ValueError as error:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+            return
+        download = parse_qs(parsed.query).get("download", ["0"])[0] == "1"
+        disposition = None
+        if download:
+            disposition = f'attachment; filename="{safe_ticker_component(bundle.symbol)}_{run_id}.md"'
+        self._send_text(
+            HTTPStatus.OK,
+            report,
+            "text/markdown; charset=utf-8",
+            content_disposition=disposition,
+        )
 
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         if urlparse(self.path).path == "/api/research-jobs":
@@ -262,12 +293,21 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
         self._send_text(status, json.dumps(payload, ensure_ascii=True), "application/json; charset=utf-8")
 
-    def _send_text(self, status: HTTPStatus, payload: str, content_type: str) -> None:
+    def _send_text(
+        self,
+        status: HTTPStatus,
+        payload: str,
+        content_type: str,
+        *,
+        content_disposition: str | None = None,
+    ) -> None:
         encoded = payload.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
+        if content_disposition is not None:
+            self.send_header("Content-Disposition", content_disposition)
         self.end_headers()
         self.wfile.write(encoded)
 
@@ -357,6 +397,9 @@ _APP_HTML = r'''<!doctype html>
     .item-title { font-weight: 650; line-height: 1.42; } .item-meta { color: #64747d; font-size: 12px; margin-top: 5px; }
     .item-summary { color: #45565f; line-height: 1.45; margin-top: 7px; font-size: 13px; }
     .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; } .tag { padding: 3px 6px; border: 1px solid #cbd8db; border-radius: 4px; color: #39706e; font-size: 11px; font-weight: 650; }
+    .report-actions { display: flex; flex-wrap: wrap; gap: 8px; } .action-link { color: #176f6c; font-size: 12px; font-weight: 650; text-decoration: none; } .action-link:hover { text-decoration: underline; } .action-link[aria-disabled="true"] { color: #9aa8ad; pointer-events: none; }
+    .coverage-summary { padding: 14px 17px; border-bottom: 1px solid #e4ebed; color: #45565f; font-size: 13px; } .coverage-list { margin: 0; padding: 0; list-style: none; } .coverage-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 11px 17px; border-bottom: 1px solid #e4ebed; } .coverage-label { font-size: 13px; font-weight: 650; } .coverage-detail { color: #64747d; font-size: 12px; } .coverage-status { color: #39706e; font-size: 11px; font-weight: 650; } .coverage-status.missing { color: #a06628; }
+    .report-preview { max-height: 360px; overflow: auto; margin: 0; padding: 16px 17px; background: #fbfcfc; color: #35454d; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
     .empty { padding: 40px 18px; color: #64747d; text-align: center; } a { color: #176f6c; }
     @media (max-width: 860px) { .shell { padding: 20px 16px 32px; } .topbar { align-items: stretch; flex-direction: column; } .metrics { grid-template-columns: 1fr 1fr; } .metric:nth-child(2) { border-right: 0; } .metric:nth-child(-n+2) { border-bottom: 1px solid #d5dfe3; } .workspace { grid-template-columns: 1fr; } }
     @media (max-width: 460px) { .control { width: 100%; flex-wrap: wrap; } .control #symbol { flex: 1 0 100%; width: 100%; } .control #watchSymbol { flex: 1 1 100px; min-width: 100px; } .control button { flex: 0 0 auto; } .metrics { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid #d5dfe3; } .metric:last-child { border-bottom: 0; } .grid { grid-template-columns: 1fr; } .grid > div:nth-child(odd) { border-right: 0; } }
@@ -384,6 +427,7 @@ _APP_HTML = r'''<!doctype html>
       <div class="panel"><div class="panel-title"><h2>News</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
 
       <div class="panel"><div class="panel-title"><h2>Research Runs</h2><select id="runHistory" aria-label="Archived research run"></select></div><div class="empty" id="runHistoryDetail"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Research Report</h2><div class="report-actions"><a id="openReport" class="action-link" target="_blank" rel="noreferrer" aria-disabled="true">Open Markdown</a><a id="exportReport" class="action-link" aria-disabled="true">Export .md</a></div></div><div id="reportCoverage" class="empty">Select an archived research run to view coverage.</div><pre id="reportPreview" class="report-preview">No archived report available.</pre></div>
       <div class="panel"><div class="panel-title"><h2>Decision Draft</h2><span class="panel-meta">Optional manual signal</span></div><div class="grid decision-form">
         <div class="wide"><label class="label" for="narrativeMode">Analysis Mode</label><select id="narrativeMode"><option value="deterministic" selected>Deterministic</option><option value="openai_narrative">OpenAI Narrative</option></select></div>
         <div><label class="label" for="decisionDirection">Direction</label><select id="decisionDirection"><option value="">No decision</option><option value="buy">Buy</option><option value="hold">Hold</option><option value="sell">Sell</option></select></div>
@@ -446,6 +490,26 @@ _APP_HTML = r'''<!doctype html>
       ];
       $('decision').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
       $('decisionMeta').textContent = `Generated ${run.generated_at.slice(0,16).replace('T', ' ')}`;
+    }
+    function clearReportWorkspace(message) {
+      $('openReport').removeAttribute('href'); $('openReport').setAttribute('aria-disabled', 'true');
+      $('exportReport').removeAttribute('href'); $('exportReport').setAttribute('aria-disabled', 'true');
+      $('reportCoverage').className = 'empty'; $('reportCoverage').textContent = message;
+      $('reportPreview').textContent = 'No archived report available.';
+    }
+    async function renderReportWorkspace(snapshot) {
+      const run = snapshot.latest_run, workspace = snapshot.report_workspace;
+      if (!run || !workspace?.available) { clearReportWorkspace('Select an archived research run to view coverage.'); return; }
+      const baseUrl = `/api/reports/${encodeURIComponent(snapshot.symbol)}/${encodeURIComponent(run.run_id)}.md`;
+      $('openReport').href = baseUrl; $('openReport').setAttribute('aria-disabled', 'false');
+      $('exportReport').href = `${baseUrl}?download=1`; $('exportReport').setAttribute('aria-disabled', 'false');
+      $('exportReport').setAttribute('download', `${snapshot.symbol}_${run.run_id}.md`);
+      $('reportCoverage').className = '';
+      $('reportCoverage').innerHTML = `<div class="coverage-summary">Core data coverage: ${workspace.core_available}/${workspace.core_total}</div><ul class="coverage-list">${workspace.items.map(item => `<li class="coverage-item"><div><div class="coverage-label">${escape(item.label)}</div><div class="coverage-detail">${escape(item.detail)}</div></div><span class="coverage-status ${item.available ? '' : 'missing'}">${item.available ? 'Available' : item.optional ? 'Not used' : 'Missing'}</span></li>`).join('')}</ul>`;
+      try {
+        const report = await fetch(baseUrl).then(response => response.ok ? response.text() : Promise.reject(response));
+        $('reportPreview').textContent = report;
+      } catch (error) { $('reportPreview').textContent = 'Unable to load the archived report.'; }
     }
     function renderBacktest(run) {
       if (!run || !run.backtest) { $('backtest').innerHTML = '<div class="empty">No archived backtest available.</div>'; $('backtestMeta').textContent = ''; return; }
@@ -542,14 +606,14 @@ _APP_HTML = r'''<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId);
+        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         setResearchButton(Boolean(activeJobId));
       } catch (error) { $('status').textContent = 'Unable to load local research storage.'; }

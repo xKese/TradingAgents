@@ -1,4 +1,6 @@
 from datetime import date, datetime, timezone
+from threading import Thread
+from urllib.request import urlopen
 
 from tradingagents.research_platform.agent_artifacts import agent_output_from_analyst_note
 from tradingagents.research_platform.agent_contracts import (
@@ -14,7 +16,11 @@ from tradingagents.research_platform.backtest_contracts import (
     BacktestMetrics,
     BacktestResult,
 )
-from tradingagents.research_platform.cockpit import build_cockpit_snapshot, discover_cached_symbols
+from tradingagents.research_platform.cockpit import (
+    build_cockpit_snapshot,
+    create_cockpit_server,
+    discover_cached_symbols,
+)
 from tradingagents.research_platform.data_contracts import (
     DataProvenance,
     FundamentalSnapshot,
@@ -203,3 +209,32 @@ def test_cockpit_posts_selected_narrative_mode():
     assert 'id="narrativeMode"' in _APP_HTML
     assert 'value="openai_narrative"' in _APP_HTML
     assert 'narrative_mode: $(\'narrativeMode\').value' in _APP_HTML
+
+
+def test_cockpit_serves_and_exports_archived_markdown_report(tmp_path):
+    archive = JsonResearchRunArchive(tmp_path)
+    summary = archive.save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
+        )
+    )
+    server = create_cockpit_server(tmp_path, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    url = f"http://{host}:{port}/api/reports/NVDA/{summary.run_id}.md"
+
+    try:
+        with urlopen(url, timeout=2) as response:
+            report = response.read().decode("utf-8")
+            assert response.headers["Content-Type"].startswith("text/markdown")
+        with urlopen(url + "?download=1", timeout=2) as response:
+            assert response.headers["Content-Disposition"].startswith("attachment;")
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.RequestHandlerClass.jobs.shutdown()
+
+    assert "# Personal Research Report: NVDA" in report

@@ -100,23 +100,19 @@ def _apply_prompt_caching(payload: dict[str, Any]) -> dict[str, Any]:
             }
         ]
     elif isinstance(system, list) and system:
-        cached_system = copy.deepcopy(system)
-        for index in range(len(cached_system) - 1, -1, -1):
-            block = cached_system[index]
+        for index in range(len(system) - 1, -1, -1):
+            block = system[index]
             if isinstance(block, dict):
-                cached_system[index] = _add_cache_control(block)
+                system[index] = _add_cache_control(block)
                 break
-        cached_payload["system"] = cached_system
 
     tools = cached_payload.get("tools")
     if isinstance(tools, list) and tools:
-        cached_tools = copy.deepcopy(tools)
-        for index in range(len(cached_tools) - 1, -1, -1):
-            tool = cached_tools[index]
+        for index in range(len(tools) - 1, -1, -1):
+            tool = tools[index]
             if isinstance(tool, dict):
-                cached_tools[index] = _add_cache_control(tool)
+                tools[index] = _add_cache_control(tool)
                 break
-        cached_payload["tools"] = cached_tools
 
     return cached_payload
 

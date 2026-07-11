@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from json import loads
 from threading import Thread
 from urllib.request import urlopen
 
@@ -220,6 +221,7 @@ def test_cockpit_serves_and_exports_archived_markdown_report(tmp_path):
             generated_at=datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
         )
     )
+    JsonWatchlistStore(tmp_path).add("NVDA")
     server = create_cockpit_server(tmp_path, port=0)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -232,6 +234,11 @@ def test_cockpit_serves_and_exports_archived_markdown_report(tmp_path):
             assert response.headers["Content-Type"].startswith("text/markdown")
         with urlopen(url + "?download=1", timeout=2) as response:
             assert response.headers["Content-Disposition"].startswith("attachment;")
+        with urlopen(f"http://{host}:{port}/api/watchlist-board", timeout=2) as response:
+            board = loads(response.read().decode("utf-8"))
+            assert board["total"] == 1
+            assert board["items"][0]["symbol"] == "NVDA"
+            assert board["researched"] == 1
     finally:
         server.shutdown()
         server.server_close()

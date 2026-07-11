@@ -62,6 +62,7 @@ from .risk_contracts import (
 )
 from .run_archive import JsonResearchRunArchive, ResearchRunArchive, ResearchRunSummary
 from .watchlist import JsonWatchlistStore, WatchlistEntry
+from .watchlist_board import build_watchlist_board
 
 __all__ = [
     "AgentOutputEnvelope",
@@ -78,6 +79,7 @@ __all__ = [
     "BacktestWarningSeverity",
     "build_cache_data_health",
     "build_report_workspace",
+    "build_watchlist_board",
     "ConfidenceLevel",
     "DataProvider",
     "DataProvenance",

@@ -93,6 +93,11 @@ class OpsConfig:
     research_screen_interval_days: int = 3
     research_drain_deadline_hour: int = 8   # local America/New_York
     research_screen_ttl_days: int = 7        # skip symbols screened within this window
+    # Max names the overnight brain drain researches per night. The drain
+    # runs AFTER graph vetting in the shared 00:00-deadline window; the cap
+    # keeps it from minting more pending_vetting debt per night (~30min of
+    # graph time per buy) than later vetting stages can service.
+    research_drain_nightly_cap: int = 15
     # Cost dial: max full-pipeline (LLM) analyses per day; risk is capped separately.
     daily_analysis_budget: int = 8
     # Exit engine (spec Component 6). Entry is top-daily_analysis_budget;
@@ -162,7 +167,8 @@ class OpsConfig:
             raise ValueError(
                 f"research_starting_cash must be > 0, got {self.research_starting_cash}"
             )
-        for fname in ("research_screen_interval_days", "research_screen_ttl_days"):
+        for fname in ("research_screen_interval_days", "research_screen_ttl_days",
+                      "research_drain_nightly_cap"):
             val = getattr(self, fname)
             if val <= 0:
                 raise ValueError(f"{fname} must be > 0, got {val}")
@@ -228,6 +234,10 @@ def load_config() -> OpsConfig:
     screen_ttl = _env_int("OPS_RESEARCH_SCREEN_TTL_DAYS")
     if screen_ttl is not None:
         kwargs["research_screen_ttl_days"] = screen_ttl
+
+    drain_cap = _env_int("OPS_RESEARCH_DRAIN_NIGHTLY_CAP")
+    if drain_cap is not None:
+        kwargs["research_drain_nightly_cap"] = drain_cap
 
     cash_reserve_pct = _env_decimal("OPS_CASH_RESERVE_PCT")
     if cash_reserve_pct is not None:

@@ -851,9 +851,11 @@ def _pending_vetting_memo(ticker="ACME"):
     )
 
 
-def test_overnight_tick_vets_after_drain_and_records_event(monkeypatch, tmp_path):
-    """Vetting runs after the drain, inside the same backend bracket, with the
-    same deadline, and records research_vetting_run."""
+def test_overnight_tick_vets_before_drain_and_records_events(monkeypatch, tmp_path):
+    """Vetting runs FIRST (confirms land nightly instead of waiting for the
+    drain backlog to clear), then the drain gets the remaining window with
+    the nightly name cap; both stages share one deadline and one backend
+    bracket, and both events are recorded."""
     import ops.main as main_mod
     from datetime import date as _date
     from ops.config import load_config
@@ -881,9 +883,11 @@ def test_overnight_tick_vets_after_drain_and_records_event(monkeypatch, tmp_path
 
     monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
 
+    stage_order = []
     drain_kw = {}
 
     def _fake_drain(**kw):
+        stage_order.append("drain")
         drain_kw.update(kw)
         return DrainSummary(3, 0, 0, False)
 
@@ -893,6 +897,7 @@ def test_overnight_tick_vets_after_drain_and_records_event(monkeypatch, tmp_path
     vet_kw = {}
 
     def _fake_vet(**kw):
+        stage_order.append("vet")
         vet_kw.update(kw)
         return VettingSummary(vetted=1, confirmed=1, rejected=0, failed=0,
                               still_pending=0, hit_deadline=False)
@@ -906,9 +911,16 @@ def test_overnight_tick_vets_after_drain_and_records_event(monkeypatch, tmp_path
             vet_adapter_factory=lambda backend: sentinel_adapter,
         )
 
+        # Vet-first ordering: confirms must not wait on the drain backlog.
+        assert stage_order == ["vet", "drain"]
+
         # vet_pending got the drain's deadline and the sentinel adapter.
         assert vet_kw["adapter"] is sentinel_adapter
         assert vet_kw["deadline"] == drain_kw["deadline"]
+
+        # The drain is capped per night so it cannot monopolize future
+        # windows (each drained buy adds ~30min of vetting debt).
+        assert drain_kw["max_names"] == config.research_drain_nightly_cap
 
         assert journal.has_event_today(main_mod.events.KIND_RESEARCH_DRAIN_RUN)
         assert journal.has_event_today(main_mod.events.KIND_RESEARCH_VETTING_RUN)

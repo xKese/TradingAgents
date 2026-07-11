@@ -229,6 +229,7 @@ def test_research_cadence_defaults():
     assert cfg.research_screen_interval_days == 3
     assert cfg.research_drain_deadline_hour == 8
     assert cfg.research_screen_ttl_days == 7
+    assert cfg.research_drain_nightly_cap == 15
 
 
 def test_research_cadence_env_overrides(monkeypatch):
@@ -236,10 +237,12 @@ def test_research_cadence_env_overrides(monkeypatch):
     monkeypatch.setenv("OPS_RESEARCH_SCREEN_INTERVAL_DAYS", "2")
     monkeypatch.setenv("OPS_RESEARCH_DRAIN_DEADLINE_HOUR", "7")
     monkeypatch.setenv("OPS_RESEARCH_SCREEN_TTL_DAYS", "5")
+    monkeypatch.setenv("OPS_RESEARCH_DRAIN_NIGHTLY_CAP", "8")
     cfg = load_config()
     assert cfg.research_screen_interval_days == 2
     assert cfg.research_drain_deadline_hour == 7
     assert cfg.research_screen_ttl_days == 5
+    assert cfg.research_drain_nightly_cap == 8
 
 
 def test_research_cadence_validation():
@@ -249,6 +252,8 @@ def test_research_cadence_validation():
         OpsConfig(research_screen_interval_days=0)
     with pytest.raises(ValueError):
         OpsConfig(research_screen_ttl_days=0)
+    with pytest.raises(ValueError):
+        OpsConfig(research_drain_nightly_cap=0)
     with pytest.raises(ValueError):
         OpsConfig(research_drain_deadline_hour=24)
     with pytest.raises(ValueError):

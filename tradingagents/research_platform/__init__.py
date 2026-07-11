@@ -47,9 +47,11 @@ from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import (
     LocalResearchJobRunner,
     ManualSignalRequest,
+    ResearchDataProvider,
     ResearchJob,
     ResearchJobRequest,
     ResearchJobStatus,
+    resolve_data_provider,
 )
 from .risk_contracts import (
     RiskDecision,
@@ -61,6 +63,12 @@ from .risk_contracts import (
     evaluate_basic_risk,
 )
 from .run_archive import JsonResearchRunArchive, ResearchRunArchive, ResearchRunSummary
+from .tushare_provider import (
+    TushareDataUnavailableError,
+    TushareProProvider,
+    canonical_tushare_symbol,
+    supports_tushare_symbol,
+)
 from .watchlist import JsonWatchlistStore, WatchlistEntry
 from .watchlist_board import build_watchlist_board
 
@@ -80,6 +88,7 @@ __all__ = [
     "build_cache_data_health",
     "build_report_workspace",
     "build_watchlist_board",
+    "canonical_tushare_symbol",
     "ConfidenceLevel",
     "DataProvider",
     "DataProvenance",
@@ -99,6 +108,7 @@ __all__ = [
     "NewsItem",
     "OpenAIResearchNarrativeProvider",
     "PriceBar",
+    "ResearchDataProvider",
     "ResearchJob",
     "ResearchJobRequest",
     "ResearchJobStatus",
@@ -106,6 +116,8 @@ __all__ = [
     "ResearchNarrativeProvider",
     "ResearchRunArchive",
     "ResearchRunSummary",
+    "resolve_data_provider",
+    "supports_tushare_symbol",
     "render_archived_report",
     "RiskDecision",
     "RiskLimitBreach",
@@ -117,6 +129,8 @@ __all__ = [
     "TradeDirection",
     "TradeHorizon",
     "TradeSignal",
+    "TushareDataUnavailableError",
+    "TushareProProvider",
     "WatchlistEntry",
     "evaluate_basic_risk",
     "validate_signal_timing",

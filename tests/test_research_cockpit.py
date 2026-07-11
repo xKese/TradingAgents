@@ -207,6 +207,9 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="dataProvider"' in _APP_HTML
+    assert 'value="tushare"' in _APP_HTML
+    assert 'data_provider: $(\'dataProvider\').value' in _APP_HTML
     assert 'id="narrativeMode"' in _APP_HTML
     assert 'value="openai_narrative"' in _APP_HTML
     assert 'narrative_mode: $(\'narrativeMode\').value' in _APP_HTML

@@ -23,7 +23,16 @@ from .narrative_provider import (
 from .research_workflow import ResearchWorkflowConfig, run_ticker_research
 from .risk_contracts import RiskPolicy
 from .run_archive import JsonResearchRunArchive
+from .tushare_provider import TushareProProvider, supports_tushare_symbol
 from .yfinance_provider import YFinanceProvider
+
+
+class ResearchDataProvider(str, Enum):
+    """Supported vendor adapters for a local research job."""
+
+    AUTO = "auto"
+    TUSHARE = "tushare"
+    YFINANCE = "yfinance"
 
 
 class ResearchJobStatus(str, Enum):
@@ -58,6 +67,7 @@ class ResearchJobRequest(BaseModel):
     currency: str | None = None
     manual_signal: ManualSignalRequest | None = None
     narrative_mode: NarrativeMode = NarrativeMode.DETERMINISTIC
+    data_provider: ResearchDataProvider = ResearchDataProvider.AUTO
 
     @field_validator("symbol")
     @classmethod
@@ -82,6 +92,18 @@ class ResearchJob(BaseModel):
     report_path: Path | None = None
     run_id: str | None = None
     error: str | None = None
+
+
+def resolve_data_provider(request: ResearchJobRequest) -> ResearchDataProvider:
+    """Resolve the requested vendor without constructing a provider or reading credentials."""
+
+    if request.data_provider != ResearchDataProvider.AUTO:
+        return request.data_provider
+    return (
+        ResearchDataProvider.TUSHARE
+        if supports_tushare_symbol(request.symbol)
+        else ResearchDataProvider.YFINANCE
+    )
 
 
 ProviderFactory = Callable[[ResearchJobRequest], DataProvider]
@@ -211,8 +233,10 @@ class LocalResearchJobRunner:
                 self._jobs[job_id] = current.model_copy(update=updates)
 
     def _default_provider_factory(self, request: ResearchJobRequest) -> DataProvider:
-        cache_dir = self.data_dir / "yfinance"
-        return YFinanceProvider(cache_dir=cache_dir)
+        provider = resolve_data_provider(request)
+        if provider == ResearchDataProvider.TUSHARE:
+            return TushareProProvider()
+        return YFinanceProvider(cache_dir=self.data_dir / "yfinance")
 
     def _default_narrative_provider_factory(
         self,

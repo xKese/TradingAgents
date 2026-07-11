@@ -9,8 +9,10 @@ from tradingagents.research_platform.data_contracts import (
 from tradingagents.research_platform.research_jobs import (
     LocalResearchJobRunner,
     ManualSignalRequest,
+    ResearchDataProvider,
     ResearchJobRequest,
     ResearchJobStatus,
+    resolve_data_provider,
 )
 from tradingagents.research_platform.run_archive import JsonResearchRunArchive
 
@@ -183,3 +185,15 @@ def test_local_job_runner_reports_missing_openai_configuration(tmp_path, monkeyp
     assert completed.error is not None
     assert "OPENAI_API_KEY" in completed.error
     runner.shutdown()
+
+
+def test_research_job_auto_selects_tushare_only_for_supported_china_hong_kong_symbols():
+    assert resolve_data_provider(ResearchJobRequest(symbol="600519")) == ResearchDataProvider.TUSHARE
+    assert resolve_data_provider(ResearchJobRequest(symbol="700.HK")) == ResearchDataProvider.TUSHARE
+    assert resolve_data_provider(ResearchJobRequest(symbol="NVDA")) == ResearchDataProvider.YFINANCE
+    assert (
+        resolve_data_provider(
+            ResearchJobRequest(symbol="600519", data_provider=ResearchDataProvider.YFINANCE)
+        )
+        == ResearchDataProvider.YFINANCE
+    )

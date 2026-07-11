@@ -82,7 +82,9 @@ from .watchlist import JsonWatchlistStore, WatchlistEntry
 from .watchlist_board import build_watchlist_board
 from .watchlist_refresh import (
     WatchlistRefreshBatch,
+    WatchlistRefreshOutcome,
     WatchlistRefreshRequest,
+    execute_watchlist_refresh,
     submit_watchlist_refresh,
 )
 
@@ -156,9 +158,11 @@ __all__ = [
     "ValuationContext",
     "ValuationMetricContext",
     "WatchlistRefreshBatch",
+    "WatchlistRefreshOutcome",
     "WatchlistRefreshRequest",
     "WatchlistEntry",
     "evaluate_basic_risk",
+    "execute_watchlist_refresh",
     "submit_watchlist_refresh",
     "validate_signal_timing",
 ]

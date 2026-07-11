@@ -34,9 +34,30 @@ class WatchlistRefreshBatch(BaseModel):
     jobs: list[ResearchJob]
 
 
+class WatchlistRefreshOutcome(BaseModel):
+    """Terminal results for a synchronous local watchlist refresh."""
+
+    model_config = ConfigDict(frozen=True)
+
+    batch_id: str
+    symbols: list[str]
+    jobs: list[ResearchJob]
+
+    @property
+    def succeeded(self) -> int:
+        return sum(job.status.value == "succeeded" for job in self.jobs)
+
+    @property
+    def failed(self) -> int:
+        return sum(job.status.value == "failed" for job in self.jobs)
+
+
 class ResearchJobSubmitter(Protocol):
     def submit(self, request: ResearchJobRequest) -> ResearchJob:
         """Queue one normal local research job."""
+
+    def wait(self, job_id: str, timeout: float | None = None) -> ResearchJob:
+        """Wait for a queued normal local research job."""
 
 
 def submit_watchlist_refresh(
@@ -64,3 +85,21 @@ def submit_watchlist_refresh(
         for symbol in symbols
     ]
     return WatchlistRefreshBatch(batch_id=uuid4().hex, symbols=symbols, jobs=queued)
+
+
+def execute_watchlist_refresh(
+    watchlist: JsonWatchlistStore,
+    jobs: ResearchJobSubmitter,
+    request: WatchlistRefreshRequest,
+    *,
+    timeout_per_job: float | None = None,
+) -> WatchlistRefreshOutcome:
+    """Queue then wait for a bounded refresh without changing job semantics."""
+
+    batch = submit_watchlist_refresh(watchlist, jobs, request)
+    completed = [jobs.wait(job.job_id, timeout=timeout_per_job) for job in batch.jobs]
+    return WatchlistRefreshOutcome(
+        batch_id=batch.batch_id,
+        symbols=batch.symbols,
+        jobs=completed,
+    )

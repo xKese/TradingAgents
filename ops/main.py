@@ -505,13 +505,18 @@ def _research_overnight_tick(
     journal: Journal, config, *, now=None, should_stop=None, vet_adapter_factory=None,
 ) -> None:
     """Nightly 00:00 job, two stages under one deadline and one ds4 bracket:
-    (1) screen if >= research_screen_interval_days, then drain pending screen
-    hits into brain memos; (2) graph-vet the pending_vetting queue (brain
-    buys) oldest-first. Both stages stop at the same local deadline hour /
-    on shutdown; whatever isn't vetted tonight stays pending_vetting and
-    carries to the next night. Scheduler-safe: a drain failure records
-    research_drain_error, a vetting failure records research_vetting_error
-    (see _research_vetting_stage); neither raises.
+    (1) screen if >= research_screen_interval_days, then graph-vet the
+    pending_vetting queue (brain buys) oldest-first; (2) drain pending
+    screen hits into brain memos, capped at research_drain_nightly_cap
+    names. Vetting runs FIRST so confirmed memos become tradeable nightly
+    instead of waiting for the drain backlog to clear (a drain-first order
+    starved vetting for days on the first backlog, 2026-07-11); the drain
+    cap keeps each night's newly-minted vetting debt (~30min of graph time
+    per buy) serviceable. Both stages stop at the same local deadline hour /
+    on shutdown; whatever isn't processed tonight carries to the next
+    night. Scheduler-safe: a drain failure records research_drain_error, a
+    vetting failure records research_vetting_error (see
+    _research_vetting_stage); neither raises.
 
     No has_event_today gate here (unlike the sibling research ticks): the
     3-day screen-due check plus the two queue states already make re-firing
@@ -551,6 +556,15 @@ def _research_overnight_tick(
         tick_now = now or (lambda: datetime.now(deadline.tzinfo))
         backend = build_managed_backend(load_managed_backend_config())
         try:
+            # Stage 1 — vet FIRST: promote/reject last night's brain buys
+            # before the drain can eat the window (the adapter brings ds4 up
+            # lazily, so an empty vetting queue still never spins it).
+            _research_vetting_stage(
+                journal, config, memo_store=memo_store, backend=backend,
+                deadline=deadline, should_stop=stop, now=tick_now,
+                adapter_factory=vet_adapter_factory,
+            )
+            # Stage 2 — drain whatever window remains, capped per night.
             if pending:
                 from tradingagents.dataflows import edgar
                 edgar.get_user_agent()  # fail fast before spinning ds4
@@ -565,6 +579,7 @@ def _research_overnight_tick(
                     store=store, memo_store=memo_store,
                     evidence_llm=evidence_llm, thesis_llm=thesis_llm,
                     thesis_model_spec=config.research_thesis_model,
+                    max_names=config.research_drain_nightly_cap,
                     deadline=deadline, should_stop=stop, now=tick_now,
                 )
                 journal.record_event(
@@ -583,11 +598,6 @@ def _research_overnight_tick(
                         researched=0, failed=0, still_pending=0, hit_deadline=False,
                     ),
                 )
-            _research_vetting_stage(
-                journal, config, memo_store=memo_store, backend=backend,
-                deadline=deadline, should_stop=stop, now=tick_now,
-                adapter_factory=vet_adapter_factory,
-            )
         finally:
             backend.shutdown()
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring

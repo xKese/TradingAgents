@@ -18,6 +18,7 @@ import logging
 import re
 from collections.abc import Iterable
 from threading import Lock
+from time import perf_counter
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -344,7 +345,9 @@ class CodexStructuredOutput:
         parsed = _extract_json_object(raw)
         if parsed is None:
             raise ValueError(f"Codex returned non-JSON structured output: {raw!r}")
-        return self.schema.model_validate(parsed)
+        result = self.schema.model_validate(parsed)
+        self.llm._notify_codex_status("on_codex_structured_output")
+        return result
 
 
 class CodexChatModel(BaseChatModel):
@@ -363,6 +366,25 @@ class CodexChatModel(BaseChatModel):
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
         return CodexStructuredOutput(self, schema)
+
+    def _notify_codex_status(self, method_name: str, **kwargs: Any) -> None:
+        """Send optional Codex telemetry to LangChain callback handlers."""
+        callbacks = getattr(self, "callbacks", None)
+        handlers = getattr(callbacks, "handlers", callbacks)
+        if not isinstance(handlers, Iterable) or isinstance(handlers, (str, bytes)):
+            return
+        for handler in handlers:
+            callback = getattr(handler, method_name, None)
+            if callable(callback):
+                callback(**kwargs)
+
+    def record_structured_fallback(self, agent_name: str, error: Exception) -> None:
+        """Record a visible fallback when the shared structured helper retries."""
+        self._notify_codex_status(
+            "on_codex_structured_fallback",
+            agent_name=agent_name,
+            error=str(error),
+        )
 
     def _generate(
         self,
@@ -397,6 +419,7 @@ class CodexChatModel(BaseChatModel):
         *,
         output_schema: dict[str, Any] | None = None,
     ) -> str:
+        started = perf_counter()
         try:
             from openai_codex import Sandbox
         except ImportError as exc:
@@ -425,6 +448,11 @@ class CodexChatModel(BaseChatModel):
             )
             result = thread.run(prompt, output_schema=output_schema)
         except CodexSetupError:
+            self._notify_codex_status(
+                "on_codex_request_end",
+                duration_seconds=perf_counter() - started,
+                error="Codex setup error",
+            )
             raise
         except Exception as exc:
             message = str(exc)
@@ -443,10 +471,19 @@ class CodexChatModel(BaseChatModel):
                 )
             else:
                 problem = "Codex local invocation failed."
+            self._notify_codex_status(
+                "on_codex_request_end",
+                duration_seconds=perf_counter() - started,
+                error=problem,
+            )
             raise RuntimeError(
                 _codex_setup_message(problem, original_error=message)
             ) from exc
 
+        self._notify_codex_status(
+            "on_codex_request_end",
+            duration_seconds=perf_counter() - started,
+        )
         return str(getattr(result, "final_response", "") or "")
 
     def _to_ai_message(self, raw: str) -> AIMessage:
@@ -477,7 +514,10 @@ class CodexClient(BaseLLMClient):
     def get_llm(self) -> Any:
         self.warn_if_unknown_model()
         preflight_codex_runtime(self.model)
-        return CodexChatModel(model_name=self.model)
+        return CodexChatModel(
+            model_name=self.model,
+            callbacks=self.kwargs.get("callbacks"),
+        )
 
     def validate_model(self) -> bool:
         return validate_model("codex", self.model)

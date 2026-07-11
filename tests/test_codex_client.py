@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.callbacks import BaseCallbackHandler
 from pydantic import BaseModel
 
 from tradingagents.llm_clients import codex_client
@@ -121,6 +122,34 @@ def test_codex_accepts_openai_style_message_dicts(monkeypatch):
     ])
 
     assert result.content == "Trader response"
+
+
+@pytest.mark.unit
+def test_codex_reports_native_structured_output_and_fallback_to_callbacks(monkeypatch):
+    class StatusHandler(BaseCallbackHandler):
+        def __init__(self):
+            self.structured_outputs = 0
+            self.fallbacks = []
+
+        def on_codex_structured_output(self):
+            self.structured_outputs += 1
+
+        def on_codex_structured_fallback(self, *, agent_name, error):
+            self.fallbacks.append((agent_name, error))
+
+    handler = StatusHandler()
+    llm = CodexChatModel(model_name="gpt-5.4", callbacks=[handler])
+    monkeypatch.setattr(
+        llm,
+        "_run_codex",
+        lambda prompt, *, output_schema=None: '{"recommendation":"Hold","confidence":0.75}',
+    )
+
+    llm.with_structured_output(SampleStructuredOutput).invoke("Decide")
+    llm.record_structured_fallback("Trader", ValueError("invalid output"))
+
+    assert handler.structured_outputs == 1
+    assert handler.fallbacks == [("Trader", "invalid output")]
 
 
 @pytest.mark.unit

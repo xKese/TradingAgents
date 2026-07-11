@@ -464,6 +464,17 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
             tokens_str = "Tokens: --"
         stats_parts.append(tokens_str)
 
+        if stats["codex_requests"]:
+            average = stats["codex_request_seconds"] / stats["codex_requests"]
+            stats_parts.append(
+                "Codex: "
+                f"{stats['codex_requests']} req | "
+                f"JSON {stats['codex_structured_outputs']} | "
+                f"fallback {stats['codex_structured_fallbacks']} | "
+                f"errors {stats['codex_request_errors']} | "
+                f"avg {average:.1f}s"
+            )
+
     stats_parts.append(f"Reports: {reports_completed}/{reports_total}")
 
     # Elapsed time

@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from json import loads
 from threading import Thread
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from tradingagents.research_platform.agent_artifacts import agent_output_from_analyst_note
 from tradingagents.research_platform.agent_contracts import (
@@ -207,6 +207,8 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="refreshWatchlistResearch"' in _APP_HTML
+    assert "/api/watchlist-refresh" in _APP_HTML
     assert 'id="companyProfile"' in _APP_HTML
     assert 'id="readiness"' in _APP_HTML
     assert 'id="valuationContext"' in _APP_HTML
@@ -333,3 +335,28 @@ def test_cockpit_exposes_vendor_company_profile(tmp_path):
     assert snapshot["company_profile"]["name"] == "Kweichow Moutai"
     assert snapshot["company_profile"]["industry"] == "Liquor"
     assert snapshot["company_profile"]["list_date"] == "2001-08-27"
+
+
+def test_cockpit_accepts_empty_watchlist_refresh_batch(tmp_path):
+    server = create_cockpit_server(tmp_path, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    request = Request(
+        f"http://{host}:{port}/api/watchlist-refresh",
+        data=b'{"lookback_days": 180}',
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=2) as response:
+            payload = loads(response.read().decode("utf-8"))
+            assert response.status == 202
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.RequestHandlerClass.jobs.shutdown()
+
+    assert payload["symbols"] == []
+    assert payload["jobs"] == []

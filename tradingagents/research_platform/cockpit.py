@@ -29,6 +29,7 @@ from .run_archive import JsonResearchRunArchive
 from .valuation_context import build_valuation_context
 from .watchlist import JsonWatchlistStore
 from .watchlist_board import build_watchlist_board
+from .watchlist_refresh import WatchlistRefreshRequest, submit_watchlist_refresh
 
 _EARLIEST_DATE = date(1900, 1, 1)
 
@@ -252,7 +253,11 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/watchlist":
             self._send_json(
                 HTTPStatus.OK,
-                {"entries": [entry.model_dump(mode="json") for entry in self.watchlist.list_entries()]},
+                {
+                    "entries": [
+                        entry.model_dump(mode="json") for entry in self.watchlist.list_entries()
+                    ]
+                },
             )
             return
         if parsed.path == "/api/snapshot":
@@ -285,7 +290,9 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
         download = parse_qs(parsed.query).get("download", ["0"])[0] == "1"
         disposition = None
         if download:
-            disposition = f'attachment; filename="{safe_ticker_component(bundle.symbol)}_{run_id}.md"'
+            disposition = (
+                f'attachment; filename="{safe_ticker_component(bundle.symbol)}_{run_id}.md"'
+            )
         self._send_text(
             HTTPStatus.OK,
             report,
@@ -302,6 +309,15 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
                 return
             job = self.jobs.submit(request)
             self._send_json(HTTPStatus.ACCEPTED, {"job": job.model_dump(mode="json")})
+            return
+        if urlparse(self.path).path == "/api/watchlist-refresh":
+            try:
+                request = WatchlistRefreshRequest.model_validate(self._read_json_body())
+            except (UnicodeDecodeError, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            batch = submit_watchlist_refresh(self.watchlist, self.jobs, request)
+            self._send_json(HTTPStatus.ACCEPTED, batch.model_dump(mode="json"))
             return
         if urlparse(self.path).path != "/api/watchlist":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -341,7 +357,9 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
         """Keep normal browser navigation out of the terminal."""
 
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-        self._send_text(status, json.dumps(payload, ensure_ascii=True), "application/json; charset=utf-8")
+        self._send_text(
+            status, json.dumps(payload, ensure_ascii=True), "application/json; charset=utf-8"
+        )
 
     def _send_text(
         self,
@@ -406,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-_APP_HTML = r'''<!doctype html>
+_APP_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -467,6 +485,7 @@ _APP_HTML = r'''<!doctype html>
         <button id="addSymbol" type="button">Add</button>
         <button id="removeSymbol" type="button">Remove</button>
         <button id="runResearch" type="button">Run Research</button>
+        <button id="refreshWatchlistResearch" type="button">Refresh Watchlist</button>
         <button id="refresh" type="button">Refresh</button>
       </div>
     </div>
@@ -637,6 +656,7 @@ _APP_HTML = r'''<!doctype html>
     }
     let activeRunId = null;
     let activeJobId = null;
+    let activeBatchJobIds = [];
     let watchlistSymbols = new Set();
     function renderRunHistory(runs, selectedRunId) {
       const selector = $('runHistory');
@@ -656,6 +676,43 @@ _APP_HTML = r'''<!doctype html>
     function setResearchButton(isRunning) {
       $('runResearch').disabled = isRunning || !$('symbol').value;
       $('runResearch').textContent = isRunning ? 'Research Running' : 'Run Research';
+      $('refreshWatchlistResearch').disabled = isRunning;
+      $('refreshWatchlistResearch').textContent = isRunning && activeBatchJobIds.length ? 'Refreshing Watchlist' : 'Refresh Watchlist';
+    }
+    async function pollWatchlistRefresh() {
+      if (!activeBatchJobIds.length) return;
+      try {
+        const payloads = await Promise.all(activeBatchJobIds.map(jobId => fetch(`/api/research-jobs/${encodeURIComponent(jobId)}`).then(response => response.ok ? response.json() : Promise.reject(response))));
+        const jobs = payloads.map(payload => payload.job);
+        const pending = jobs.filter(job => job.status === 'queued' || job.status === 'running');
+        const completed = jobs.length - pending.length;
+        $('status').textContent = `Watchlist refresh: ${completed}/${jobs.length} completed.`;
+        if (pending.length) { window.setTimeout(pollWatchlistRefresh, 800); return; }
+        const failed = jobs.filter(job => job.status === 'failed');
+        activeBatchJobIds = [];
+        setResearchButton(false);
+        $('status').textContent = failed.length ? `Watchlist refresh completed with ${failed.length} failed job${failed.length === 1 ? '' : 's'}.` : `Watchlist refresh completed for ${jobs.length} symbol${jobs.length === 1 ? '' : 's'}.`;
+        await refreshSymbols();
+        await loadSnapshot();
+      } catch (error) {
+        activeBatchJobIds = [];
+        setResearchButton(false);
+        $('status').textContent = 'Unable to refresh the watchlist.';
+      }
+    }
+    async function startWatchlistRefresh() {
+      if (activeJobId || activeBatchJobIds.length) return;
+      setResearchButton(true);
+      try {
+        const payload = await fetch('/api/watchlist-refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value})}).then(response => response.ok ? response.json() : Promise.reject(response));
+        activeBatchJobIds = payload.jobs.map(job => job.job_id);
+        if (!activeBatchJobIds.length) { setResearchButton(false); $('status').textContent = 'Watchlist is empty.'; return; }
+        await pollWatchlistRefresh();
+      } catch (error) {
+        activeBatchJobIds = [];
+        setResearchButton(false);
+        $('status').textContent = 'Unable to start the watchlist refresh.';
+      }
     }
     async function pollResearchJob() {
       if (!activeJobId) return;
@@ -774,7 +831,7 @@ _APP_HTML = r'''<!doctype html>
     start();
   </script>
 </body>
-</html>'''
+</html>"""
 
 
 if __name__ == "__main__":

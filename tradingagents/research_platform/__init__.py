@@ -80,6 +80,11 @@ from .tushare_provider import (
 from .valuation_context import ValuationContext, ValuationMetricContext, build_valuation_context
 from .watchlist import JsonWatchlistStore, WatchlistEntry
 from .watchlist_board import build_watchlist_board
+from .watchlist_refresh import (
+    WatchlistRefreshBatch,
+    WatchlistRefreshRequest,
+    submit_watchlist_refresh,
+)
 
 __all__ = [
     "AgentOutputEnvelope",
@@ -150,7 +155,10 @@ __all__ = [
     "TushareProProvider",
     "ValuationContext",
     "ValuationMetricContext",
+    "WatchlistRefreshBatch",
+    "WatchlistRefreshRequest",
     "WatchlistEntry",
     "evaluate_basic_risk",
+    "submit_watchlist_refresh",
     "validate_signal_timing",
 ]

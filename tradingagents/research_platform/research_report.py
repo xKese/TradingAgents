@@ -52,6 +52,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
         _render_header(bundle),
         _render_market_snapshot(bundle.price_bars),
         _render_fundamentals(bundle.fundamentals),
+        _render_financial_quality(bundle.fundamentals),
         _render_news(bundle.news),
         _render_agent_outputs(bundle.agent_outputs),
         _render_analyst_notes(bundle.analyst_notes),
@@ -142,6 +143,34 @@ def _render_fundamentals(fundamentals: list[FundamentalSnapshot]) -> str:
     )
 
 
+def _render_financial_quality(fundamentals: list[FundamentalSnapshot]) -> str:
+    snapshots = [
+        item
+        for item in fundamentals
+        if item.fiscal_period is not None and item.fiscal_period.startswith("financial_report_")
+    ]
+    if not snapshots:
+        return "## Financial Quality\n\nNo disclosed financial quality snapshot available."
+
+    latest = sorted(
+        snapshots,
+        key=lambda item: (item.provenance.as_of_date, item.period_end),
+    )[-1]
+    rows = [f"| {key} | {_format_value(value)} |" for key, value in sorted(latest.metrics.items())]
+    return "\n".join(
+        [
+            "## Financial Quality",
+            "",
+            f"**Report Period:** {latest.period_end.isoformat()}",
+            f"**Available As Of:** {latest.provenance.as_of_date.isoformat()}",
+            "",
+            "| Metric | Value |",
+            "| --- | ---: |",
+            *rows,
+        ]
+    )
+
+
 def _render_news(news: list[NewsItem]) -> str:
     if not news:
         return "## News\n\nNo normalized news items available."
@@ -167,6 +196,7 @@ def _render_agent_outputs(outputs: list[AgentOutputEnvelope]) -> str:
     if not outputs:
         return "## Agent Outputs\n\nNo structured agent outputs available."
     return "## Agent Outputs\n\n" + render_agent_outputs(outputs)
+
 
 def _render_analyst_notes(notes: list[AnalystNote]) -> str:
     if not notes:
@@ -226,6 +256,7 @@ def _render_risk_review(review: RiskReview | None) -> str:
         parts.extend(["", "### Notes", *[f"- {note}" for note in review.notes]])
     return "\n".join(parts)
 
+
 def _render_backtest(result: BacktestResult | None) -> str:
     if result is None:
         return "## Backtest\n\nNo backtest result available."
@@ -260,6 +291,7 @@ def _render_backtest(result: BacktestResult | None) -> str:
     elif result.warnings:
         parts.extend(["", "### Warnings", *[f"- {warning}" for warning in result.warnings]])
     return "\n".join(parts)
+
 
 def _render_provenance(bundle: ResearchReportBundle) -> str:
     rows = []
@@ -311,6 +343,7 @@ def _optional_pct(value: float | None) -> str:
 
 def _optional_number(value: float | None) -> str:
     return "N/A" if value is None else f"{value:.2f}"
+
 
 def _optional_int(value: int | None) -> str:
     return "N/A" if value is None else str(value)

@@ -15,6 +15,7 @@ from .data_contracts import (
     NewsItem,
     PriceBar,
 )
+from .financial_quality import build_financial_quality_snapshot
 
 ProClientFactory = Callable[[str], Any]
 
@@ -139,7 +140,7 @@ class TushareProProvider:
             (_required_date(row, "trade_date") for row in rows if _has_trade_date(row)),
             default=availability_date,
         )
-        return [
+        snapshots = [
             FundamentalSnapshot(
                 symbol=identity.symbol,
                 period_end=latest_trade_date,
@@ -153,6 +154,27 @@ class TushareProProvider:
                 ),
             )
         ]
+        if ts_code.endswith(".HK"):
+            return snapshots
+
+        financial_rows = self._fetch_financial_quality_rows(ts_code, availability_date)
+        financial_snapshot = build_financial_quality_snapshot(
+            symbol=identity.symbol,
+            as_of_date=availability_date,
+            currency=identity.currency or _currency_for(ts_code),
+            income_rows=financial_rows["income"],
+            balance_rows=financial_rows["balancesheet"],
+            cashflow_rows=financial_rows["cashflow"],
+            indicator_rows=financial_rows["fina_indicator"],
+            provenance=_provenance(
+                availability_date,
+                source="tushare.pro.financial_statements",
+                vendor_symbol=ts_code,
+            ),
+        )
+        if financial_snapshot is not None:
+            snapshots.append(financial_snapshot)
+        return snapshots
 
     def get_news(
         self,
@@ -232,6 +254,26 @@ class TushareProProvider:
         except Exception as error:
             raise TushareDataUnavailableError(
                 f"Tushare fundamental data unavailable for {ts_code}: {error}"
+            ) from error
+
+    def _fetch_financial_quality_rows(
+        self,
+        ts_code: str,
+        availability_date: date,
+    ) -> dict[str, list[Mapping[str, Any]]]:
+        params = {
+            "ts_code": ts_code,
+            "start_date": (availability_date - timedelta(days=730)).strftime("%Y%m%d"),
+            "end_date": availability_date.strftime("%Y%m%d"),
+        }
+        endpoints = ("income", "balancesheet", "cashflow", "fina_indicator")
+        try:
+            return {
+                endpoint: _records(getattr(self._pro, endpoint)(**params)) for endpoint in endpoints
+            }
+        except Exception as error:
+            raise TushareDataUnavailableError(
+                f"Tushare financial quality data unavailable for {ts_code}: {error}"
             ) from error
 
     def _fetch_corporate_event_rows(

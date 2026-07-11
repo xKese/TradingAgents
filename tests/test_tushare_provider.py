@@ -27,6 +27,53 @@ class FakeProClient:
             {"trade_date": "20260105", "pe": 20.5, "pe_ttm": 21.5, "pb": 3.2, "total_mv": 100000},
         ]
 
+    def income(self, **kwargs):
+        self.calls.append(("income", kwargs))
+        return [
+            {
+                "ann_date": "20260104",
+                "end_date": "20251231",
+                "total_revenue": 1000.0,
+                "n_income": 100.0,
+                "operate_profit": 110.0,
+            }
+        ]
+
+    def balancesheet(self, **kwargs):
+        self.calls.append(("balancesheet", kwargs))
+        return [
+            {
+                "ann_date": "20260104",
+                "end_date": "20251231",
+                "total_assets": 500.0,
+                "total_liab": 100.0,
+                "total_hldr_eqy_exc_min_int": 400.0,
+            }
+        ]
+
+    def cashflow(self, **kwargs):
+        self.calls.append(("cashflow", kwargs))
+        return [
+            {
+                "ann_date": "20260104",
+                "end_date": "20251231",
+                "n_cashflow_act": 120.0,
+                "free_cashflow": 80.0,
+            }
+        ]
+
+    def fina_indicator(self, **kwargs):
+        self.calls.append(("fina_indicator", kwargs))
+        return [
+            {
+                "ann_date": "20260104",
+                "end_date": "20251231",
+                "roe": 15.0,
+                "debt_to_assets": 20.0,
+                "current_ratio": 2.0,
+            }
+        ]
+
     def forecast(self, **kwargs):
         self.calls.append(("forecast", kwargs))
         return [
@@ -92,6 +139,21 @@ def test_tushare_provider_normalizes_a_share_daily_and_basic_snapshot():
     )
     assert fundamentals[0].metrics["pe_ratio_ttm"] == 21.5
     assert fundamentals[0].metrics["total_market_value_10k_cny"] == 100000
+    assert fundamentals[1].period_end == date(2025, 12, 31)
+    assert fundamentals[1].metrics["reported_total_revenue"] == 1000.0
+    assert fundamentals[1].metrics["operating_cashflow_to_net_income_ratio"] == 1.2
+    assert client.calls[-4:] == [
+        ("income", {"ts_code": "600519.SH", "start_date": "20240106", "end_date": "20260105"}),
+        (
+            "balancesheet",
+            {"ts_code": "600519.SH", "start_date": "20240106", "end_date": "20260105"},
+        ),
+        ("cashflow", {"ts_code": "600519.SH", "start_date": "20240106", "end_date": "20260105"}),
+        (
+            "fina_indicator",
+            {"ts_code": "600519.SH", "start_date": "20240106", "end_date": "20260105"},
+        ),
+    ]
 
 
 def test_tushare_provider_uses_hk_adjusted_endpoint_and_hkd_currency():

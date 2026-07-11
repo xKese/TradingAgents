@@ -207,6 +207,7 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="financialQuality"' in _APP_HTML
     assert 'id="dataProvider"' in _APP_HTML
     assert 'value="tushare"' in _APP_HTML
     assert 'data_provider: $(\'dataProvider\').value' in _APP_HTML
@@ -248,3 +249,24 @@ def test_cockpit_serves_and_exports_archived_markdown_report(tmp_path):
         server.RequestHandlerClass.jobs.shutdown()
 
     assert "# Personal Research Report: NVDA" in report
+
+
+def test_cockpit_exposes_latest_financial_quality_snapshot(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    store.save_fundamentals(
+        [
+            FundamentalSnapshot(
+                symbol="600519",
+                period_end=date(2025, 12, 31),
+                fiscal_period="financial_report_2025-12-31",
+                currency="CNY",
+                metrics={"return_on_equity_pct": 15.0},
+                provenance=_provenance(),
+            )
+        ]
+    )
+
+    snapshot = build_cockpit_snapshot(store, "600519")
+
+    assert snapshot["financial_quality"]["period_end"] == "2025-12-31"
+    assert snapshot["financial_quality"]["metrics"]["return_on_equity_pct"] == 15.0

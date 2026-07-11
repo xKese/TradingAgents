@@ -233,3 +233,26 @@ def test_write_research_report_creates_markdown_file(tmp_path):
     assert path.name == "NVDA_2026-01-05.md"
     assert path.exists()
     assert "# Personal Research Report: NVDA" in path.read_text(encoding="utf-8")
+
+
+def test_render_research_report_renders_financial_quality_separately():
+    bundle = ResearchReportBundle(
+        symbol="600519",
+        as_of_date=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        fundamentals=[
+            FundamentalSnapshot(
+                symbol="600519",
+                period_end=date(2025, 12, 31),
+                fiscal_period="financial_report_2025-12-31",
+                currency="CNY",
+                metrics={"return_on_equity_pct": 15.0, "reported_net_income": 100.0},
+                provenance=_provenance(date(2026, 4, 1)),
+            )
+        ],
+    )
+
+    report = render_research_report(bundle)
+
+    assert "## Financial Quality" in report
+    assert "**Report Period:** 2025-12-31" in report
+    assert "return_on_equity_pct" in report

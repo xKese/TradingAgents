@@ -256,3 +256,34 @@ def test_render_research_report_renders_financial_quality_separately():
     assert "## Financial Quality" in report
     assert "**Report Period:** 2025-12-31" in report
     assert "return_on_equity_pct" in report
+
+
+def test_render_research_report_renders_financial_trend_for_multiple_periods():
+    fundamentals = [
+        FundamentalSnapshot(
+            symbol="600519",
+            period_end=date(2025, 12, 31),
+            fiscal_period="financial_report_2025-12-31",
+            metrics={"reported_total_revenue": 1000.0, "return_on_equity_pct": 15.0},
+            provenance=_provenance(date(2026, 3, 1)),
+        ),
+        FundamentalSnapshot(
+            symbol="600519",
+            period_end=date(2025, 9, 30),
+            fiscal_period="financial_report_2025-09-30",
+            metrics={"reported_total_revenue": 900.0, "return_on_equity_pct": 14.0},
+            provenance=_provenance(date(2025, 10, 30)),
+        ),
+    ]
+
+    report = render_research_report(
+        ResearchReportBundle(
+            symbol="600519",
+            as_of_date=datetime(2026, 3, 1, tzinfo=timezone.utc),
+            fundamentals=fundamentals,
+        )
+    )
+
+    assert "## Financial Trend" in report
+    assert "| 2025-12-31 |" in report
+    assert "| Report Period | Revenue | Net Income | Operating Cash Flow | ROE (%) |" in report

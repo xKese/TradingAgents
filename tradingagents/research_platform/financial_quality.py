@@ -24,13 +24,7 @@ def build_financial_quality_snapshot(
     """Build the latest fully disclosed report-period snapshot available by ``as_of_date``."""
 
     sources = (income_rows, balance_rows, cashflow_rows, indicator_rows)
-    periods = {
-        period
-        for rows in sources
-        for row in rows
-        if _available_date(row, "ann_date", as_of_date) is not None
-        and (period := _available_date(row, "end_date", as_of_date)) is not None
-    }
+    periods = _disclosed_periods(sources, as_of_date)
     if not periods:
         return None
 
@@ -51,6 +45,65 @@ def build_financial_quality_snapshot(
         metrics=metrics,
         provenance=provenance,
     )
+
+
+def build_financial_quality_history(
+    *,
+    symbol: str,
+    as_of_date: date,
+    currency: str | None,
+    income_rows: Sequence[Mapping[str, Any]],
+    balance_rows: Sequence[Mapping[str, Any]],
+    cashflow_rows: Sequence[Mapping[str, Any]],
+    indicator_rows: Sequence[Mapping[str, Any]],
+    provenance: DataProvenance,
+    max_periods: int = 8,
+) -> list[FundamentalSnapshot]:
+    """Build recent disclosed report snapshots in ascending report-period order."""
+
+    if max_periods < 1:
+        raise ValueError("max_periods must be at least 1")
+    sources = (income_rows, balance_rows, cashflow_rows, indicator_rows)
+    periods = sorted(_disclosed_periods(sources, as_of_date))[-max_periods:]
+    snapshots: list[FundamentalSnapshot] = []
+    for period_end in periods:
+        snapshot = build_financial_quality_snapshot(
+            symbol=symbol,
+            as_of_date=as_of_date,
+            currency=currency,
+            income_rows=_rows_through_period(income_rows, period_end),
+            balance_rows=_rows_through_period(balance_rows, period_end),
+            cashflow_rows=_rows_through_period(cashflow_rows, period_end),
+            indicator_rows=_rows_through_period(indicator_rows, period_end),
+            provenance=provenance,
+        )
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    return snapshots
+
+
+def _disclosed_periods(
+    sources: Sequence[Sequence[Mapping[str, Any]]],
+    as_of_date: date,
+) -> set[date]:
+    return {
+        period
+        for rows in sources
+        for row in rows
+        if _available_date(row, "ann_date", as_of_date) is not None
+        and (period := _available_date(row, "end_date", as_of_date)) is not None
+    }
+
+
+def _rows_through_period(
+    rows: Sequence[Mapping[str, Any]],
+    period_end: date,
+) -> list[Mapping[str, Any]]:
+    return [
+        row
+        for row in rows
+        if (row_period := _parse_date(row.get("end_date"))) is not None and row_period <= period_end
+    ]
 
 
 def _latest_row_for_period(

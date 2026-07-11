@@ -15,7 +15,7 @@ from .data_contracts import (
     NewsItem,
     PriceBar,
 )
-from .financial_quality import build_financial_quality_snapshot
+from .financial_quality import build_financial_quality_history
 
 ProClientFactory = Callable[[str], Any]
 
@@ -158,22 +158,22 @@ class TushareProProvider:
             return snapshots
 
         financial_rows = self._fetch_financial_quality_rows(ts_code, availability_date)
-        financial_snapshot = build_financial_quality_snapshot(
-            symbol=identity.symbol,
-            as_of_date=availability_date,
-            currency=identity.currency or _currency_for(ts_code),
-            income_rows=financial_rows["income"],
-            balance_rows=financial_rows["balancesheet"],
-            cashflow_rows=financial_rows["cashflow"],
-            indicator_rows=financial_rows["fina_indicator"],
-            provenance=_provenance(
-                availability_date,
-                source="tushare.pro.financial_statements",
-                vendor_symbol=ts_code,
-            ),
+        snapshots.extend(
+            build_financial_quality_history(
+                symbol=identity.symbol,
+                as_of_date=availability_date,
+                currency=identity.currency or _currency_for(ts_code),
+                income_rows=financial_rows["income"],
+                balance_rows=financial_rows["balancesheet"],
+                cashflow_rows=financial_rows["cashflow"],
+                indicator_rows=financial_rows["fina_indicator"],
+                provenance=_provenance(
+                    availability_date,
+                    source="tushare.pro.financial_statements",
+                    vendor_symbol=ts_code,
+                ),
+            )
         )
-        if financial_snapshot is not None:
-            snapshots.append(financial_snapshot)
         return snapshots
 
     def get_news(

@@ -208,6 +208,7 @@ def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
     assert 'id="financialQuality"' in _APP_HTML
+    assert 'id="financialTrend"' in _APP_HTML
     assert 'id="dataProvider"' in _APP_HTML
     assert 'value="tushare"' in _APP_HTML
     assert 'data_provider: $(\'dataProvider\').value' in _APP_HTML
@@ -270,3 +271,4 @@ def test_cockpit_exposes_latest_financial_quality_snapshot(tmp_path):
 
     assert snapshot["financial_quality"]["period_end"] == "2025-12-31"
     assert snapshot["financial_quality"]["metrics"]["return_on_equity_pct"] == 15.0
+    assert len(snapshot["financial_quality_history"]) == 1

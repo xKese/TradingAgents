@@ -1,7 +1,10 @@
 from datetime import date, datetime, timezone
 
 from tradingagents.research_platform.data_contracts import DataProvenance
-from tradingagents.research_platform.financial_quality import build_financial_quality_snapshot
+from tradingagents.research_platform.financial_quality import (
+    build_financial_quality_history,
+    build_financial_quality_snapshot,
+)
 
 
 def _provenance() -> DataProvenance:
@@ -48,3 +51,33 @@ def test_financial_quality_uses_latest_report_disclosed_by_as_of_date():
     assert snapshot.metrics["operating_cashflow_to_net_income_ratio"] == 1.2
     assert snapshot.metrics["calculated_liabilities_to_assets_ratio"] == 0.2
     assert snapshot.metrics["income_announcement_date"] == "2026-03-01"
+
+
+def test_financial_quality_history_keeps_only_disclosed_periods_and_limits_length():
+    records = [
+        {"ann_date": "20250130", "end_date": "20241231"},
+        {"ann_date": "20250430", "end_date": "20250331"},
+        {"ann_date": "20250730", "end_date": "20250630"},
+    ]
+    history = build_financial_quality_history(
+        symbol="600519",
+        as_of_date=date(2025, 6, 30),
+        currency="CNY",
+        income_rows=[
+            row | {"total_revenue": 1000.0 + index, "n_income": 100.0 + index}
+            for index, row in enumerate(records)
+        ],
+        balance_rows=[
+            row | {"total_assets": 500.0 + index, "total_liab": 100.0 + index}
+            for index, row in enumerate(records)
+        ],
+        cashflow_rows=[
+            row | {"n_cashflow_act": 120.0 + index} for index, row in enumerate(records)
+        ],
+        indicator_rows=[row | {"roe": 15.0 + index} for index, row in enumerate(records)],
+        provenance=_provenance(),
+        max_periods=2,
+    )
+
+    assert [snapshot.period_end for snapshot in history] == [date(2024, 12, 31), date(2025, 3, 31)]
+    assert [snapshot.metrics["return_on_equity_pct"] for snapshot in history] == [15.0, 16.0]

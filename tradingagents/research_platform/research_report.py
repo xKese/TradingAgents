@@ -53,6 +53,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
         _render_market_snapshot(bundle.price_bars),
         _render_fundamentals(bundle.fundamentals),
         _render_financial_quality(bundle.fundamentals),
+        _render_financial_trend(bundle.fundamentals),
         _render_news(bundle.news),
         _render_agent_outputs(bundle.agent_outputs),
         _render_analyst_notes(bundle.analyst_notes),
@@ -166,6 +167,44 @@ def _render_financial_quality(fundamentals: list[FundamentalSnapshot]) -> str:
             "",
             "| Metric | Value |",
             "| --- | ---: |",
+            *rows,
+        ]
+    )
+
+
+def _render_financial_trend(fundamentals: list[FundamentalSnapshot]) -> str:
+    snapshots = [
+        item
+        for item in fundamentals
+        if item.fiscal_period is not None and item.fiscal_period.startswith("financial_report_")
+    ]
+    by_period = {item.period_end: item for item in snapshots}
+    history = [item for _, item in sorted(by_period.items(), reverse=True)[:8]]
+    if len(history) < 2:
+        return "## Financial Trend\n\nFewer than two disclosed financial report periods are available."
+
+    rows = []
+    for item in history:
+        metrics = item.metrics
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    item.period_end.isoformat(),
+                    _format_value(metrics.get("reported_total_revenue")),
+                    _format_value(metrics.get("reported_net_income")),
+                    _format_value(metrics.get("reported_operating_cashflow")),
+                    _format_value(metrics.get("return_on_equity_pct")),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(
+        [
+            "## Financial Trend",
+            "",
+            "| Report Period | Revenue | Net Income | Operating Cash Flow | ROE (%) |",
+            "| --- | ---: | ---: | ---: | ---: |",
             *rows,
         ]
     )

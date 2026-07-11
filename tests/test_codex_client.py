@@ -9,6 +9,7 @@ from tradingagents.llm_clients.codex_client import (
     CodexSetupError,
     _available_model_ids,
     _codex_setup_message,
+    _looks_like_schema_error,
 )
 from tradingagents.llm_clients.factory import create_llm_client
 
@@ -16,6 +17,11 @@ from tradingagents.llm_clients.factory import create_llm_client
 class SampleStructuredOutput(BaseModel):
     recommendation: str
     confidence: float
+
+
+class OptionalStructuredOutput(BaseModel):
+    required_value: str
+    optional_value: str | None = None
 
 
 @pytest.mark.unit
@@ -87,7 +93,34 @@ def test_codex_structured_output_parses_pydantic_model(monkeypatch):
     result = llm.with_structured_output(SampleStructuredOutput).invoke("Decide")
 
     assert result == SampleStructuredOutput(recommendation="Hold", confidence=0.75)
-    assert received_schema == SampleStructuredOutput.model_json_schema()
+    assert received_schema["additionalProperties"] is False
+    assert received_schema["required"] == ["recommendation", "confidence"]
+
+
+@pytest.mark.unit
+def test_codex_strict_schema_forbids_extra_properties_and_requires_optional_fields():
+    schema = codex_client._strict_json_schema(OptionalStructuredOutput.model_json_schema())
+
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["required_value", "optional_value"]
+
+
+@pytest.mark.unit
+def test_codex_detects_structured_output_schema_errors():
+    assert _looks_like_schema_error("invalid_json_schema: additionalProperties is required")
+
+
+@pytest.mark.unit
+def test_codex_accepts_openai_style_message_dicts(monkeypatch):
+    llm = CodexChatModel(model_name="gpt-5.4")
+    monkeypatch.setattr(llm, "_run_codex", lambda prompt: "Trader response")
+
+    result = llm.invoke([
+        {"role": "system", "content": "Follow the trading plan."},
+        {"role": "user", "content": "Make a recommendation."},
+    ])
+
+    assert result.content == "Trader response"
 
 
 @pytest.mark.unit

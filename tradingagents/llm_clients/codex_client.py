@@ -81,8 +81,8 @@ _CODEX_RUNTIME = _CodexRuntime()
 atexit.register(_CODEX_RUNTIME.close)
 
 
-def _message_to_text(message: BaseMessage) -> str:
-    content = message.content
+def _content_to_text(content: Any) -> str:
+    """Normalize LangChain or OpenAI-style message content into plain text."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -96,10 +96,20 @@ def _message_to_text(message: BaseMessage) -> str:
     return str(content)
 
 
-def _messages_to_prompt(messages: list[BaseMessage]) -> str:
+def _message_to_text(message: BaseMessage | dict[str, Any]) -> str:
+    if isinstance(message, dict):
+        return _content_to_text(message.get("content", ""))
+    return _content_to_text(message.content)
+
+
+def _messages_to_prompt(messages: list[BaseMessage | dict[str, Any]]) -> str:
     chunks = []
     for message in messages:
-        role = getattr(message, "type", message.__class__.__name__)
+        role = (
+            message.get("role", "user")
+            if isinstance(message, dict)
+            else getattr(message, "type", message.__class__.__name__)
+        )
         text = _message_to_text(message).strip()
         if text:
             chunks.append(f"{role.upper()}:\n{text}")
@@ -149,6 +159,25 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return value if isinstance(value, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+def _strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Make Pydantic's schema compatible with Codex structured output.
+
+    Codex requires every object to explicitly reject undeclared properties.
+    It also requires all declared object keys to be listed as required; nullable
+    values remain nullable through their ``anyOf`` schema rather than omission.
+    """
+    if isinstance(schema, dict):
+        strict = {key: _strict_json_schema(value) for key, value in schema.items()}
+        properties = strict.get("properties")
+        if isinstance(properties, dict):
+            strict["additionalProperties"] = False
+            strict["required"] = list(properties)
+        return strict
+    if isinstance(schema, list):
+        return [_strict_json_schema(item) for item in schema]
+    return schema
 
 
 def _available_model_ids(codex: Any) -> list[str]:
@@ -210,6 +239,11 @@ def _looks_like_auth_error(message: str) -> bool:
             "requires_openai_auth",
         )
     )
+
+
+def _looks_like_schema_error(message: str) -> bool:
+    lowered = message.lower()
+    return "invalid_json_schema" in lowered or "response_format" in lowered
 
 
 def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
@@ -294,7 +328,8 @@ class CodexStructuredOutput:
 
     def invoke(self, input_: Any, config=None, **kwargs) -> BaseModel:
         prompt = _input_to_text(input_)
-        schema_json = json.dumps(self.schema.model_json_schema(), indent=2)
+        output_schema = _strict_json_schema(self.schema.model_json_schema())
+        schema_json = json.dumps(output_schema, indent=2)
         structured_prompt = (
             f"{prompt}\n\n"
             "Return ONLY valid JSON that conforms to this JSON schema. "
@@ -304,7 +339,7 @@ class CodexStructuredOutput:
         )
         raw = self.llm._run_codex(
             structured_prompt,
-            output_schema=self.schema.model_json_schema(),
+            output_schema=output_schema,
         )
         parsed = _extract_json_object(raw)
         if parsed is None:
@@ -399,6 +434,12 @@ class CodexChatModel(BaseChatModel):
                 problem = (
                     "TradingAgents could not use your local Codex/ChatGPT login "
                     "for this request."
+                )
+            elif _looks_like_schema_error(message):
+                problem = (
+                    "TradingAgents sent a Codex structured-output schema that the "
+                    "installed runtime rejected. This is an integration error, not "
+                    "a Codex login problem."
                 )
             else:
                 problem = "Codex local invocation failed."

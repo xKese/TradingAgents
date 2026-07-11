@@ -188,6 +188,9 @@ MODEL_OPTIONS: ProviderModeOptions = {
     "nvidia": _CUSTOM_ONLY,
     # Bedrock model IDs / cross-region inference profile IDs are user-specified.
     "bedrock": _CUSTOM_ONLY,
+    # Codex runs through the local Codex SDK/CLI session. Keep this custom-only
+    # because available models are governed by the user's ChatGPT/Codex plan.
+    "codex": _CUSTOM_ONLY,
 }
 
 

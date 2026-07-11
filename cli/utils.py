@@ -361,6 +361,7 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
         ("NVIDIA NIM", "nvidia", "https://integrate.api.nvidia.com/v1"),
         ("Azure OpenAI", "azure", None),
         ("Amazon Bedrock", "bedrock", None),
+        ("Codex local (ChatGPT/Codex subscription via `codex login`)", "codex", None),
         ("Ollama", "ollama", ollama_url),
         ("OpenAI-compatible (vLLM, LM Studio, llama.cpp, custom relay)", "openai_compatible", None),
     ]
@@ -611,6 +612,13 @@ def ensure_api_key(provider: str) -> str | None:
     Returns None for providers that do not require a key (e.g. ollama)
     and for providers not found in the canonical mapping.
     """
+    if provider.lower() == "codex":
+        console.print(
+            "[yellow]Codex provider is experimental. Install openai-codex and run "
+            "`codex login` with your ChatGPT account before starting analysis.[/yellow]"
+        )
+        return None
+
     env_var = get_api_key_env(provider)
     if env_var is None:
         return None  # ollama / unknown — no key check possible

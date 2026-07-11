@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from tradingagents.llm_clients import codex_client
 from tradingagents.llm_clients.codex_client import (
@@ -10,6 +11,11 @@ from tradingagents.llm_clients.codex_client import (
     _codex_setup_message,
 )
 from tradingagents.llm_clients.factory import create_llm_client
+
+
+class SampleStructuredOutput(BaseModel):
+    recommendation: str
+    confidence: float
 
 
 @pytest.mark.unit
@@ -60,6 +66,20 @@ def test_codex_json_tool_response(monkeypatch):
             "type": "tool_call",
         }
     ]
+
+
+@pytest.mark.unit
+def test_codex_structured_output_parses_pydantic_model(monkeypatch):
+    llm = CodexChatModel(model_name="gpt-5.4")
+    monkeypatch.setattr(
+        llm,
+        "_run_codex",
+        lambda prompt: '{"recommendation":"Hold","confidence":0.75}',
+    )
+
+    result = llm.with_structured_output(SampleStructuredOutput).invoke("Decide")
+
+    assert result == SampleStructuredOutput(recommendation="Hold", confidence=0.75)
 
 
 @pytest.mark.unit

@@ -612,13 +612,6 @@ def ensure_api_key(provider: str) -> str | None:
     Returns None for providers that do not require a key (e.g. ollama)
     and for providers not found in the canonical mapping.
     """
-    if provider.lower() == "codex":
-        console.print(
-            "[yellow]Codex provider is experimental. Install openai-codex and run "
-            "`codex login` with your ChatGPT account before starting analysis.[/yellow]"
-        )
-        return None
-
     env_var = get_api_key_env(provider)
     if env_var is None:
         return None  # ollama / unknown — no key check possible

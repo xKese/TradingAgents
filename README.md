@@ -159,7 +159,7 @@ For Azure OpenAI, copy `.env.enterprise.example` to `.env.enterprise` and fill i
 
 For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_provider: "bedrock"`, configure AWS credentials (environment variables, `~/.aws/credentials`, or an IAM role) and `AWS_DEFAULT_REGION`, and use a Bedrock model ID, e.g. `us.anthropic.claude-opus-4-8-v1:0`.
 
-For Codex subscription access without OpenAI Platform API credits, use the experimental local Codex provider. Install the extra, authenticate Codex, then select `codex` in the CLI or set it in `.env`:
+For Codex subscription access without OpenAI Platform API credits, use the local Codex provider. Install the extra, authenticate Codex, then select `codex` in the CLI or set it in `.env`:
 ```bash
 pip install ".[codex]"
 ```
@@ -181,7 +181,7 @@ TRADINGAGENTS_LLM_PROVIDER=codex
 TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.5
 TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.4-mini
 ```
-This routes model calls through the local Codex SDK/CLI session and uses your ChatGPT/Codex entitlement. It is not the same as OpenAI Platform API access and is best treated as experimental because Codex is an agent surface, not a drop-in chat-completions API.
+This routes model calls through the local Codex SDK/CLI session and uses your ChatGPT/Codex entitlement. It is not the same as OpenAI Platform API access; Codex is an agent surface rather than a drop-in chat-completions API, so TradingAgents includes provider-specific setup checks and a prompt-level structured-output adapter.
 
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 

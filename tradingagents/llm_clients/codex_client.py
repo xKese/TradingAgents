@@ -1,4 +1,4 @@
-"""Experimental Codex local client.
+"""Codex local client.
 
 This provider lets users who have Codex through a ChatGPT plan run the
 TradingAgents workflow through their local Codex authentication instead of an
@@ -21,7 +21,7 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .base_client import BaseLLMClient
 from .validators import validate_model
@@ -43,7 +43,7 @@ CODEX_MODEL_LIST_COMMAND = (
 
 
 class CodexSetupError(RuntimeError):
-    """Actionable setup error for the experimental Codex provider."""
+    """Actionable setup error for the Codex provider."""
 
 
 def _message_to_text(message: BaseMessage) -> str:
@@ -69,6 +69,17 @@ def _messages_to_prompt(messages: list[BaseMessage]) -> str:
         if text:
             chunks.append(f"{role.upper()}:\n{text}")
     return "\n\n".join(chunks)
+
+
+def _input_to_text(input_: Any) -> str:
+    """Normalize LangChain prompt inputs into plain text for Codex."""
+    if isinstance(input_, str):
+        return input_
+    if isinstance(input_, list):
+        return _messages_to_prompt(input_)
+    if hasattr(input_, "to_messages"):
+        return _messages_to_prompt(input_.to_messages())
+    return str(input_)
 
 
 def _tool_schema(tool: Any) -> dict[str, Any]:
@@ -232,6 +243,37 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
     return available
 
 
+class CodexStructuredOutput:
+    """Prompt-level structured-output adapter for Codex.
+
+    Codex does not currently expose a LangChain-native structured-output API,
+    but the agents only require that ``with_structured_output`` returns an
+    object with ``invoke`` that yields a Pydantic instance. We satisfy that
+    contract by asking Codex for schema-conforming JSON, parsing it, and letting
+    Pydantic perform the final validation.
+    """
+
+    def __init__(self, llm: CodexChatModel, schema: type[BaseModel]):
+        self.llm = llm
+        self.schema = schema
+
+    def invoke(self, input_: Any, config=None, **kwargs) -> BaseModel:
+        prompt = _input_to_text(input_)
+        schema_json = json.dumps(self.schema.model_json_schema(), indent=2)
+        structured_prompt = (
+            f"{prompt}\n\n"
+            "Return ONLY valid JSON that conforms to this JSON schema. "
+            "Do not wrap the JSON in markdown fences. Do not include commentary "
+            "outside the JSON object.\n\n"
+            f"{schema_json}"
+        )
+        raw = self.llm._run_codex(structured_prompt)
+        parsed = _extract_json_object(raw)
+        if parsed is None:
+            raise ValueError(f"Codex returned non-JSON structured output: {raw!r}")
+        return self.schema.model_validate(parsed)
+
+
 class CodexChatModel(BaseChatModel):
     """LangChain chat wrapper around the local Codex SDK."""
 
@@ -247,10 +289,7 @@ class CodexChatModel(BaseChatModel):
         return self.model_copy(update={"tools": list(tools)})
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
-        raise NotImplementedError(
-            "Codex local provider does not expose native structured output; "
-            "TradingAgents will fall back to free-text generation."
-        )
+        return CodexStructuredOutput(self, schema)
 
     def _generate(
         self,

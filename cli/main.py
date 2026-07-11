@@ -1283,16 +1283,20 @@ def run_analysis(checkpoint: bool | None = None):
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
-    # Prompt to save report
-    save_choice = typer.prompt("Save report?", default="Y").strip().upper()
+    # Prompt to save report (skipped when TRADINGAGENTS_SAVE_REPORT=true)
+    auto_save = os.environ.get("TRADINGAGENTS_SAVE_REPORT", "").strip().lower() in ("true", "1", "yes")
+    save_choice = "Y" if auto_save else typer.prompt("Save report?", default="Y").strip().upper()
     if save_choice in ("Y", "YES", ""):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
-        save_path_str = typer.prompt(
-            "Save path (press Enter for default)",
-            default=str(default_path)
-        ).strip()
-        save_path = Path(save_path_str)
+        if auto_save:
+            save_path = default_path
+        else:
+            save_path_str = typer.prompt(
+                "Save path (press Enter for default)",
+                default=str(default_path)
+            ).strip()
+            save_path = Path(save_path_str)
         try:
             report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
             console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
@@ -1300,8 +1304,9 @@ def run_analysis(checkpoint: bool | None = None):
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
 
-    # Prompt to display full report
-    display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
+    # Prompt to display full report (skipped when TRADINGAGENTS_DISPLAY_REPORT is set)
+    auto_display = os.environ.get("TRADINGAGENTS_DISPLAY_REPORT", "").strip().lower() in ("true", "1", "yes")
+    display_choice = "Y" if auto_display else typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
     if display_choice in ("Y", "YES", ""):
         display_complete_report(final_state)
 

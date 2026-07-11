@@ -316,6 +316,8 @@ def test_render_research_report_renders_historical_valuation_context():
         )
     )
 
+    assert "## Research Readiness" in report
+    assert "**Status:** incomplete" in report
     assert "## Valuation Context" in report
     assert "**Daily Snapshot As Of:** 2026-01-20" in report
     assert "| P/E (TTM) | 29 | 100 | 10 | 19.5 | 29 | 20 |" in report

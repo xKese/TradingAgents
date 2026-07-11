@@ -23,6 +23,7 @@ from .data_health import build_cache_data_health
 from .financial_health import assess_financial_health
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
+from .research_readiness import build_research_readiness
 from .run_archive import JsonResearchRunArchive
 from .valuation_context import build_valuation_context
 from .watchlist import JsonWatchlistStore
@@ -106,6 +107,21 @@ def build_cockpit_snapshot(
     )
     if selected_run_id is not None and latest_run is None:
         raise ValueError("run_id was not found for this symbol")
+    data_health = build_cache_data_health(
+        price_bars=bars,
+        fundamentals=fundamentals,
+        news=news,
+        reference_as_of_date=(latest_run.as_of_date.date() if latest_run is not None else None),
+    )
+    readiness = build_research_readiness(
+        data_health=data_health,
+        valuation_context=valuation_context,
+        financial_health=financial_health,
+        agent_outputs=(latest_run.agent_outputs if latest_run is not None else agent_outputs),
+        signal=(latest_run.signal if latest_run is not None else None),
+        risk_review=(latest_run.risk_review if latest_run is not None else None),
+        backtest_result=(latest_run.backtest_result if latest_run is not None else None),
+    )
     return {
         "symbol": normalized_symbol,
         "has_data": bool(bars or fundamentals or news or agent_outputs or latest_run),
@@ -119,6 +135,7 @@ def build_cockpit_snapshot(
             else None
         ),
         "valuation_context": valuation_context.model_dump(mode="json"),
+        "research_readiness": readiness.model_dump(mode="json"),
         "financial_health": financial_health.model_dump(mode="json"),
         "financial_quality_history": [
             item.model_dump(mode="json") for item in financial_quality_history
@@ -127,12 +144,7 @@ def build_cockpit_snapshot(
         "agent_outputs": [item.model_dump(mode="json") for item in agent_outputs[:12]],
         "latest_run": _run_summary(latest_run, run_id=selected_run_id),
         "report_workspace": build_report_workspace(latest_run),
-        "data_health": build_cache_data_health(
-            price_bars=bars,
-            fundamentals=fundamentals,
-            news=news,
-            reference_as_of_date=(latest_run.as_of_date.date() if latest_run is not None else None),
-        ),
+        "data_health": data_health,
         "runs": [item.model_dump(mode="json") for item in runs[:20]],
         "artifact_counts": {
             "price_bars": len(bars),
@@ -458,6 +470,7 @@ _APP_HTML = r'''<!doctype html>
     <p class="status" id="status">Loading local research cache...</p>
     <section class="metrics" aria-label="Market summary" id="metrics"></section>
     <section class="data-health" aria-label="Cached data health" id="dataHealth"></section>
+    <section class="panel" aria-label="Research readiness"><div class="panel-title"><h2>Research Readiness</h2><span class="panel-meta" id="readinessMeta"></span></div><ul class="items" id="readiness"></ul></section>
     <section class="panel watchlist-board" aria-label="Watchlist board"><div class="panel-title"><h2>Watchlist</h2><span class="panel-meta" id="watchlistMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Symbol</th><th>Last Close</th><th>Price As Of</th><th>Data Health</th><th>Latest Research</th><th>Decision</th></tr></thead><tbody id="watchlistBoard"></tbody></table></div></section>
     <section class="workspace">
       <div class="panel"><div class="panel-title"><h2>Price History</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
@@ -509,6 +522,11 @@ _APP_HTML = r'''<!doctype html>
       const reference = health.reference_as_of_date ? `Reference as of ${health.reference_as_of_date}` : 'Latest cached availability';
       $('dataHealth').innerHTML = items.map(item => `<div class="health-item"><div class="health-title">${escape(item.label)}</div><div class="health-status ${escape(item.status)}">${escape(item.status)}</div><div class="health-detail">${escape(item.detail)}${item.available_as_of_date ? ` - available as of ${escape(item.available_as_of_date)}` : ''}</div></div>`).join('');
       $('dataHealth').setAttribute('aria-label', `Cached data health: ${reference}`);
+    }
+    function renderReadiness(readiness) {
+      if (!readiness) { $('readinessMeta').textContent = ''; $('readiness').innerHTML = '<li class="empty">No research readiness data available.</li>'; return; }
+      $('readinessMeta').textContent = `${readiness.status} - ${readiness.required_ready}/${readiness.required_total} required`;
+      $('readiness').innerHTML = readiness.items.map(item => `<li class="item"><div class="item-title">${escape(item.label)}</div><div class="item-meta">${escape(item.status)} | ${escape(item.required ? 'required' : 'optional')}</div><div class="item-summary">${escape(item.detail)}</div></li>`).join('');
     }
     function renderWatchlistBoard(board) {
       const items = board?.items || [];
@@ -695,14 +713,14 @@ _APP_HTML = r'''<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderChart(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
+        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));

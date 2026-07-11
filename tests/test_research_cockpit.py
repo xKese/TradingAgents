@@ -207,6 +207,7 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="readiness"' in _APP_HTML
     assert 'id="valuationContext"' in _APP_HTML
     assert 'id="financialQuality"' in _APP_HTML
     assert 'id="financialTrend"' in _APP_HTML
@@ -300,6 +301,7 @@ def test_cockpit_exposes_historical_valuation_context(tmp_path):
     snapshot = build_cockpit_snapshot(store, "600519")
     pe = snapshot["valuation_context"]["metrics"][0]
 
+    assert snapshot["research_readiness"]["status"] == "incomplete"
     assert snapshot["valuation_context"]["available"] is True
     assert snapshot["valuation_context"]["daily_snapshot_count"] == 20
     assert pe["latest"] == 29.0

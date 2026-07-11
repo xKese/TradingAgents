@@ -19,7 +19,9 @@ from .agent_artifacts import (
 from .agent_contracts import AgentOutputEnvelope, AnalystNote, InvestmentThesis, TradeSignal
 from .backtest_contracts import BacktestResult
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
+from .data_health import build_cache_data_health
 from .financial_health import assess_financial_health
+from .research_readiness import build_research_readiness
 from .risk_contracts import RiskReview
 from .valuation_context import build_valuation_context
 
@@ -53,6 +55,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
     sections = [
         _render_header(bundle),
         _render_market_snapshot(bundle.price_bars),
+        _render_research_readiness(bundle),
         _render_fundamentals(bundle.fundamentals),
         _render_valuation_context(bundle.fundamentals),
         _render_financial_quality(bundle.fundamentals),
@@ -124,6 +127,48 @@ def _render_market_snapshot(price_bars: list[PriceBar]) -> str:
     )
 
 
+
+def _render_research_readiness(bundle: ResearchReportBundle) -> str:
+    financial_snapshots = [
+        item
+        for item in bundle.fundamentals
+        if item.fiscal_period is not None and item.fiscal_period.startswith("financial_report_")
+    ]
+    latest_financial = (
+        max(financial_snapshots, key=lambda item: (item.provenance.as_of_date, item.period_end))
+        if financial_snapshots
+        else None
+    )
+    readiness = build_research_readiness(
+        data_health=build_cache_data_health(
+            price_bars=bundle.price_bars,
+            fundamentals=bundle.fundamentals,
+            news=bundle.news,
+            reference_as_of_date=bundle.as_of_date.date(),
+        ),
+        valuation_context=build_valuation_context(bundle.fundamentals),
+        financial_health=assess_financial_health(latest_financial),
+        agent_outputs=bundle.agent_outputs,
+        signal=bundle.signal,
+        risk_review=bundle.risk_review,
+        backtest_result=bundle.backtest_result,
+    )
+    rows = [
+        f"| {item.label} | {item.status.value} | {'required' if item.required else 'optional'} | {item.detail} |"
+        for item in readiness.items
+    ]
+    return "\n".join(
+        [
+            "## Research Readiness",
+            "",
+            f"**Status:** {readiness.status.value}",
+            f"**Required Evidence:** {readiness.required_ready}/{readiness.required_total}",
+            "",
+            "| Layer | Status | Scope | Detail |",
+            "| --- | --- | --- | --- |",
+            *rows,
+        ]
+    )
 def _render_fundamentals(fundamentals: list[FundamentalSnapshot]) -> str:
     if not fundamentals:
         return "## Fundamentals\n\nNo normalized fundamentals available."

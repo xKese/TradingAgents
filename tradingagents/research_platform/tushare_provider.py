@@ -192,11 +192,19 @@ class TushareProProvider:
             return []
 
         events: list[NewsItem] = []
-        for endpoint, event_type in (
-            ("forecast", "earnings_forecast"),
-            ("express", "earnings_express"),
+        for endpoint, event_type, optional in (
+            ("forecast", "earnings_forecast", False),
+            ("express", "earnings_express", False),
+            ("dividend", "dividend_plan", True),
+            ("repurchase", "share_repurchase", True),
+            ("fina_audit", "audit_opinion", True),
         ):
-            rows = self._fetch_corporate_event_rows(endpoint, ts_code, start, end)
+            try:
+                rows = self._fetch_corporate_event_rows(endpoint, ts_code, start, end)
+            except TushareDataUnavailableError:
+                if optional:
+                    continue
+                raise
             for row in rows:
                 announcement_date = _optional_date(row, "ann_date")
                 if announcement_date is None or not (
@@ -357,6 +365,9 @@ def _corporate_event_title(event_type: str, row: Mapping[str, Any]) -> str:
     labels = {
         "earnings_forecast": "Earnings forecast",
         "earnings_express": "Earnings express",
+        "dividend_plan": "Dividend plan",
+        "share_repurchase": "Share repurchase",
+        "audit_opinion": "Audit opinion",
     }
     period_end = _optional_number_or_text(row, "end_date")
     label = labels[event_type]
@@ -364,8 +375,8 @@ def _corporate_event_title(event_type: str, row: Mapping[str, Any]) -> str:
 
 
 def _corporate_event_summary(event_type: str, row: Mapping[str, Any]) -> str | None:
-    fields = (
-        (
+    fields_by_event = {
+        "earnings_forecast": (
             ("type", "type"),
             ("p_change_min", "profit change minimum (%)"),
             ("p_change_max", "profit change maximum (%)"),
@@ -373,15 +384,35 @@ def _corporate_event_summary(event_type: str, row: Mapping[str, Any]) -> str | N
             ("net_profit_max", "net profit maximum"),
             ("summary", "summary"),
             ("change_reason", "change reason"),
-        )
-        if event_type == "earnings_forecast"
-        else (
+        ),
+        "earnings_express": (
             ("revenue", "revenue"),
             ("n_income", "net income"),
             ("yoy_net_profit", "net income YoY (%)"),
             ("perf_summary", "summary"),
-        )
-    )
+        ),
+        "dividend_plan": (
+            ("cash_div_tax", "cash dividend per share (tax included)"),
+            ("stk_div", "stock dividend per share"),
+            ("record_date", "record date"),
+            ("ex_date", "ex-dividend date"),
+            ("div_proc", "progress"),
+        ),
+        "share_repurchase": (
+            ("proc", "progress"),
+            ("vol", "repurchased volume"),
+            ("amount", "repurchase amount"),
+            ("high_limit", "upper price limit"),
+            ("low_limit", "lower price limit"),
+        ),
+        "audit_opinion": (
+            ("audit_result", "audit result"),
+            ("audit_fees", "audit fees"),
+            ("audit_agency", "audit agency"),
+            ("audit_sign", "auditor signatory"),
+        ),
+    }
+    fields = fields_by_event[event_type]
     values = [
         f"{label}: {value}"
         for field, label in fields

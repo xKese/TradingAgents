@@ -118,6 +118,41 @@ class FakeProClient:
             }
         ]
 
+    def dividend(self, **kwargs):
+        self.calls.append(("dividend", kwargs))
+        return [
+            {
+                "ann_date": "20260103",
+                "end_date": "20251231",
+                "cash_div_tax": 3.2,
+                "record_date": "20260115",
+                "ex_date": "20260116",
+                "div_proc": "proposal",
+            }
+        ]
+
+    def repurchase(self, **kwargs):
+        self.calls.append(("repurchase", kwargs))
+        return [
+            {
+                "ann_date": "20260102",
+                "end_date": "20251231",
+                "proc": "completed",
+                "vol": 100.0,
+                "amount": 200.0,
+            }
+        ]
+
+    def fina_audit(self, **kwargs):
+        self.calls.append(("fina_audit", kwargs))
+        return [
+            {
+                "ann_date": "20260101",
+                "end_date": "20251231",
+                "audit_result": "standard unqualified",
+                "audit_agency": "Fixture audit firm",
+            }
+        ]
     def hk_daily_adj(self, **kwargs):
         self.calls.append(("hk_daily_adj", kwargs))
         return [
@@ -229,14 +264,23 @@ def test_tushare_provider_normalizes_a_share_corporate_events_as_news():
     assert [item.title for item in news] == [
         "Earnings forecast announced for period 20251231",
         "Earnings express announced for period 20251231",
+        "Dividend plan announced for period 20251231",
+        "Share repurchase announced for period 20251231",
+        "Audit opinion announced for period 20251231",
     ]
     assert news[0].published_at.isoformat() == "2026-01-05T00:00:00+00:00"
     assert news[0].summary is not None
     assert "profit change minimum (%)" in news[0].summary
     assert news[1].source_id == "tushare:earnings_express:600519.SH:20260104:20251231:base"
+    assert "cash dividend per share" in (news[2].summary or "")
+    assert "repurchase amount" in (news[3].summary or "")
+    assert "audit agency" in (news[4].summary or "")
     assert client.calls == [
         ("forecast", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
         ("express", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
+        ("dividend", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
+        ("repurchase", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
+        ("fina_audit", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
     ]
 
 

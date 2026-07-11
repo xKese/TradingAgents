@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from math import isnan
 from typing import Any
 
@@ -28,8 +28,8 @@ class TushareProProvider:
 
     A-share bars come from Tushare's unadjusted ``daily`` endpoint. Hong Kong
     bars use ``hk_daily_adj`` when the caller has that endpoint's permission.
-    The adapter intentionally leaves news empty until a source with stable
-    publication timestamps is configured.
+    A-share company disclosures are normalized as date-granular research
+    evidence; Hong Kong company-event coverage is intentionally not inferred.
     """
 
     name = "tushare_pro"
@@ -162,11 +162,44 @@ class TushareProProvider:
         *,
         as_of_date: date | None = None,
     ) -> Sequence[NewsItem]:
-        """Return no news until a timestamped Chinese/Hong Kong source is configured."""
+        """Return A-share company disclosures with explicit announcement dates."""
 
         if end < start:
             raise ValueError("end must be on or after start")
-        return []
+        availability_date = as_of_date or end
+        ts_code = canonical_tushare_symbol(identity)
+        if ts_code.endswith(".HK"):
+            return []
+
+        events: list[NewsItem] = []
+        for endpoint, event_type in (
+            ("forecast", "earnings_forecast"),
+            ("express", "earnings_express"),
+        ):
+            rows = self._fetch_corporate_event_rows(endpoint, ts_code, start, end)
+            for row in rows:
+                announcement_date = _optional_date(row, "ann_date")
+                if announcement_date is None or not (
+                    start <= announcement_date <= end and announcement_date <= availability_date
+                ):
+                    continue
+                events.append(
+                    NewsItem(
+                        symbol=identity.symbol,
+                        title=_corporate_event_title(event_type, row),
+                        published_at=datetime.combine(
+                            announcement_date,
+                            time.min,
+                            tzinfo=timezone.utc,
+                        ),
+                        as_of_date=availability_date,
+                        provider=self.name,
+                        summary=_corporate_event_summary(event_type, row),
+                        source_id=_corporate_event_source_id(event_type, ts_code, row),
+                    )
+                )
+        unique_events = {item.source_id: item for item in events}
+        return sorted(unique_events.values(), key=lambda item: item.published_at, reverse=True)
 
     def _fetch_price_frame(self, ts_code: str, start: date, end: date) -> Any:
         params = {
@@ -201,6 +234,25 @@ class TushareProProvider:
                 f"Tushare fundamental data unavailable for {ts_code}: {error}"
             ) from error
 
+    def _fetch_corporate_event_rows(
+        self,
+        endpoint: str,
+        ts_code: str,
+        start: date,
+        end: date,
+    ) -> list[Mapping[str, Any]]:
+        params = {
+            "ts_code": ts_code,
+            "start_date": start.strftime("%Y%m%d"),
+            "end_date": end.strftime("%Y%m%d"),
+        }
+        try:
+            return _records(getattr(self._pro, endpoint)(**params))
+        except Exception as error:
+            raise TushareDataUnavailableError(
+                f"Tushare corporate event data unavailable for {ts_code}: {error}"
+            ) from error
+
 
 def canonical_tushare_symbol(identity: InstrumentIdentity) -> str:
     """Normalize local, Yahoo-style, and Tushare-style Chinese tickers."""
@@ -233,6 +285,54 @@ def supports_tushare_symbol(symbol: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _corporate_event_title(event_type: str, row: Mapping[str, Any]) -> str:
+    labels = {
+        "earnings_forecast": "Earnings forecast",
+        "earnings_express": "Earnings express",
+    }
+    period_end = _optional_number_or_text(row, "end_date")
+    label = labels[event_type]
+    return f"{label} announced for period {period_end}" if period_end is not None else label
+
+
+def _corporate_event_summary(event_type: str, row: Mapping[str, Any]) -> str | None:
+    fields = (
+        (
+            ("type", "type"),
+            ("p_change_min", "profit change minimum (%)"),
+            ("p_change_max", "profit change maximum (%)"),
+            ("net_profit_min", "net profit minimum"),
+            ("net_profit_max", "net profit maximum"),
+            ("summary", "summary"),
+            ("change_reason", "change reason"),
+        )
+        if event_type == "earnings_forecast"
+        else (
+            ("revenue", "revenue"),
+            ("n_income", "net income"),
+            ("yoy_net_profit", "net income YoY (%)"),
+            ("perf_summary", "summary"),
+        )
+    )
+    values = [
+        f"{label}: {value}"
+        for field, label in fields
+        if (value := _optional_number_or_text(row, field)) is not None
+    ]
+    return "; ".join(values) or None
+
+
+def _corporate_event_source_id(event_type: str, ts_code: str, row: Mapping[str, Any]) -> str:
+    parts = [
+        event_type,
+        ts_code,
+        str(_optional_number_or_text(row, "ann_date") or "unknown-date"),
+        str(_optional_number_or_text(row, "end_date") or "unknown-period"),
+        str(_optional_number_or_text(row, "update_flag") or "base"),
+    ]
+    return "tushare:" + ":".join(parts)
 
 
 def _default_pro_client_factory(token: str) -> Any:
@@ -335,6 +435,20 @@ def _required_date(row: Mapping[str, Any], field: str) -> date:
         except ValueError as error:
             raise TushareDataUnavailableError(f"invalid Tushare {field}: {value}") from error
     raise TushareDataUnavailableError(f"missing Tushare {field}")
+
+
+def _optional_date(row: Mapping[str, Any], field: str) -> date | None:
+    value = row.get(field)
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    for pattern in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, pattern).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _required_float(row: Mapping[str, Any], field: str) -> float:

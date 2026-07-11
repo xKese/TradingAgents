@@ -27,6 +27,37 @@ class FakeProClient:
             {"trade_date": "20260105", "pe": 20.5, "pe_ttm": 21.5, "pb": 3.2, "total_mv": 100000},
         ]
 
+    def forecast(self, **kwargs):
+        self.calls.append(("forecast", kwargs))
+        return [
+            {
+                "ann_date": "20260105",
+                "end_date": "20251231",
+                "type": "pre_increase",
+                "p_change_min": 10.0,
+                "p_change_max": 20.0,
+                "summary": "Fixture earnings forecast.",
+            },
+            {
+                "ann_date": "20260106",
+                "end_date": "20251231",
+                "type": "pre_increase",
+            },
+        ]
+
+    def express(self, **kwargs):
+        self.calls.append(("express", kwargs))
+        return [
+            {
+                "ann_date": "20260104",
+                "end_date": "20251231",
+                "revenue": 1000.0,
+                "n_income": 100.0,
+                "yoy_net_profit": 15.0,
+                "perf_summary": "Fixture earnings express.",
+            }
+        ]
+
     def hk_daily_adj(self, **kwargs):
         self.calls.append(("hk_daily_adj", kwargs))
         return [
@@ -94,3 +125,40 @@ def test_tushare_provider_requires_token_when_not_injected(monkeypatch):
 
     with pytest.raises(TushareDataUnavailableError, match="TUSHARE_TOKEN"):
         TushareProProvider()
+
+
+def test_tushare_provider_normalizes_a_share_corporate_events_as_news():
+    client = FakeProClient()
+    provider = TushareProProvider(pro_client=client)
+
+    news = provider.get_news(
+        InstrumentIdentity(symbol="600519"),
+        date(2026, 1, 1),
+        date(2026, 1, 5),
+        as_of_date=date(2026, 1, 5),
+    )
+
+    assert [item.title for item in news] == [
+        "Earnings forecast announced for period 20251231",
+        "Earnings express announced for period 20251231",
+    ]
+    assert news[0].published_at.isoformat() == "2026-01-05T00:00:00+00:00"
+    assert news[0].summary is not None
+    assert "profit change minimum (%)" in news[0].summary
+    assert news[1].source_id == "tushare:earnings_express:600519.SH:20260104:20251231:base"
+    assert client.calls == [
+        ("forecast", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
+        ("express", {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"}),
+    ]
+
+
+def test_tushare_provider_does_not_infer_hong_kong_corporate_events():
+    client = FakeProClient()
+    provider = TushareProProvider(pro_client=client)
+
+    news = provider.get_news(
+        InstrumentIdentity(symbol="700.HK"), date(2026, 1, 1), date(2026, 1, 5)
+    )
+
+    assert news == []
+    assert client.calls == []

@@ -29,9 +29,9 @@ the Tushare formats `600519.SH`, `000001.SZ`, and `00700.HK`.
 
 - A shares: `daily` bars and `daily_basic` daily valuation snapshots.
 - Hong Kong: `hk_daily_adj` bars and its available daily snapshot fields.
-- News: intentionally empty for now.  The platform will add a separate,
-  timestamped China/Hong Kong news or announcement source instead of treating
-  untimestamped snippets as research evidence.
+- News: this initial provider version left the evidence set empty.  PR15 adds
+  date-granular A-share corporate-event evidence; Hong Kong issuer events still
+  wait for a source with reliable issuer identifiers and timestamps.
 
 Tushare endpoint permissions and point requirements still apply to the local
 account.  A provider permission error is returned as a failed local research

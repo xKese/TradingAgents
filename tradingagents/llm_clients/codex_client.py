@@ -203,17 +203,13 @@ def _codex_setup_message(
     *,
     original_error: str | None = None,
     available_models: Iterable[str] | None = None,
+    recovery_steps: Iterable[str] = (),
 ) -> str:
-    lines = [
-        problem,
-        "",
-        "To fix Codex setup:",
-        f"1. Install or update the Codex Python SDK: {CODEX_UPDATE_COMMAND}",
-        f"2. If the Codex CLI is available, update it too: {CODEX_CLI_UPDATE_COMMAND}",
-        f"3. If you are not signed in, run: {CODEX_LOGIN_COMMAND}",
-        f"4. If `codex` is not recognized, verify local SDK auth with: {CODEX_ACCOUNT_CHECK_COMMAND}",
-        f"5. List models your installed runtime can run with: {CODEX_MODEL_LIST_COMMAND}",
-    ]
+    lines = [problem]
+    steps = list(recovery_steps)
+    if steps:
+        lines.extend(["", "Next steps:"])
+        lines.extend(f"{index}. {step}" for index, step in enumerate(steps, start=1))
     if available_models:
         lines.extend(["", "Models currently reported by your installed runtime:"])
         lines.append(", ".join(available_models))
@@ -247,6 +243,20 @@ def _looks_like_schema_error(message: str) -> bool:
     return "invalid_json_schema" in lowered or "response_format" in lowered
 
 
+def _auth_recovery_steps() -> list[str]:
+    return [
+        f"Sign in with ChatGPT: {CODEX_LOGIN_COMMAND}",
+        f"Confirm the saved login: {CODEX_ACCOUNT_CHECK_COMMAND}",
+    ]
+
+
+def _model_recovery_steps() -> list[str]:
+    return [
+        f"Update the Codex Python SDK: {CODEX_UPDATE_COMMAND}",
+        f"List models available to this runtime: {CODEX_MODEL_LIST_COMMAND}",
+    ]
+
+
 def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
     """Validate Codex SDK/auth/model availability before the graph starts."""
     try:
@@ -256,6 +266,7 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
             _codex_setup_message(
                 "Codex provider is selected, but the `openai-codex` SDK is not installed.",
                 original_error=str(exc),
+                recovery_steps=[f"Install the optional provider dependency: {CODEX_INSTALL_COMMAND}"],
             )
         ) from exc
 
@@ -270,6 +281,7 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
                         "Codex provider is selected, but TradingAgents could not verify "
                         "a local Codex/ChatGPT login.",
                         original_error=str(exc),
+                        recovery_steps=_auth_recovery_steps(),
                     )
                 ) from exc
 
@@ -277,7 +289,8 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
                 raise CodexSetupError(
                     _codex_setup_message(
                         "Codex provider is selected, but no local Codex/ChatGPT "
-                        "account was found."
+                        "account was found.",
+                        recovery_steps=_auth_recovery_steps(),
                     )
                 )
 
@@ -293,7 +306,10 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
             )
         else:
             problem = "Codex provider is selected, but the Codex SDK/runtime is not ready."
-        raise CodexSetupError(_codex_setup_message(problem, original_error=message)) from exc
+        steps = _auth_recovery_steps() if _looks_like_auth_error(message) else _model_recovery_steps()
+        raise CodexSetupError(
+            _codex_setup_message(problem, original_error=message, recovery_steps=steps)
+        ) from exc
 
     missing = [model for model in requested_models if available and model not in available]
     if missing:
@@ -308,6 +324,7 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
                 problem,
                 available_models=available,
                 original_error=f"Unavailable model(s): {', '.join(missing)}",
+                recovery_steps=_model_recovery_steps(),
             )
         )
     return available
@@ -439,6 +456,7 @@ class CodexChatModel(BaseChatModel):
                         "installed Codex SDK/runtime.",
                         available_models=available,
                         original_error=f"Unavailable model: {self.model_name}",
+                        recovery_steps=_model_recovery_steps(),
                     )
                 )
             thread = codex.thread_start(
@@ -476,8 +494,25 @@ class CodexChatModel(BaseChatModel):
                 duration_seconds=perf_counter() - started,
                 error=problem,
             )
+            if _looks_like_newer_codex_required(message):
+                steps = _model_recovery_steps() + [
+                    f"If available, update the Codex CLI too: {CODEX_CLI_UPDATE_COMMAND}"
+                ]
+            elif _looks_like_auth_error(message):
+                steps = _auth_recovery_steps()
+            elif _looks_like_schema_error(message):
+                steps = [
+                    "Restart TradingAgents after applying the current Codex provider update.",
+                    "No Codex re-login is required for this error.",
+                ]
+            else:
+                steps = [f"Confirm the saved login: {CODEX_ACCOUNT_CHECK_COMMAND}"]
             raise RuntimeError(
-                _codex_setup_message(problem, original_error=message)
+                _codex_setup_message(
+                    problem,
+                    original_error=message,
+                    recovery_steps=steps,
+                )
             ) from exc
 
         self._notify_codex_status(

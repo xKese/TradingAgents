@@ -11,6 +11,7 @@ from tradingagents.llm_clients.codex_client import (
     _available_model_ids,
     _codex_setup_message,
     _looks_like_schema_error,
+    _model_recovery_steps,
 )
 from tradingagents.llm_clients.factory import create_llm_client
 
@@ -215,17 +216,17 @@ def test_available_model_ids_extracts_codex_sdk_models():
 
 
 @pytest.mark.unit
-def test_codex_setup_message_includes_recovery_commands():
+def test_codex_model_error_shows_model_recovery_without_login_instruction():
     message = _codex_setup_message(
         "This Codex model requires a newer Codex app/CLI/SDK.",
         original_error="gpt-5.6-luna requires a newer version of Codex",
         available_models=["gpt-5.5", "gpt-5.4-mini"],
+        recovery_steps=_model_recovery_steps(),
     )
 
     assert "python -m pip install -U --pre openai-codex" in message
-    assert "codex update" in message
-    assert "codex login" in message
-    assert "c.account()" in message
+    assert "c.models()" in message
+    assert "codex login" not in message
     assert "gpt-5.5, gpt-5.4-mini" in message
 
 

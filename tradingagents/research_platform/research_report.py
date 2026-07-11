@@ -21,6 +21,7 @@ from .backtest_contracts import BacktestResult
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
 from .financial_health import assess_financial_health
 from .risk_contracts import RiskReview
+from .valuation_context import build_valuation_context
 
 
 def _utc_now() -> datetime:
@@ -53,6 +54,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
         _render_header(bundle),
         _render_market_snapshot(bundle.price_bars),
         _render_fundamentals(bundle.fundamentals),
+        _render_valuation_context(bundle.fundamentals),
         _render_financial_quality(bundle.fundamentals),
         _render_financial_health(bundle.fundamentals),
         _render_financial_trend(bundle.fundamentals),
@@ -146,6 +148,43 @@ def _render_fundamentals(fundamentals: list[FundamentalSnapshot]) -> str:
     )
 
 
+
+def _render_valuation_context(fundamentals: list[FundamentalSnapshot]) -> str:
+    context = build_valuation_context(fundamentals)
+    rows = [
+        "| "
+        + " | ".join(
+            [
+                item.label,
+                _format_value(item.latest),
+                _format_value(item.percentile),
+                _format_value(item.low),
+                _format_value(item.median),
+                _format_value(item.high),
+                str(item.observations),
+            ]
+        )
+        + " |"
+        for item in context.metrics
+        if item.available
+    ]
+    if not rows:
+        return (
+            "## Valuation Context\n\n"
+            "Fewer than 20 valid cached daily valuation observations are available."
+        )
+    return "\n".join(
+        [
+            "## Valuation Context",
+            "",
+            f"**Daily Snapshot As Of:** {context.as_of_date}",
+            f"**Historical Window:** {context.daily_snapshot_count} cached trading days",
+            "",
+            "| Metric | Latest | Percentile (%) | Low | Median | High | Observations |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            *rows,
+        ]
+    )
 def _render_financial_quality(fundamentals: list[FundamentalSnapshot]) -> str:
     snapshots = [
         item

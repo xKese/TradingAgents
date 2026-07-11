@@ -125,35 +125,26 @@ class TushareProProvider:
         ts_code = canonical_tushare_symbol(identity)
         if ts_code.endswith(".HK"):
             rows = self._fetch_fundamental_rows("hk_daily_adj", ts_code, availability_date)
-            metrics = _hk_metrics(rows, availability_date)
+            metric_builder = _hk_metrics
             source = "tushare.pro.hk_daily_adj"
         else:
             rows = self._fetch_fundamental_rows("daily_basic", ts_code, availability_date)
-            metrics = _a_share_metrics(rows, availability_date)
+            metric_builder = _a_share_metrics
             source = "tushare.pro.daily_basic"
-        if not metrics:
+
+        snapshots = _daily_fundamental_snapshots(
+            identity=identity,
+            rows=rows,
+            availability_date=availability_date,
+            currency=identity.currency or _currency_for(ts_code),
+            source=source,
+            ts_code=ts_code,
+            metric_builder=metric_builder,
+        )
+        if not snapshots:
             raise TushareDataUnavailableError(
                 f"no usable Tushare fundamental snapshot for {identity.symbol}"
             )
-
-        latest_trade_date = max(
-            (_required_date(row, "trade_date") for row in rows if _has_trade_date(row)),
-            default=availability_date,
-        )
-        snapshots = [
-            FundamentalSnapshot(
-                symbol=identity.symbol,
-                period_end=latest_trade_date,
-                fiscal_period="daily_snapshot",
-                currency=identity.currency or _currency_for(ts_code),
-                metrics=metrics,
-                provenance=_provenance(
-                    availability_date,
-                    source=source,
-                    vendor_symbol=ts_code,
-                ),
-            )
-        ]
         if ts_code.endswith(".HK"):
             return snapshots
 
@@ -244,9 +235,10 @@ class TushareProProvider:
         ts_code: str,
         availability_date: date,
     ) -> list[Mapping[str, Any]]:
+        lookback_days = 400 if endpoint == "daily_basic" else 14
         params = {
             "ts_code": ts_code,
-            "start_date": (availability_date - timedelta(days=14)).strftime("%Y%m%d"),
+            "start_date": (availability_date - timedelta(days=lookback_days)).strftime("%Y%m%d"),
             "end_date": availability_date.strftime("%Y%m%d"),
         }
         try:
@@ -397,6 +389,47 @@ def _records(frame: Any) -> list[Mapping[str, Any]]:
         return [row for row in rows if isinstance(row, Mapping)]
     raise TushareDataUnavailableError("Tushare returned an unsupported response type")
 
+
+
+def _daily_fundamental_snapshots(
+    *,
+    identity: InstrumentIdentity,
+    rows: list[Mapping[str, Any]],
+    availability_date: date,
+    currency: str,
+    source: str,
+    ts_code: str,
+    metric_builder: Callable[
+        [list[Mapping[str, Any]], date], dict[str, float | int | str | None]
+    ],
+) -> list[FundamentalSnapshot]:
+    eligible = [
+        row
+        for row in rows
+        if _has_trade_date(row) and _required_date(row, "trade_date") <= availability_date
+    ]
+    snapshots: list[FundamentalSnapshot] = []
+    seen_periods: set[date] = set()
+    provenance = _provenance(availability_date, source=source, vendor_symbol=ts_code)
+    for row in sorted(eligible, key=lambda item: _required_date(item, "trade_date"), reverse=True):
+        period_end = _required_date(row, "trade_date")
+        if period_end in seen_periods:
+            continue
+        seen_periods.add(period_end)
+        metrics = metric_builder([row], availability_date)
+        if not metrics:
+            continue
+        snapshots.append(
+            FundamentalSnapshot(
+                symbol=identity.symbol,
+                period_end=period_end,
+                fiscal_period="daily_snapshot",
+                currency=currency,
+                metrics=metrics,
+                provenance=provenance,
+            )
+        )
+    return snapshots
 
 def _a_share_metrics(rows: list[Mapping[str, Any]], as_of_date: date) -> dict[str, float | int | str | None]:
     row = _latest_row(rows, as_of_date)

@@ -202,6 +202,7 @@ def _price_key(record: PriceBar) -> str:
 def _fundamental_key(record: FundamentalSnapshot) -> str:
     return "|".join([
         record.period_end.isoformat(),
+        record.fiscal_period or "",
         record.provenance.as_of_date.isoformat(),
         record.provenance.provider,
     ])

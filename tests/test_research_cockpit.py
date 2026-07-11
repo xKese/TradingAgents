@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from json import loads
 from threading import Thread
 from urllib.request import urlopen
@@ -207,14 +207,15 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="valuationContext"' in _APP_HTML
     assert 'id="financialQuality"' in _APP_HTML
     assert 'id="financialTrend"' in _APP_HTML
     assert 'id="dataProvider"' in _APP_HTML
     assert 'value="tushare"' in _APP_HTML
-    assert 'data_provider: $(\'dataProvider\').value' in _APP_HTML
+    assert "data_provider: $('dataProvider').value" in _APP_HTML
     assert 'id="narrativeMode"' in _APP_HTML
     assert 'value="openai_narrative"' in _APP_HTML
-    assert 'narrative_mode: $(\'narrativeMode\').value' in _APP_HTML
+    assert "narrative_mode: $('narrativeMode').value" in _APP_HTML
 
 
 def test_cockpit_serves_and_exports_archived_markdown_report(tmp_path):
@@ -274,3 +275,32 @@ def test_cockpit_exposes_latest_financial_quality_snapshot(tmp_path):
     assert snapshot["financial_health"]["status"] == "watch"
     assert snapshot["financial_health"]["score"] == 1
     assert len(snapshot["financial_quality_history"]) == 1
+
+
+def test_cockpit_exposes_historical_valuation_context(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    store.save_fundamentals(
+        [
+            FundamentalSnapshot(
+                symbol="600519",
+                period_end=date(2026, 1, 1) + timedelta(days=index),
+                fiscal_period="daily_snapshot",
+                metrics={
+                    "pe_ratio_ttm": float(index + 10),
+                    "price_to_book": 3.0,
+                    "price_to_sales_ttm": 2.0,
+                    "dividend_yield_pct": 2.0,
+                },
+                provenance=_provenance(),
+            )
+            for index in range(20)
+        ]
+    )
+
+    snapshot = build_cockpit_snapshot(store, "600519")
+    pe = snapshot["valuation_context"]["metrics"][0]
+
+    assert snapshot["valuation_context"]["available"] is True
+    assert snapshot["valuation_context"]["daily_snapshot_count"] == 20
+    assert pe["latest"] == 29.0
+    assert pe["percentile"] == 100.0

@@ -143,3 +143,29 @@ def test_json_artifact_store_round_trips_news(tmp_path):
 
     assert len(items) == 1
     assert items[0].source_id == "news-1"
+
+
+def test_json_artifact_store_keeps_daily_and_financial_snapshots_for_same_period(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    daily = FundamentalSnapshot(
+        symbol="600519",
+        period_end=date(2026, 3, 31),
+        fiscal_period="daily_snapshot",
+        metrics={"pe_ratio_ttm": 20.0},
+        provenance=_provenance(date(2026, 4, 1)),
+    )
+    financial = FundamentalSnapshot(
+        symbol="600519",
+        period_end=date(2026, 3, 31),
+        fiscal_period="financial_report_2026-03-31",
+        metrics={"reported_net_income": 100.0},
+        provenance=_provenance(date(2026, 4, 1)),
+    )
+
+    store.save_fundamentals([daily, financial])
+
+    snapshots = store.load_fundamentals("600519")
+    assert {item.fiscal_period for item in snapshots} == {
+        "daily_snapshot",
+        "financial_report_2026-03-31",
+    }

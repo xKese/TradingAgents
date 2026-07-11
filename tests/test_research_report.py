@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from tradingagents.research_platform.agent_contracts import (
     AnalystNote,
@@ -289,3 +289,33 @@ def test_render_research_report_renders_financial_trend_for_multiple_periods():
     assert "## Financial Trend" in report
     assert "| 2025-12-31 |" in report
     assert "| Report Period | Revenue | Net Income | Operating Cash Flow | ROE (%) |" in report
+
+
+def test_render_research_report_renders_historical_valuation_context():
+    fundamentals = [
+        FundamentalSnapshot(
+            symbol="600519",
+            period_end=date(2026, 1, 1) + timedelta(days=index),
+            fiscal_period="daily_snapshot",
+            metrics={
+                "pe_ratio_ttm": float(index + 10),
+                "price_to_book": 3.0,
+                "price_to_sales_ttm": 2.0,
+                "dividend_yield_pct": 2.0,
+            },
+            provenance=_provenance(date(2026, 2, 1)),
+        )
+        for index in range(20)
+    ]
+
+    report = render_research_report(
+        ResearchReportBundle(
+            symbol="600519",
+            as_of_date=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            fundamentals=fundamentals,
+        )
+    )
+
+    assert "## Valuation Context" in report
+    assert "**Daily Snapshot As Of:** 2026-01-20" in report
+    assert "| P/E (TTM) | 29 | 100 | 10 | 19.5 | 29 | 20 |" in report

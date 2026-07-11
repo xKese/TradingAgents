@@ -137,6 +137,10 @@ def test_tushare_provider_normalizes_a_share_daily_and_basic_snapshot():
         "daily",
         {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"},
     )
+    assert client.calls[1] == (
+        "daily_basic",
+        {"ts_code": "600519.SH", "start_date": "20241201", "end_date": "20260105"},
+    )
     assert fundamentals[0].metrics["pe_ratio_ttm"] == 21.5
     assert fundamentals[0].metrics["total_market_value_10k_cny"] == 100000
     assert fundamentals[1].period_end == date(2025, 12, 31)

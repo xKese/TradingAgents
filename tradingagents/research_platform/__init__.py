@@ -69,6 +69,7 @@ from .tushare_provider import (
     canonical_tushare_symbol,
     supports_tushare_symbol,
 )
+from .valuation_context import ValuationContext, ValuationMetricContext, build_valuation_context
 from .watchlist import JsonWatchlistStore, WatchlistEntry
 from .watchlist_board import build_watchlist_board
 
@@ -88,6 +89,7 @@ __all__ = [
     "build_cache_data_health",
     "build_report_workspace",
     "build_watchlist_board",
+    "build_valuation_context",
     "canonical_tushare_symbol",
     "ConfidenceLevel",
     "DataProvider",
@@ -131,6 +133,8 @@ __all__ = [
     "TradeSignal",
     "TushareDataUnavailableError",
     "TushareProProvider",
+    "ValuationContext",
+    "ValuationMetricContext",
     "WatchlistEntry",
     "evaluate_basic_risk",
     "validate_signal_timing",

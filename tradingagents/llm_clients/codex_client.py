@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -26,6 +27,23 @@ from .base_client import BaseLLMClient
 from .validators import validate_model
 
 logger = logging.getLogger(__name__)
+
+CODEX_INSTALL_COMMAND = 'python -m pip install -e ".[codex]"'
+CODEX_UPDATE_COMMAND = "python -m pip install -U --pre openai-codex"
+CODEX_LOGIN_COMMAND = "codex login"
+CODEX_CLI_UPDATE_COMMAND = "codex update"
+CODEX_ACCOUNT_CHECK_COMMAND = (
+    'python -c "from openai_codex import Codex; '
+    'c=Codex(); print(c.account()); c.close()"'
+)
+CODEX_MODEL_LIST_COMMAND = (
+    'python -c "from openai_codex import Codex; '
+    'c=Codex(); print([m.id for m in c.models().data]); c.close()"'
+)
+
+
+class CodexSetupError(RuntimeError):
+    """Actionable setup error for the experimental Codex provider."""
 
 
 def _message_to_text(message: BaseMessage) -> str:
@@ -104,6 +122,116 @@ def _available_model_ids(codex: Any) -> list[str]:
     return ids
 
 
+def _codex_setup_message(
+    problem: str,
+    *,
+    original_error: str | None = None,
+    available_models: Iterable[str] | None = None,
+) -> str:
+    lines = [
+        problem,
+        "",
+        "To fix Codex setup:",
+        f"1. Install or update the Codex Python SDK: {CODEX_UPDATE_COMMAND}",
+        f"2. If the Codex CLI is available, update it too: {CODEX_CLI_UPDATE_COMMAND}",
+        f"3. If you are not signed in, run: {CODEX_LOGIN_COMMAND}",
+        f"4. If `codex` is not recognized, verify local SDK auth with: {CODEX_ACCOUNT_CHECK_COMMAND}",
+        f"5. List models your installed runtime can run with: {CODEX_MODEL_LIST_COMMAND}",
+    ]
+    if available_models:
+        lines.extend(["", "Models currently reported by your installed runtime:"])
+        lines.append(", ".join(available_models))
+    if original_error:
+        lines.extend(["", f"Original Codex error: {original_error}"])
+    return "\n".join(lines)
+
+
+def _looks_like_newer_codex_required(message: str) -> bool:
+    lowered = message.lower()
+    return "requires a newer version of codex" in lowered or "update codex" in lowered
+
+
+def _looks_like_auth_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "not authenticated",
+            "authentication",
+            "unauthorized",
+            "login",
+            "sign in",
+            "requires_openai_auth",
+        )
+    )
+
+
+def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
+    """Validate Codex SDK/auth/model availability before the graph starts."""
+    try:
+        from openai_codex import Codex
+    except ImportError as exc:
+        raise CodexSetupError(
+            _codex_setup_message(
+                "Codex provider is selected, but the `openai-codex` SDK is not installed.",
+                original_error=str(exc),
+            )
+        ) from exc
+
+    requested_models = [models] if isinstance(models, str) else list(models)
+    try:
+        with Codex() as codex:
+            try:
+                account = codex.account()
+            except Exception as exc:  # noqa: BLE001 - convert SDK detail to user steps
+                raise CodexSetupError(
+                    _codex_setup_message(
+                        "Codex provider is selected, but TradingAgents could not verify "
+                        "a local Codex/ChatGPT login.",
+                        original_error=str(exc),
+                    )
+                ) from exc
+
+            if not account:
+                raise CodexSetupError(
+                    _codex_setup_message(
+                        "Codex provider is selected, but no local Codex/ChatGPT "
+                        "account was found."
+                    )
+                )
+
+            available = _available_model_ids(codex)
+    except CodexSetupError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - SDK startup/runtime failure
+        message = str(exc)
+        if _looks_like_auth_error(message):
+            problem = (
+                "Codex provider is selected, but the local Codex/ChatGPT "
+                "session is not ready."
+            )
+        else:
+            problem = "Codex provider is selected, but the Codex SDK/runtime is not ready."
+        raise CodexSetupError(_codex_setup_message(problem, original_error=message)) from exc
+
+    missing = [model for model in requested_models if available and model not in available]
+    if missing:
+        problem = (
+            "Codex provider is selected, but the configured model is not available "
+            "in your installed Codex SDK/runtime."
+        )
+        if any(model.startswith("gpt-5.6") for model in missing):
+            problem += " GPT-5.6 models may require a newer Codex app/CLI/SDK."
+        raise CodexSetupError(
+            _codex_setup_message(
+                problem,
+                available_models=available,
+                original_error=f"Unavailable model(s): {', '.join(missing)}",
+            )
+        )
+    return available
+
+
 class CodexChatModel(BaseChatModel):
     """LangChain chat wrapper around the local Codex SDK."""
 
@@ -165,25 +293,34 @@ class CodexChatModel(BaseChatModel):
             with Codex() as codex:
                 available = _available_model_ids(codex)
                 if available and self.model_name not in available:
-                    raise ValueError(
-                        f"Codex model {self.model_name!r} is not available in the "
-                        "installed Codex SDK/runtime. Available models: "
-                        f"{', '.join(available)}. Update the Codex SDK/app when "
-                        "newer models are available, or set "
-                        "TRADINGAGENTS_DEEP_THINK_LLM / "
-                        "TRADINGAGENTS_QUICK_THINK_LLM to one of the listed models."
+                    raise CodexSetupError(
+                        _codex_setup_message(
+                            "The configured Codex model is not available in your "
+                            "installed Codex SDK/runtime.",
+                            available_models=available,
+                            original_error=f"Unavailable model: {self.model_name}",
+                        )
                     )
                 thread = codex.thread_start(
                     model=self.model_name,
                     sandbox=Sandbox.read_only,
                 )
                 result = thread.run(prompt)
+        except CodexSetupError:
+            raise
         except Exception as exc:
+            message = str(exc)
+            if _looks_like_newer_codex_required(message):
+                problem = "This Codex model requires a newer Codex app/CLI/SDK."
+            elif _looks_like_auth_error(message):
+                problem = (
+                    "TradingAgents could not use your local Codex/ChatGPT login "
+                    "for this request."
+                )
+            else:
+                problem = "Codex local invocation failed."
             raise RuntimeError(
-                "Codex local invocation failed. Make sure the Codex SDK is "
-                'installed with `pip install ".[codex]"`, your local Codex/ChatGPT '
-                "session is authenticated, and the configured model is available "
-                f"in your installed Codex runtime. Original error: {exc}"
+                _codex_setup_message(problem, original_error=message)
             ) from exc
 
         return str(getattr(result, "final_response", "") or "")
@@ -215,6 +352,7 @@ class CodexClient(BaseLLMClient):
 
     def get_llm(self) -> Any:
         self.warn_if_unknown_model()
+        preflight_codex_runtime(self.model)
         return CodexChatModel(model_name=self.model)
 
     def validate_model(self) -> bool:

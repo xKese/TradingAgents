@@ -173,6 +173,10 @@ python -c "from openai_codex import Codex; c=Codex(); print([m.id for m in c.mod
 ```
 If a GPT-5.6 model returns "requires a newer version of Codex", choose one of the listed models for now or update Codex when a newer SDK/runtime is published. The CLI also offers a custom model ID option for future rollout or workspace-specific models.
 ```bash
+python -m pip install -U --pre openai-codex
+codex update  # when the Codex CLI is available
+```
+```bash
 TRADINGAGENTS_LLM_PROVIDER=codex
 TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.5
 TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.4-mini

@@ -2,12 +2,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from tradingagents.llm_clients.codex_client import CodexChatModel, _available_model_ids
+from tradingagents.llm_clients import codex_client
+from tradingagents.llm_clients.codex_client import (
+    CodexChatModel,
+    CodexSetupError,
+    _available_model_ids,
+    _codex_setup_message,
+)
 from tradingagents.llm_clients.factory import create_llm_client
 
 
 @pytest.mark.unit
-def test_codex_factory_returns_chat_model():
+def test_codex_factory_returns_chat_model(monkeypatch):
+    monkeypatch.setattr(codex_client, "preflight_codex_runtime", lambda model: ["gpt-5.4"])
+
     client = create_llm_client("codex", "gpt-5.4")
     llm = client.get_llm()
 
@@ -66,3 +74,42 @@ def test_available_model_ids_extracts_codex_sdk_models():
     )
 
     assert _available_model_ids(codex) == ["gpt-5.5", "gpt-5.4-mini"]
+
+
+@pytest.mark.unit
+def test_codex_setup_message_includes_recovery_commands():
+    message = _codex_setup_message(
+        "This Codex model requires a newer Codex app/CLI/SDK.",
+        original_error="gpt-5.6-luna requires a newer version of Codex",
+        available_models=["gpt-5.5", "gpt-5.4-mini"],
+    )
+
+    assert "python -m pip install -U --pre openai-codex" in message
+    assert "codex update" in message
+    assert "codex login" in message
+    assert "c.account()" in message
+    assert "gpt-5.5, gpt-5.4-mini" in message
+
+
+@pytest.mark.unit
+def test_preflight_rejects_unavailable_runtime_model(monkeypatch):
+    class FakeCodex:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def account(self):
+            return object()
+
+        def models(self):
+            return SimpleNamespace(data=[SimpleNamespace(id="gpt-5.5")])
+
+    monkeypatch.setitem(__import__("sys").modules, "openai_codex", SimpleNamespace(Codex=FakeCodex))
+
+    with pytest.raises(CodexSetupError) as exc:
+        codex_client.preflight_codex_runtime("gpt-5.6-luna")
+
+    assert "not available" in str(exc.value)
+    assert "python -m pip install -U --pre openai-codex" in str(exc.value)

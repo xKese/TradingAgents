@@ -78,6 +78,7 @@ __all__ = [
     "PriceBar",
     "JsonResearchRunArchive",
     "LocalResearchJobRunner",
+    "ManualSignalRequest",
     "ResearchJob",
     "ResearchJobRequest",
     "ResearchJobStatus",

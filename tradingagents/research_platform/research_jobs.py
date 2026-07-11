@@ -12,9 +12,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .agent_contracts import TradeDirection, TradeHorizon, TradeSignal
 from .artifact_store import JsonArtifactStore
 from .data_contracts import DataProvider
 from .research_workflow import ResearchWorkflowConfig, run_ticker_research
+from .risk_contracts import RiskPolicy
 from .run_archive import JsonResearchRunArchive
 from .yfinance_provider import YFinanceProvider
 
@@ -26,6 +28,20 @@ class ResearchJobStatus(str, Enum):
     FAILED = "failed"
 
 
+class ManualSignalRequest(BaseModel):
+    """Explicit human decision to validate through risk and backtest layers."""
+
+    model_config = ConfigDict(frozen=True)
+
+    direction: TradeDirection
+    horizon: TradeHorizon = TradeHorizon.MEDIUM
+    confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    proposed_position_pct: float | None = Field(default=None, ge=0.0, le=1.0)
+    rationale: str = Field(min_length=1, max_length=2_000)
+    expected_return_pct: float | None = None
+    stop_loss_pct: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class ResearchJobRequest(BaseModel):
     """Bounded input accepted by the local cockpit research launcher."""
 
@@ -35,6 +51,7 @@ class ResearchJobRequest(BaseModel):
     as_of_date: date = Field(default_factory=date.today)
     lookback_days: int = Field(default=90, ge=1, le=3650)
     currency: str | None = None
+    manual_signal: ManualSignalRequest | None = None
 
     @field_validator("symbol")
     @classmethod
@@ -138,6 +155,7 @@ class LocalResearchJobRunner:
             return
         try:
             provider = self.provider_factory(job.request)
+            signal = _build_manual_signal(job.request)
             result = run_ticker_research(
                 config=ResearchWorkflowConfig(
                     symbol=job.request.symbol,
@@ -148,6 +166,8 @@ class LocalResearchJobRunner:
                 provider=provider,
                 store=JsonArtifactStore(self.data_dir),
                 archive=JsonResearchRunArchive(self.data_dir),
+                signal=signal,
+                risk_policy=RiskPolicy(),
                 output_dir=self.data_dir / "reports",
             )
         except Exception as error:  # Provider errors become visible job state, not server crashes.
@@ -176,6 +196,23 @@ class LocalResearchJobRunner:
     def _default_provider_factory(self, request: ResearchJobRequest) -> DataProvider:
         cache_dir = self.data_dir / "yfinance"
         return YFinanceProvider(cache_dir=cache_dir)
+
+
+def _build_manual_signal(request: ResearchJobRequest) -> TradeSignal | None:
+    if request.manual_signal is None:
+        return None
+    decision = request.manual_signal
+    return TradeSignal(
+        symbol=request.symbol,
+        as_of_date=request.as_of_date,
+        direction=decision.direction,
+        horizon=decision.horizon,
+        confidence=decision.confidence,
+        rationale=decision.rationale,
+        proposed_position_pct=decision.proposed_position_pct,
+        expected_return_pct=decision.expected_return_pct,
+        stop_loss_pct=decision.stop_loss_pct,
+    )
 
 
 def _utc_now() -> datetime:

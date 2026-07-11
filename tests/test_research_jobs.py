@@ -8,9 +8,11 @@ from tradingagents.research_platform.data_contracts import (
 )
 from tradingagents.research_platform.research_jobs import (
     LocalResearchJobRunner,
+    ManualSignalRequest,
     ResearchJobRequest,
     ResearchJobStatus,
 )
+from tradingagents.research_platform.run_archive import JsonResearchRunArchive
 
 
 class FixtureProvider:
@@ -87,4 +89,31 @@ def test_local_job_runner_exposes_provider_failures_as_job_state(tmp_path):
 
     assert completed.status == ResearchJobStatus.FAILED
     assert completed.error == "fixture provider unavailable"
+    runner.shutdown()
+
+
+def test_local_job_runner_routes_manual_signal_through_risk_and_backtest(tmp_path):
+    runner = LocalResearchJobRunner(tmp_path, provider_factory=lambda request: FixtureProvider())
+    request = ResearchJobRequest(
+        symbol="NVDA",
+        as_of_date=date(2026, 1, 2),
+        manual_signal=ManualSignalRequest(
+            direction="buy",
+            confidence=0.8,
+            proposed_position_pct=0.20,
+            rationale="Fixture manual decision.",
+        ),
+    )
+
+    completed = runner.wait(runner.submit(request).job_id, timeout=2)
+
+    assert completed.status == ResearchJobStatus.SUCCEEDED
+    assert completed.run_id is not None
+
+    bundle = JsonResearchRunArchive(tmp_path).load_latest_bundle("NVDA")
+    assert bundle is not None
+    assert bundle.signal is not None
+    assert bundle.risk_review is not None
+    assert bundle.risk_review.approved_position_pct == 0.10
+    assert bundle.backtest_result is not None
     runner.shutdown()

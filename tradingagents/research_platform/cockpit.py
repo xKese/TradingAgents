@@ -333,7 +333,7 @@ _APP_HTML = r'''<!doctype html>
     .eyebrow { margin: 0 0 7px; color: #39706e; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
     .control { display: flex; gap: 8px; align-items: center; }
     input, select, button { height: 36px; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #15212b; padding: 0 11px; }
-    select { min-width: 150px; } input { width: 104px; }
+    select { min-width: 150px; } input { width: 104px; } textarea { min-height: 74px; resize: vertical; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #15212b; padding: 9px 11px; font: inherit; } .decision-form input, .decision-form select, .decision-form textarea { width: 100%; min-width: 0; } .decision-form .wide { grid-column: 1 / -1; }
     button { cursor: pointer; font-weight: 650; }
     button:hover { border-color: #39706e; background: #edf8f7; } button:disabled { cursor: not-allowed; color: #9aa8ad; background: #f4f7f8; }
     .status { min-height: 20px; color: #64747d; font-size: 13px; margin: 16px 0 12px; }
@@ -384,6 +384,13 @@ _APP_HTML = r'''<!doctype html>
       <div class="panel"><div class="panel-title"><h2>News</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
 
       <div class="panel"><div class="panel-title"><h2>Research Runs</h2><select id="runHistory" aria-label="Archived research run"></select></div><div class="empty" id="runHistoryDetail"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Decision Draft</h2><span class="panel-meta">Optional manual signal</span></div><div class="grid decision-form">
+        <div><label class="label" for="decisionDirection">Direction</label><select id="decisionDirection"><option value="">No decision</option><option value="buy">Buy</option><option value="hold">Hold</option><option value="sell">Sell</option></select></div>
+        <div><label class="label" for="decisionHorizon">Horizon</label><select id="decisionHorizon"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select></div>
+        <div><label class="label" for="decisionConfidence">Confidence (%)</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
+        <div><label class="label" for="decisionPosition">Proposed Position (%)</label><input id="decisionPosition" type="number" min="0" max="100" step="0.1" value="5"></div>
+        <div class="wide"><label class="label" for="decisionRationale">Rationale</label><textarea id="decisionRationale">Manual cockpit decision.</textarea></div>
+      </div></div>
       <div class="panel"><div class="panel-title"><h2>Decision and Risk</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
       <div class="panel"><div class="panel-title"><h2>Backtest Snapshot</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
     </section>
@@ -490,12 +497,29 @@ _APP_HTML = r'''<!doctype html>
         $('status').textContent = `Research failed: ${job.error || 'provider unavailable'}`;
       }
     }
-    async function startResearch() {
+    function manualSignalPayload() {
+      const direction = $('decisionDirection').value;
+      if (!direction) return null;
+      const confidence = Number($('decisionConfidence').value) / 100;
+      const position = Number($('decisionPosition').value) / 100;
+      if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1 || !Number.isFinite(position) || position < 0 || position > 1) {
+        throw new Error('Decision percentages must be between 0 and 100.');
+      }
+      const rationale = $('decisionRationale').value.trim();
+      if (!rationale) throw new Error('A decision rationale is required.');
+      return {
+        direction,
+        horizon: $('decisionHorizon').value,
+        confidence,
+        proposed_position_pct: position,
+        rationale
+      };
+    }    async function startResearch() {
       const symbol = $('symbol').value;
       if (!symbol || activeJobId) return;
       setResearchButton(true);
       try {
-        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})}).then(response => response.ok ? response.json() : Promise.reject(response));
+        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol, manual_signal: manualSignalPayload()})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeJobId = payload.job.job_id;
         await pollResearchJob();
       } catch (error) {

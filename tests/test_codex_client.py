@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tradingagents.llm_clients.codex_client import CodexChatModel
+from tradingagents.llm_clients.codex_client import CodexChatModel, _available_model_ids
 from tradingagents.llm_clients.factory import create_llm_client
 
 
@@ -52,3 +52,17 @@ def test_codex_json_tool_response(monkeypatch):
             "type": "tool_call",
         }
     ]
+
+
+@pytest.mark.unit
+def test_available_model_ids_extracts_codex_sdk_models():
+    codex = SimpleNamespace(
+        models=lambda: SimpleNamespace(
+            data=[
+                SimpleNamespace(id="gpt-5.5"),
+                SimpleNamespace(model="gpt-5.4-mini"),
+            ]
+        )
+    )
+
+    assert _available_model_ids(codex) == ["gpt-5.5", "gpt-5.4-mini"]

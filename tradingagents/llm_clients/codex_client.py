@@ -87,6 +87,23 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return None
 
 
+def _available_model_ids(codex: Any) -> list[str]:
+    """Return model IDs advertised by the installed Codex SDK/runtime."""
+    try:
+        models = codex.models()
+    except Exception as exc:  # noqa: BLE001 - availability check is best-effort
+        logger.warning("Could not list Codex models before invocation: %s", exc)
+        return []
+
+    data = getattr(models, "data", models)
+    ids = []
+    for model in data or []:
+        model_id = getattr(model, "id", None) or getattr(model, "model", None)
+        if model_id:
+            ids.append(str(model_id))
+    return ids
+
+
 class CodexChatModel(BaseChatModel):
     """LangChain chat wrapper around the local Codex SDK."""
 
@@ -146,6 +163,16 @@ class CodexChatModel(BaseChatModel):
 
         try:
             with Codex() as codex:
+                available = _available_model_ids(codex)
+                if available and self.model_name not in available:
+                    raise ValueError(
+                        f"Codex model {self.model_name!r} is not available in the "
+                        "installed Codex SDK/runtime. Available models: "
+                        f"{', '.join(available)}. Update the Codex SDK/app when "
+                        "newer models are available, or set "
+                        "TRADINGAGENTS_DEEP_THINK_LLM / "
+                        "TRADINGAGENTS_QUICK_THINK_LLM to one of the listed models."
+                    )
                 thread = codex.thread_start(
                     model=self.model_name,
                     sandbox=Sandbox.read_only,
@@ -153,8 +180,10 @@ class CodexChatModel(BaseChatModel):
                 result = thread.run(prompt)
         except Exception as exc:
             raise RuntimeError(
-                "Codex local invocation failed. Make sure the Codex CLI/SDK is "
-                "installed and authenticated with `codex login`."
+                "Codex local invocation failed. Make sure the Codex SDK is "
+                'installed with `pip install ".[codex]"`, your local Codex/ChatGPT '
+                "session is authenticated, and the configured model is available "
+                f"in your installed Codex runtime. Original error: {exc}"
             ) from exc
 
         return str(getattr(result, "final_response", "") or "")

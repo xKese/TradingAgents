@@ -167,11 +167,15 @@ If the `codex` command is available, run `codex login` and sign in with ChatGPT.
 ```bash
 python -c "from openai_codex import Codex; c=Codex(); print(c.account()); c.close()"
 ```
-If that prints your ChatGPT account, you are authenticated and can run TradingAgents. Current public Codex model IDs are `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`; exact availability can depend on your Codex SDK/app version and ChatGPT entitlement. The CLI also offers a custom model ID option for future rollout or workspace-specific models.
+If that prints your ChatGPT account, you are authenticated and can run TradingAgents. Current public Codex model IDs are `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`; exact availability can depend on your Codex SDK/app version and ChatGPT entitlement. To list the models your installed SDK/runtime can actually run:
+```bash
+python -c "from openai_codex import Codex; c=Codex(); print([m.id for m in c.models().data]); c.close()"
+```
+If a GPT-5.6 model returns "requires a newer version of Codex", choose one of the listed models for now or update Codex when a newer SDK/runtime is published. The CLI also offers a custom model ID option for future rollout or workspace-specific models.
 ```bash
 TRADINGAGENTS_LLM_PROVIDER=codex
-TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.6-sol
-TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.6-luna
+TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.5
+TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.4-mini
 ```
 This routes model calls through the local Codex SDK/CLI session and uses your ChatGPT/Codex entitlement. It is not the same as OpenAI Platform API access and is best treated as experimental because Codex is an agent surface, not a drop-in chat-completions API.
 

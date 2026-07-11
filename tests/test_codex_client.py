@@ -71,15 +71,71 @@ def test_codex_json_tool_response(monkeypatch):
 @pytest.mark.unit
 def test_codex_structured_output_parses_pydantic_model(monkeypatch):
     llm = CodexChatModel(model_name="gpt-5.4")
+    received_schema = None
+
+    def run_codex(prompt, *, output_schema=None):
+        nonlocal received_schema
+        received_schema = output_schema
+        return '{"recommendation":"Hold","confidence":0.75}'
+
     monkeypatch.setattr(
         llm,
         "_run_codex",
-        lambda prompt: '{"recommendation":"Hold","confidence":0.75}',
+        run_codex,
     )
 
     result = llm.with_structured_output(SampleStructuredOutput).invoke("Decide")
 
     assert result == SampleStructuredOutput(recommendation="Hold", confidence=0.75)
+    assert received_schema == SampleStructuredOutput.model_json_schema()
+
+
+@pytest.mark.unit
+def test_codex_invocations_reuse_runtime_but_isolate_threads(monkeypatch):
+    class FakeSandbox:
+        read_only = object()
+
+    class FakeThread:
+        def __init__(self, response):
+            self.response = response
+            self.calls = []
+
+        def run(self, prompt, **kwargs):
+            self.calls.append((prompt, kwargs))
+            return SimpleNamespace(final_response=self.response)
+
+    class FakeCodex:
+        def __init__(self):
+            self.threads = []
+
+        def models(self):
+            return SimpleNamespace(data=[SimpleNamespace(id="gpt-5.4")])
+
+        def thread_start(self, **kwargs):
+            thread = FakeThread(f"response-{len(self.threads) + 1}")
+            self.threads.append((kwargs, thread))
+            return thread
+
+    class FakeRuntime:
+        def __init__(self):
+            self.codex = FakeCodex()
+            self.get_calls = 0
+
+        def get(self):
+            self.get_calls += 1
+            return self.codex
+
+    runtime = FakeRuntime()
+    monkeypatch.setitem(__import__("sys").modules, "openai_codex", SimpleNamespace(Sandbox=FakeSandbox))
+    monkeypatch.setattr(codex_client, "_CODEX_RUNTIME", runtime)
+    llm = CodexChatModel(model_name="gpt-5.4")
+
+    assert llm._run_codex("first") == "response-1"
+    assert llm._run_codex("second") == "response-2"
+
+    assert runtime.get_calls == 2
+    assert len(runtime.codex.threads) == 2
+    assert all(kwargs["ephemeral"] is True for kwargs, _ in runtime.codex.threads)
 
 
 @pytest.mark.unit

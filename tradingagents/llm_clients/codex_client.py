@@ -12,10 +12,12 @@ needs, including a JSON-mediated bridge for tool calls.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import re
 from collections.abc import Iterable
+from threading import Lock
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -44,6 +46,39 @@ CODEX_MODEL_LIST_COMMAND = (
 
 class CodexSetupError(RuntimeError):
     """Actionable setup error for the Codex provider."""
+
+
+class _CodexRuntime:
+    """One long-lived Codex app-server process shared by local model instances.
+
+    The Codex SDK starts its app-server during ``Codex()`` construction. Starting
+    a process for each LangChain invocation dominated short TradingAgents runs,
+    particularly when analysts make several tool and report calls. Threads stay
+    per invocation so agents still get isolated conversations; only the local
+    authenticated runtime is shared.
+    """
+
+    def __init__(self) -> None:
+        self._codex: Any | None = None
+        self._lock = Lock()
+
+    def get(self) -> Any:
+        with self._lock:
+            if self._codex is None:
+                from openai_codex import Codex
+
+                self._codex = Codex()
+            return self._codex
+
+    def close(self) -> None:
+        with self._lock:
+            if self._codex is not None:
+                self._codex.close()
+                self._codex = None
+
+
+_CODEX_RUNTIME = _CodexRuntime()
+atexit.register(_CODEX_RUNTIME.close)
 
 
 def _message_to_text(message: BaseMessage) -> str:
@@ -267,7 +302,10 @@ class CodexStructuredOutput:
             "outside the JSON object.\n\n"
             f"{schema_json}"
         )
-        raw = self.llm._run_codex(structured_prompt)
+        raw = self.llm._run_codex(
+            structured_prompt,
+            output_schema=self.schema.model_json_schema(),
+        )
         parsed = _extract_json_object(raw)
         if parsed is None:
             raise ValueError(f"Codex returned non-JSON structured output: {raw!r}")
@@ -318,9 +356,14 @@ class CodexChatModel(BaseChatModel):
             f"Available tools:\n{json.dumps(tool_specs, indent=2)}"
         )
 
-    def _run_codex(self, prompt: str) -> str:
+    def _run_codex(
+        self,
+        prompt: str,
+        *,
+        output_schema: dict[str, Any] | None = None,
+    ) -> str:
         try:
-            from openai_codex import Codex, Sandbox
+            from openai_codex import Sandbox
         except ImportError as exc:
             raise ImportError(
                 "The Codex provider requires the optional SDK. Install it with "
@@ -329,22 +372,23 @@ class CodexChatModel(BaseChatModel):
             ) from exc
 
         try:
-            with Codex() as codex:
-                available = _available_model_ids(codex)
-                if available and self.model_name not in available:
-                    raise CodexSetupError(
-                        _codex_setup_message(
-                            "The configured Codex model is not available in your "
-                            "installed Codex SDK/runtime.",
-                            available_models=available,
-                            original_error=f"Unavailable model: {self.model_name}",
-                        )
+            codex = _CODEX_RUNTIME.get()
+            available = _available_model_ids(codex)
+            if available and self.model_name not in available:
+                raise CodexSetupError(
+                    _codex_setup_message(
+                        "The configured Codex model is not available in your "
+                        "installed Codex SDK/runtime.",
+                        available_models=available,
+                        original_error=f"Unavailable model: {self.model_name}",
                     )
-                thread = codex.thread_start(
-                    model=self.model_name,
-                    sandbox=Sandbox.read_only,
                 )
-                result = thread.run(prompt)
+            thread = codex.thread_start(
+                model=self.model_name,
+                sandbox=Sandbox.read_only,
+                ephemeral=True,
+            )
+            result = thread.run(prompt, output_schema=output_schema)
         except CodexSetupError:
             raise
         except Exception as exc:

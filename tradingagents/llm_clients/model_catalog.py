@@ -78,6 +78,22 @@ _MINIMAX_MODELS: dict[str, list[ModelOption]] = {
 }
 
 
+_CODEX_MODELS: dict[str, list[ModelOption]] = {
+    "quick": [
+        ("GPT-5.4-Mini - Small, fast Codex model", "gpt-5.4-mini"),
+        ("GPT-5.4 - Strong everyday Codex model", "gpt-5.4"),
+        ("GPT-5.5 - Frontier Codex model", "gpt-5.5"),
+        ("Custom model ID", "custom"),
+    ],
+    "deep": [
+        ("GPT-5.5 - Frontier Codex model", "gpt-5.5"),
+        ("GPT-5.4 - Strong everyday Codex model", "gpt-5.4"),
+        ("GPT-5.4-Mini - Small, fast Codex model", "gpt-5.4-mini"),
+        ("Custom model ID", "custom"),
+    ],
+}
+
+
 MODEL_OPTIONS: ProviderModeOptions = {
     "openai": {
         "quick": [
@@ -188,9 +204,10 @@ MODEL_OPTIONS: ProviderModeOptions = {
     "nvidia": _CUSTOM_ONLY,
     # Bedrock model IDs / cross-region inference profile IDs are user-specified.
     "bedrock": _CUSTOM_ONLY,
-    # Codex runs through the local Codex SDK/CLI session. Keep this custom-only
-    # because available models are governed by the user's ChatGPT/Codex plan.
-    "codex": _CUSTOM_ONLY,
+    # Codex runs through the local Codex SDK/CLI session. These are the common
+    # model IDs exposed by the current Codex SDK/account model list; Custom
+    # model ID remains available for future rollout or workspace-specific models.
+    "codex": _CODEX_MODELS,
 }
 
 

@@ -162,11 +162,15 @@ For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_pro
 For Codex subscription access without OpenAI Platform API credits, use the experimental local Codex provider. Install the extra, authenticate Codex, then select `codex` in the CLI or set it in `.env`:
 ```bash
 pip install ".[codex]"
-codex login
 ```
+If the `codex` command is available, run `codex login` and sign in with ChatGPT. If PowerShell says `codex` is not recognized, check whether the Python SDK can see your local Codex/ChatGPT session:
+```bash
+python -c "from openai_codex import Codex; c=Codex(); print(c.account()); c.close()"
+```
+If that prints your ChatGPT account, you are authenticated and can run TradingAgents. Common Codex model IDs are `gpt-5.5`, `gpt-5.4`, and `gpt-5.4-mini`; the CLI also offers a custom model ID option for future rollout or workspace-specific models.
 ```bash
 TRADINGAGENTS_LLM_PROVIDER=codex
-TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.4
+TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.5
 TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.4-mini
 ```
 This routes model calls through the local Codex SDK/CLI session and uses your ChatGPT/Codex entitlement. It is not the same as OpenAI Platform API access and is best treated as experimental because Codex is an agent surface, not a drop-in chat-completions API.

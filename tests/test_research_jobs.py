@@ -117,3 +117,69 @@ def test_local_job_runner_routes_manual_signal_through_risk_and_backtest(tmp_pat
     assert bundle.risk_review.approved_position_pct == 0.10
     assert bundle.backtest_result is not None
     runner.shutdown()
+
+class FixtureNarrativeProvider:
+    def generate(self, context):
+        from tradingagents.research_platform.agent_contracts import (
+            AgentOutputEnvelope,
+            AgentOutputType,
+        )
+
+        return [
+            AgentOutputEnvelope(
+                symbol=context.symbol,
+                as_of_date=context.as_of_date,
+                agent_id="fixture-narrative",
+                agent_role="Fixture Narrative",
+                output_type=AgentOutputType.COCKPIT_PANEL,
+                headline="Fixture narrative",
+                summary="Fixture narrative output.",
+                evidence=context.evidence,
+            )
+        ]
+
+
+def test_local_job_runner_persists_selected_narrative_mode(tmp_path):
+    runner = LocalResearchJobRunner(
+        tmp_path,
+        provider_factory=lambda request: FixtureProvider(),
+        narrative_provider_factory=lambda request: FixtureNarrativeProvider(),
+    )
+    completed = runner.wait(
+        runner.submit(
+            ResearchJobRequest(
+                symbol="NVDA",
+                as_of_date=date(2026, 1, 2),
+                narrative_mode="openai_narrative",
+            )
+        ).job_id,
+        timeout=2,
+    )
+
+    assert completed.status == ResearchJobStatus.SUCCEEDED
+    bundle = JsonResearchRunArchive(tmp_path).load_latest_bundle("NVDA")
+    assert bundle is not None
+    assert any(output.agent_id == "fixture-narrative" for output in bundle.agent_outputs)
+    runner.shutdown()
+
+
+def test_local_job_runner_reports_missing_openai_configuration(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("TRADINGAGENTS_RESEARCH_OPENAI_MODEL", raising=False)
+    runner = LocalResearchJobRunner(tmp_path, provider_factory=lambda request: FixtureProvider())
+
+    completed = runner.wait(
+        runner.submit(
+            ResearchJobRequest(
+                symbol="NVDA",
+                as_of_date=date(2026, 1, 2),
+                narrative_mode="openai_narrative",
+            )
+        ).job_id,
+        timeout=2,
+    )
+
+    assert completed.status == ResearchJobStatus.FAILED
+    assert completed.error is not None
+    assert "OPENAI_API_KEY" in completed.error
+    runner.shutdown()

@@ -31,6 +31,12 @@ from .data_contracts import (
     NewsItem,
     PriceBar,
 )
+from .narrative_provider import (
+    ResearchNarrativeContext,
+    ResearchNarrativeProvider,
+    build_narrative_evidence,
+    validate_narrative_outputs,
+)
 from .research_report import (
     ResearchReportBundle,
     render_research_report,
@@ -76,6 +82,7 @@ def run_ticker_research(
     risk_policy: RiskPolicy | None = None,
     output_dir: str | Path | None = None,
     archive: ResearchRunArchive | None = None,
+    narrative_provider: ResearchNarrativeProvider | None = None,
 ) -> ResearchWorkflowResult:
     """Fetch data, build artifacts, optionally review/backtest, and render a report."""
 
@@ -122,6 +129,24 @@ def run_ticker_research(
         thesis=thesis,
         signal=signal,
     )
+    if narrative_provider is not None:
+        context = ResearchNarrativeContext(
+            symbol=config.symbol,
+            as_of_date=config.as_of_date,
+            price_bars=price_bars,
+            fundamentals=fundamentals,
+            news=news,
+            evidence=build_narrative_evidence(
+                symbol=config.symbol,
+                as_of_date=config.as_of_date,
+                price_bars=price_bars,
+                fundamentals=fundamentals,
+                news=news,
+            ),
+        )
+        agent_outputs.extend(
+            validate_narrative_outputs(context, narrative_provider.generate(context))
+        )
     if store is not None:
         store.save_agent_outputs(agent_outputs)
 

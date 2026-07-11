@@ -189,3 +189,46 @@ def test_run_ticker_research_handles_empty_provider():
     assert result.bundle.agent_outputs == []
     assert result.bundle.thesis is None
     assert "No normalized price bars available." in result.markdown
+
+class FixtureNarrativeProvider:
+    def generate(self, context):
+        from tradingagents.research_platform.agent_contracts import (
+            AgentOutputEnvelope,
+            AgentOutputType,
+            ConfidenceLevel,
+        )
+
+        return [
+            AgentOutputEnvelope(
+                symbol=context.symbol,
+                as_of_date=context.as_of_date,
+                agent_id="fixture-narrative",
+                agent_role="Fixture Narrative",
+                output_type=AgentOutputType.COCKPIT_PANEL,
+                headline="Fixture narrative",
+                summary="Validated fixture commentary.",
+                evidence=context.evidence,
+                confidence=ConfidenceLevel.MEDIUM,
+                metadata={"provider": "fixture"},
+            )
+        ]
+
+
+def test_run_ticker_research_persists_optional_narrative_output(tmp_path):
+    archive = JsonResearchRunArchive(tmp_path / "cache")
+    result = run_ticker_research(
+        config=ResearchWorkflowConfig(
+            symbol="NVDA",
+            as_of_date=date(2026, 1, 5),
+            lookback_days=4,
+        ),
+        provider=FakeProvider(),
+        archive=archive,
+        narrative_provider=FixtureNarrativeProvider(),
+    )
+
+    narrative = next(
+        output for output in result.bundle.agent_outputs if output.agent_id == "fixture-narrative"
+    )
+    assert narrative.evidence
+    assert archive.load_latest_bundle("NVDA") == result.bundle

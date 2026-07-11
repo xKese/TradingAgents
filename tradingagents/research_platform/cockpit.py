@@ -385,6 +385,7 @@ _APP_HTML = r'''<!doctype html>
 
       <div class="panel"><div class="panel-title"><h2>Research Runs</h2><select id="runHistory" aria-label="Archived research run"></select></div><div class="empty" id="runHistoryDetail"></div></div>
       <div class="panel"><div class="panel-title"><h2>Decision Draft</h2><span class="panel-meta">Optional manual signal</span></div><div class="grid decision-form">
+        <div class="wide"><label class="label" for="narrativeMode">Analysis Mode</label><select id="narrativeMode"><option value="deterministic" selected>Deterministic</option><option value="openai_narrative">OpenAI Narrative</option></select></div>
         <div><label class="label" for="decisionDirection">Direction</label><select id="decisionDirection"><option value="">No decision</option><option value="buy">Buy</option><option value="hold">Hold</option><option value="sell">Sell</option></select></div>
         <div><label class="label" for="decisionHorizon">Horizon</label><select id="decisionHorizon"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select></div>
         <div><label class="label" for="decisionConfidence">Confidence (%)</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
@@ -519,7 +520,7 @@ _APP_HTML = r'''<!doctype html>
       if (!symbol || activeJobId) return;
       setResearchButton(true);
       try {
-        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol, manual_signal: manualSignalPayload()})}).then(response => response.ok ? response.json() : Promise.reject(response));
+        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol, narrative_mode: $('narrativeMode').value, manual_signal: manualSignalPayload()})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeJobId = payload.job.job_id;
         await pollResearchJob();
       } catch (error) {

@@ -195,3 +195,11 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
     assert snapshot["latest_run"]["run_id"] == older.run_id
     assert snapshot["latest_run"]["as_of_date"] == "2026-01-04T00:00:00+00:00"
     assert len(snapshot["runs"]) == 2
+
+
+def test_cockpit_posts_selected_narrative_mode():
+    from tradingagents.research_platform.cockpit import _APP_HTML
+
+    assert 'id="narrativeMode"' in _APP_HTML
+    assert 'value="openai_narrative"' in _APP_HTML
+    assert 'narrative_mode: $(\'narrativeMode\').value' in _APP_HTML

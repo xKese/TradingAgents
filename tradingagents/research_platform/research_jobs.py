@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .agent_contracts import TradeDirection, TradeHorizon, TradeSignal
 from .artifact_store import JsonArtifactStore
 from .data_contracts import DataProvider
+from .narrative_provider import (
+    NarrativeMode,
+    OpenAIResearchNarrativeProvider,
+    ResearchNarrativeProvider,
+)
 from .research_workflow import ResearchWorkflowConfig, run_ticker_research
 from .risk_contracts import RiskPolicy
 from .run_archive import JsonResearchRunArchive
@@ -52,6 +57,7 @@ class ResearchJobRequest(BaseModel):
     lookback_days: int = Field(default=90, ge=1, le=3650)
     currency: str | None = None
     manual_signal: ManualSignalRequest | None = None
+    narrative_mode: NarrativeMode = NarrativeMode.DETERMINISTIC
 
     @field_validator("symbol")
     @classmethod
@@ -79,6 +85,7 @@ class ResearchJob(BaseModel):
 
 
 ProviderFactory = Callable[[ResearchJobRequest], DataProvider]
+NarrativeProviderFactory = Callable[[ResearchJobRequest], ResearchNarrativeProvider]
 
 
 class LocalResearchJobRunner:
@@ -95,9 +102,13 @@ class LocalResearchJobRunner:
         data_dir: str | Path,
         *,
         provider_factory: ProviderFactory | None = None,
+        narrative_provider_factory: NarrativeProviderFactory | None = None,
     ):
         self.data_dir = Path(data_dir)
         self.provider_factory = provider_factory or self._default_provider_factory
+        self.narrative_provider_factory = (
+            narrative_provider_factory or self._default_narrative_provider_factory
+        )
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research-job")
         self._jobs: dict[str, ResearchJob] = {}
         self._futures: dict[str, Future[None]] = {}
@@ -155,6 +166,11 @@ class LocalResearchJobRunner:
             return
         try:
             provider = self.provider_factory(job.request)
+            narrative_provider = (
+                self.narrative_provider_factory(job.request)
+                if job.request.narrative_mode == NarrativeMode.OPENAI_NARRATIVE
+                else None
+            )
             signal = _build_manual_signal(job.request)
             result = run_ticker_research(
                 config=ResearchWorkflowConfig(
@@ -169,6 +185,7 @@ class LocalResearchJobRunner:
                 signal=signal,
                 risk_policy=RiskPolicy(),
                 output_dir=self.data_dir / "reports",
+                narrative_provider=narrative_provider,
             )
         except Exception as error:  # Provider errors become visible job state, not server crashes.
             self._update(
@@ -196,6 +213,12 @@ class LocalResearchJobRunner:
     def _default_provider_factory(self, request: ResearchJobRequest) -> DataProvider:
         cache_dir = self.data_dir / "yfinance"
         return YFinanceProvider(cache_dir=cache_dir)
+
+    def _default_narrative_provider_factory(
+        self,
+        request: ResearchJobRequest,
+    ) -> ResearchNarrativeProvider:
+        return OpenAIResearchNarrativeProvider.from_environment()
 
 
 def _build_manual_signal(request: ResearchJobRequest) -> TradeSignal | None:

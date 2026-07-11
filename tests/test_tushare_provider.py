@@ -27,6 +27,19 @@ class FakeProClient:
             {"trade_date": "20260105", "pe": 20.5, "pe_ttm": 21.5, "pb": 3.2, "total_mv": 100000},
         ]
 
+    def stock_basic(self, **kwargs):
+        self.calls.append(("stock_basic", kwargs))
+        return [
+            {
+                "ts_code": "600519.SH",
+                "name": "Kweichow Moutai",
+                "area": "Guizhou",
+                "industry": "Liquor",
+                "market": "Main board",
+                "exchange": "SSE",
+                "list_date": "20010827",
+            }
+        ]
     def income(self, **kwargs):
         self.calls.append(("income", kwargs))
         return [
@@ -141,7 +154,16 @@ def test_tushare_provider_normalizes_a_share_daily_and_basic_snapshot():
         "daily_basic",
         {"ts_code": "600519.SH", "start_date": "20241201", "end_date": "20260105"},
     )
+    assert client.calls[2] == (
+        "stock_basic",
+        {
+            "ts_code": "600519.SH",
+            "fields": "ts_code,name,area,industry,market,exchange,list_date",
+        },
+    )
     assert fundamentals[0].metrics["pe_ratio_ttm"] == 21.5
+    assert fundamentals[0].metrics["company_name"] == "Kweichow Moutai"
+    assert fundamentals[0].metrics["company_industry"] == "Liquor"
     assert fundamentals[0].metrics["total_market_value_10k_cny"] == 100000
     assert fundamentals[1].period_end == date(2025, 12, 31)
     assert fundamentals[1].metrics["reported_total_revenue"] == 1000.0

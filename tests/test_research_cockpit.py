@@ -207,6 +207,7 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="companyProfile"' in _APP_HTML
     assert 'id="readiness"' in _APP_HTML
     assert 'id="valuationContext"' in _APP_HTML
     assert 'id="financialQuality"' in _APP_HTML
@@ -306,3 +307,29 @@ def test_cockpit_exposes_historical_valuation_context(tmp_path):
     assert snapshot["valuation_context"]["daily_snapshot_count"] == 20
     assert pe["latest"] == 29.0
     assert pe["percentile"] == 100.0
+
+
+def test_cockpit_exposes_vendor_company_profile(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    store.save_fundamentals(
+        [
+            FundamentalSnapshot(
+                symbol="600519",
+                period_end=date(2026, 7, 10),
+                fiscal_period="daily_snapshot",
+                metrics={
+                    "company_name": "Kweichow Moutai",
+                    "company_industry": "Liquor",
+                    "company_list_date": "20010827",
+                },
+                provenance=_provenance(),
+            )
+        ]
+    )
+
+    snapshot = build_cockpit_snapshot(store, "600519")
+
+    assert snapshot["company_profile"]["available"] is True
+    assert snapshot["company_profile"]["name"] == "Kweichow Moutai"
+    assert snapshot["company_profile"]["industry"] == "Liquor"
+    assert snapshot["company_profile"]["list_date"] == "2001-08-27"

@@ -321,3 +321,29 @@ def test_render_research_report_renders_historical_valuation_context():
     assert "## Valuation Context" in report
     assert "**Daily Snapshot As Of:** 2026-01-20" in report
     assert "| P/E (TTM) | 29 | 100 | 10 | 19.5 | 29 | 20 |" in report
+
+
+def test_render_research_report_renders_vendor_company_profile():
+    report = render_research_report(
+        ResearchReportBundle(
+            symbol="600519",
+            as_of_date=datetime(2026, 7, 10, tzinfo=timezone.utc),
+            fundamentals=[
+                FundamentalSnapshot(
+                    symbol="600519",
+                    period_end=date(2026, 7, 10),
+                    fiscal_period="daily_snapshot",
+                    metrics={
+                        "company_name": "Kweichow Moutai",
+                        "company_industry": "Liquor",
+                        "company_list_date": "20010827",
+                    },
+                    provenance=_provenance(date(2026, 7, 10)),
+                )
+            ],
+        )
+    )
+
+    assert "## Company Profile" in report
+    assert "| Name | Kweichow Moutai |" in report
+    assert "| Listing Date | 2001-08-27 |" in report

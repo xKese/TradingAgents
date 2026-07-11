@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from tradingagents.dataflows.utils import safe_ticker_component
 
 from .artifact_store import JsonArtifactStore
+from .company_profile import build_company_profile
 from .data_health import build_cache_data_health
 from .financial_health import assess_financial_health
 from .report_workspace import build_report_workspace, render_archived_report
@@ -95,6 +96,7 @@ def build_cockpit_snapshot(
             reverse=True,
         )[:8]
     ]
+    company_profile = build_company_profile(fundamentals, symbol=normalized_symbol)
     valuation_context = build_valuation_context(fundamentals)
     financial_health = assess_financial_health(latest_financial_quality)
     archive = JsonResearchRunArchive(store.root)
@@ -134,6 +136,7 @@ def build_cockpit_snapshot(
             if latest_financial_quality is not None
             else None
         ),
+        "company_profile": company_profile.model_dump(mode="json"),
         "valuation_context": valuation_context.model_dump(mode="json"),
         "research_readiness": readiness.model_dump(mode="json"),
         "financial_health": financial_health.model_dump(mode="json"),
@@ -474,6 +477,7 @@ _APP_HTML = r'''<!doctype html>
     <section class="panel watchlist-board" aria-label="Watchlist board"><div class="panel-title"><h2>Watchlist</h2><span class="panel-meta" id="watchlistMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Symbol</th><th>Last Close</th><th>Price As Of</th><th>Data Health</th><th>Latest Research</th><th>Decision</th></tr></thead><tbody id="watchlistBoard"></tbody></table></div></section>
     <section class="workspace">
       <div class="panel"><div class="panel-title"><h2>Price History</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Company Profile</h2><span class="panel-meta" id="companyProfileMeta"></span></div><div class="grid" id="companyProfile"></div></div>
       <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
       <div class="panel"><div class="panel-title"><h2>Valuation Context</h2><span class="panel-meta" id="valuationContextMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Metric</th><th>Latest</th><th>Percentile</th><th>Low</th><th>Median</th><th>High</th><th>Days</th></tr></thead><tbody id="valuationContext"></tbody></table></div></div>
       <div class="panel"><div class="panel-title"><h2>Financial Quality</h2><span class="panel-meta" id="financialQualityMeta"></span></div><div class="grid" id="financialQuality"></div></div>
@@ -539,6 +543,13 @@ _APP_HTML = r'''<!doctype html>
       const points = market.series.map((point, index) => `${pad + index * ((width - pad * 2) / (market.series.length - 1))},${height - pad - ((point.close - min) / span) * (height - pad * 2)}`).join(' ');
       $('chart').innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Cached closing price history"><line x1="${pad}" y1="${height - pad}" x2="${width-pad}" y2="${height-pad}" stroke="#d5dfe3"/><line x1="${pad}" y1="${pad}" x2="${width-pad}" y2="${pad}" stroke="#e4ebed"/><polyline fill="none" stroke="#176f6c" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="${points}"/></svg>`;
       $('chartMeta').textContent = `${market.first_date} to ${market.last_date}`;
+    }
+    function renderCompanyProfile(profile) {
+      const target = $('companyProfile');
+      if (!profile || !profile.available) { target.innerHTML = '<div class="empty">No vendor-supplied company profile available.</div>'; $('companyProfileMeta').textContent = ''; return; }
+      const fields = [['Name', profile.name], ['Industry', profile.industry], ['Area', profile.area], ['Market', profile.market], ['Exchange', profile.exchange], ['Listing Date', profile.list_date]].filter(([, value]) => value);
+      target.innerHTML = fields.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
+      $('companyProfileMeta').textContent = `Available as of ${profile.as_of_date}`;
     }
     function renderFundamentals(fundamentals) {
       if (!fundamentals) { $('fundamentals').innerHTML = '<div class="empty">No cached fundamentals available.</div>'; $('fundamentalsMeta').textContent = ''; return; }
@@ -713,14 +724,14 @@ _APP_HTML = r'''<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
+        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));

@@ -18,6 +18,7 @@ from .agent_artifacts import (
 )
 from .agent_contracts import AgentOutputEnvelope, AnalystNote, InvestmentThesis, TradeSignal
 from .backtest_contracts import BacktestResult
+from .company_profile import build_company_profile
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
 from .data_health import build_cache_data_health
 from .financial_health import assess_financial_health
@@ -55,6 +56,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
     sections = [
         _render_header(bundle),
         _render_market_snapshot(bundle.price_bars),
+        _render_company_profile(bundle),
         _render_research_readiness(bundle),
         _render_fundamentals(bundle.fundamentals),
         _render_valuation_context(bundle.fundamentals),
@@ -128,6 +130,34 @@ def _render_market_snapshot(price_bars: list[PriceBar]) -> str:
 
 
 
+
+def _render_company_profile(bundle: ResearchReportBundle) -> str:
+    profile = build_company_profile(bundle.fundamentals, symbol=bundle.symbol)
+    if not profile.available:
+        return "## Company Profile\n\nNo vendor-supplied company profile is available."
+    rows = [
+        f"| {label} | {value} |"
+        for label, value in (
+            ("Name", profile.name),
+            ("Area", profile.area),
+            ("Industry", profile.industry),
+            ("Market", profile.market),
+            ("Exchange", profile.exchange),
+            ("Listing Date", profile.list_date),
+        )
+        if value is not None
+    ]
+    return "\n".join(
+        [
+            "## Company Profile",
+            "",
+            f"**Available As Of:** {profile.as_of_date}",
+            "",
+            "| Field | Value |",
+            "| --- | --- |",
+            *rows,
+        ]
+    )
 def _render_research_readiness(bundle: ResearchReportBundle) -> str:
     financial_snapshots = [
         item

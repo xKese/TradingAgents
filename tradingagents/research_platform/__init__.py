@@ -25,6 +25,7 @@ from .backtest_contracts import (
     ExecutionConfig,
     validate_signal_timing,
 )
+from .company_profile import CompanyProfile, build_company_profile
 from .data_contracts import (
     AssetClass,
     DataProvenance,
@@ -94,11 +95,13 @@ __all__ = [
     "BacktestWarning",
     "BacktestWarningSeverity",
     "build_cache_data_health",
+    "build_company_profile",
     "build_report_workspace",
     "build_research_readiness",
     "build_watchlist_board",
     "build_valuation_context",
     "canonical_tushare_symbol",
+    "CompanyProfile",
     "ConfidenceLevel",
     "DataProvider",
     "DataProvenance",

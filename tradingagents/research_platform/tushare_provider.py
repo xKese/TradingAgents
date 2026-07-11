@@ -148,6 +148,13 @@ class TushareProProvider:
         if ts_code.endswith(".HK"):
             return snapshots
 
+        profile_metrics = self._fetch_a_share_company_profile(ts_code)
+        if profile_metrics:
+            latest = snapshots[0]
+            snapshots[0] = latest.model_copy(
+                update={"metrics": {**latest.metrics, **profile_metrics}}
+            )
+
         financial_rows = self._fetch_financial_quality_rows(ts_code, availability_date)
         snapshots.extend(
             build_financial_quality_history(
@@ -229,6 +236,31 @@ class TushareProProvider:
                 f"Tushare price data unavailable for {ts_code}: {error}"
             ) from error
 
+
+    def _fetch_a_share_company_profile(self, ts_code: str) -> dict[str, str]:
+        params = {
+            "ts_code": ts_code,
+            "fields": "ts_code,name,area,industry,market,exchange,list_date",
+        }
+        try:
+            rows = _records(self._pro.stock_basic(**params))
+        except Exception:
+            return {}
+        if not rows:
+            return {}
+        mapping = {
+            "name": "company_name",
+            "area": "company_area",
+            "industry": "company_industry",
+            "market": "company_market",
+            "exchange": "company_exchange",
+            "list_date": "company_list_date",
+        }
+        return {
+            target: value
+            for source, target in mapping.items()
+            if isinstance((value := rows[0].get(source)), str) and value.strip()
+        }
     def _fetch_fundamental_rows(
         self,
         endpoint: str,

@@ -689,9 +689,15 @@ def test_overnight_tick_screens_when_due_then_drains(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
-    monkeypatch.setattr("ops.research.drain.drain_pending",
-                        lambda **kw: (events_seen.append("drain"),
-                                      DrainSummary(3, 0, 0, False))[1])
+    screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
+
+    def _fake_drain(**kw):
+        events_seen.append("drain")
+        for hit in screen_store.pending_hits():
+            screen_store.mark_researched(hit["id"])
+        return DrainSummary(3, 0, 0, False)
+
+    monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
 
     config = load_config()
     with Journal(str(tmp_path / "j.sqlite")) as journal:
@@ -730,9 +736,14 @@ def test_overnight_tick_skips_screen_when_recent(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr("ops.research.run.run_screen",
                         lambda **kw: seen.append("screen"))
-    monkeypatch.setattr("ops.research.drain.drain_pending",
-                        lambda **kw: (seen.append("drain"),
-                                      DrainSummary(0, 0, 0, False))[1])
+
+    def _fake_drain(**kw):
+        seen.append("drain")
+        for hit in store.pending_hits():
+            store.mark_researched(hit["id"])
+        return DrainSummary(1, 0, 0, False)
+
+    monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
 
     config = load_config()
     with Journal(str(tmp_path / "j.sqlite")) as journal:
@@ -885,10 +896,14 @@ def test_overnight_tick_vets_before_drain_and_records_events(monkeypatch, tmp_pa
 
     stage_order = []
     drain_kw = {}
+    screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    memo_store = MemoStore(str(tmp_path / "memos.sqlite"))
 
     def _fake_drain(**kw):
         stage_order.append("drain")
         drain_kw.update(kw)
+        for hit in screen_store.pending_hits():
+            screen_store.mark_researched(hit["id"])
         return DrainSummary(3, 0, 0, False)
 
     monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
@@ -899,6 +914,8 @@ def test_overnight_tick_vets_before_drain_and_records_events(monkeypatch, tmp_pa
     def _fake_vet(**kw):
         stage_order.append("vet")
         vet_kw.update(kw)
+        for memo in memo_store.pending_vetting_memos():
+            memo_store.mark_passed(memo.memo_id)
         return VettingSummary(vetted=1, confirmed=1, rejected=0, failed=0,
                               still_pending=0, hit_deadline=False)
 
@@ -962,8 +979,12 @@ def test_overnight_tick_vet_only_night_runs_vetting_without_drain(monkeypatch, t
     monkeypatch.setattr("ops.research.drain.drain_pending",
                         lambda **kw: seen.append("drain"))
 
+    memo_store = MemoStore(str(tmp_path / "memos.sqlite"))
+
     def _fake_vet(**kw):
         seen.append("vet")
+        for memo in memo_store.pending_vetting_memos():
+            memo_store.mark_passed(memo.memo_id)
         return VettingSummary(vetted=1, confirmed=0, rejected=1, failed=0,
                               still_pending=0, hit_deadline=False)
 
@@ -1063,8 +1084,14 @@ def test_overnight_tick_vetting_error_recorded_not_raised(monkeypatch, tmp_path)
         )
 
     monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
-    monkeypatch.setattr("ops.research.drain.drain_pending",
-                        lambda **kw: DrainSummary(3, 0, 0, False))
+    screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
+
+    def _fake_drain(**kw):
+        for hit in screen_store.pending_hits():
+            screen_store.mark_researched(hit["id"])
+        return DrainSummary(3, 0, 0, False)
+
+    monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
     monkeypatch.setattr("ops.research.vetting.vet_pending",
                         lambda **kw: (_ for _ in ()).throw(RuntimeError("kaboom")))
 
@@ -1088,6 +1115,270 @@ def test_overnight_tick_vetting_error_recorded_not_raised(monkeypatch, tmp_path)
         assert not journal.has_event_today(main_mod.events.KIND_RESEARCH_VETTING_RUN)
         # Backend still torn down.
         assert backend.shutdown_calls == 1
+
+
+def test_overnight_deadline_weekday_is_same_day():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from ops.main import _overnight_deadline
+
+    ny = ZoneInfo("America/New_York")
+    wed_tick = datetime(2026, 7, 8, 0, 0, 5, tzinfo=ny)  # Wednesday 00:00
+    assert _overnight_deadline(8, now=wed_tick) == datetime(2026, 7, 8, 8, 0, tzinfo=ny)
+
+
+def test_overnight_deadline_weekend_extends_to_monday():
+    """Sat/Sun ticks get the whole weekend: no momentum ticks compete for
+    ds4, and the backlog must be fully drained AND vetted before the
+    trading week starts."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from ops.main import _overnight_deadline
+
+    ny = ZoneInfo("America/New_York")
+    sat_tick = datetime(2026, 7, 11, 0, 0, 5, tzinfo=ny)  # Saturday 00:00
+    sun_tick = datetime(2026, 7, 12, 0, 0, 5, tzinfo=ny)  # Sunday 00:00
+    monday_8 = datetime(2026, 7, 13, 8, 0, tzinfo=ny)
+    assert _overnight_deadline(8, now=sat_tick) == monday_8
+    assert _overnight_deadline(8, now=sun_tick) == monday_8
+
+
+def test_overnight_tick_loops_until_both_queues_clear(monkeypatch, tmp_path):
+    """The stage loop alternates vet -> drain -> vet ... so buys minted by
+    tonight's drain are vetted in the SAME window when time remains (on
+    weekends this is what fully clears the backlog before Monday). Events
+    are aggregated: one drain_run and one vetting_run per tick."""
+    import ops.main as main_mod
+    from datetime import date as _date
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+    from ops.research.store import ScreenStore
+    from ops.research.vetting import VettingSummary
+    from tradingagents.memos.store import MemoStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: backend)
+
+    screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    memo_store = MemoStore(str(tmp_path / "memos.sqlite"))
+
+    # Recent screen -> not due. One memo queued, one screen hit pending.
+    screen_store.record_run(asof=_date.today(), universe_size=0, results=[])
+    screen_store.enqueue_hit(
+        "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="screen",
+    )
+    memo_store.save(_pending_vetting_memo(ticker="AAA"))
+
+    stage_order = []
+
+    def _fake_vet(**kw):
+        stage_order.append("vet")
+        queue = memo_store.pending_vetting_memos()
+        for memo in queue:
+            memo_store.mark_passed(memo.memo_id)
+        return VettingSummary(vetted=len(queue), confirmed=0, rejected=len(queue),
+                              failed=0, still_pending=0, hit_deadline=False)
+
+    monkeypatch.setattr("ops.research.vetting.vet_pending", _fake_vet)
+
+    def _fake_drain(**kw):
+        stage_order.append("drain")
+        for hit in screen_store.pending_hits():
+            screen_store.mark_researched(hit["id"])
+        # The drained name is a brain buy: it lands in the vetting queue.
+        memo_store.save(_pending_vetting_memo(ticker="BBB"))
+        return DrainSummary(1, 0, 0, False)
+
+    monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(
+            journal, config, vet_adapter_factory=lambda backend: object(),
+        )
+
+        # vet AAA -> drain (mints BBB) -> vet BBB -> both queues empty.
+        assert stage_order == ["vet", "drain", "vet"]
+        assert memo_store.pending_vetting_memos() == []
+        assert screen_store.pending_hits() == []
+
+        vetting_events = [
+            e for e in journal.read_events()
+            if e["kind"] == main_mod.events.KIND_RESEARCH_VETTING_RUN
+        ]
+        assert len(vetting_events) == 1
+        assert vetting_events[0]["payload"]["vetted"] == 2       # aggregated
+        assert vetting_events[0]["payload"]["still_pending"] == 0
+        drain_events = [
+            e for e in journal.read_events()
+            if e["kind"] == main_mod.events.KIND_RESEARCH_DRAIN_RUN
+        ]
+        assert len(drain_events) == 1
+        assert drain_events[0]["payload"]["researched"] == 1
+        assert backend.shutdown_calls == 1
+
+
+def test_overnight_tick_paused_flag_skips_everything(monkeypatch, tmp_path):
+    """`ops research pause` drops the flag: the tick must return before the
+    screen, the backend, or any event — the operator wants their machine."""
+    import ops.main as main_mod
+    from ops.config import load_config
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    (tmp_path / "paused").touch()
+
+    def _boom(*a, **kw):
+        raise AssertionError("paused tick must touch nothing")
+
+    monkeypatch.setattr("ops.research.run.run_screen", _boom)
+    monkeypatch.setattr(main_mod, "build_managed_backend", _boom)
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+        assert journal.read_events() == []
+
+
+def test_overnight_tick_stop_callable_honors_pause_flag(monkeypatch, tmp_path):
+    """Pausing MID-run stops the loop between names: the should_stop threaded
+    into drain/vet must flip true the moment the flag appears."""
+    import ops.main as main_mod
+    from datetime import date as _date
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: backend)
+
+    screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    screen_store.record_run(asof=_date.today(), universe_size=0, results=[])
+    screen_store.enqueue_hit(
+        "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="test",
+    )
+    monkeypatch.setattr("ops.research.run.run_screen", lambda **kw: None)
+
+    captured = {}
+
+    def _fake_drain(**kw):
+        captured["should_stop"] = kw["should_stop"]
+        for hit in screen_store.pending_hits():
+            screen_store.mark_researched(hit["id"])
+        return DrainSummary(1, 0, 0, False)
+
+    monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+
+    stop = captured["should_stop"]
+    assert stop() is False
+    (tmp_path / "paused").touch()
+    assert stop() is True
+
+
+def test_overnight_tick_out_of_window_returns_silently(monkeypatch, tmp_path):
+    """The job now fires every 30 minutes; a weekday-daytime fire (deadline
+    already past) must return without events or backend — that's what makes
+    the frequent trigger safe."""
+    import ops.main as main_mod
+    from datetime import date as _date, datetime, timedelta, timezone
+    from ops.config import load_config
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    monkeypatch.setattr(
+        main_mod, "_overnight_deadline",
+        lambda hour, now=None: datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    monkeypatch.setattr(main_mod, "build_managed_backend",
+                        lambda c: (_ for _ in ()).throw(AssertionError("no ds4 out of window")))
+
+    # Queue non-empty so only the deadline guard can be the reason we skip.
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=_date.today(), universe_size=0, results=[])
+    store.enqueue_hit("AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="test")
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+        assert journal.read_events() == []
+
+
+def test_overnight_tick_zero_event_recorded_once_per_day(monkeypatch, tmp_path):
+    """With half-hourly fires, an idle night must not spam zero drain events:
+    the empty-queues bookkeeping event records once per day."""
+    import ops.main as main_mod
+    from datetime import date
+    from ops.config import load_config
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=date.today(), universe_size=0, results=[])
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+        main_mod._research_overnight_tick(journal, config)
+        drain_events = [
+            e for e in journal.read_events()
+            if e["kind"] == main_mod.events.KIND_RESEARCH_DRAIN_RUN
+        ]
+        assert len(drain_events) == 1
+
+
+def test_full_scheduler_overnight_job_fires_half_hourly():
+    """Resume latency: the overnight job fires every 30 minutes (paused and
+    out-of-window fires no-op instantly), so `ops research resume` picks
+    work back up within half an hour."""
+    from unittest.mock import MagicMock
+
+    from ops.main import _start_full_scheduler
+
+    sched = _start_full_scheduler(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        config=MagicMock(),
+    )
+    try:
+        job = sched.get_job("research_overnight")
+        assert job is not None
+        trigger = str(job.trigger)
+        assert "minute='0,30'" in trigger
+        assert "hour='0'" not in trigger  # no longer once-nightly
+    finally:
+        sched.shutdown(wait=False)
 
 
 def test_full_scheduler_registers_overnight_job():

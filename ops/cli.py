@@ -406,6 +406,46 @@ def research_run(max_names: int, do_notify: bool = False) -> None:
         raise SystemExit(1)
 
 
+@research.command("pause")
+def research_pause() -> None:
+    """Pause the overnight research window (screen/drain/vet) and free ds4.
+
+    Drops the pause flag the daemon checks between names: the in-flight
+    name finishes (up to ~30 min), then the window stops and ds4 shuts
+    down. Momentum trading is unaffected. Survives daemon restarts; undo
+    with `ops research resume`.
+    """
+    from pathlib import Path
+
+    config = load_config()
+    flag = Path(config.research_pause_flag_path)
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
+    click.echo(
+        f"research paused (flag: {flag}). The in-flight name finishes, "
+        "then ds4 frees — up to ~30 minutes."
+    )
+
+
+@research.command("resume")
+def research_resume() -> None:
+    """Resume the overnight research window after `ops research pause`.
+
+    Removes the pause flag; the daemon's half-hourly overnight job picks
+    the queues back up within 30 minutes (weekends run until Monday
+    morning's deadline, weekdays until the pre-market deadline).
+    """
+    from pathlib import Path
+
+    config = load_config()
+    flag = Path(config.research_pause_flag_path)
+    if flag.exists():
+        flag.unlink()
+        click.echo("research resumed; the daemon picks work up within 30 minutes.")
+    else:
+        click.echo("research was not paused; nothing to do.")
+
+
 @research.command("kick")
 def research_kick() -> None:
     """One-shot demo: screen now (ignore the 3-day gate), drain the whole

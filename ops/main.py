@@ -22,7 +22,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -490,41 +490,72 @@ def _days_since_iso(iso: str) -> float:
     return (datetime.now(timezone.utc) - then).total_seconds() / 86400.0
 
 
-def _drain_deadline(hour: int) -> datetime:
-    """Today's local (America/New_York) HH:00 as a tz-aware datetime — the
-    wall-clock the overnight drain must stop before, ahead of the 09:00
-    first momentum tick (CronTrigger minute="0,30" hour="9-15"). The
-    scheduler's thread pool does NOT serialize the drain against that tick;
-    this time margin is the sole guard against two models holding ds4 at
-    once, which is why research_drain_deadline_hour is validated < 9."""
-    ny = ZoneInfo("America/New_York")
-    return datetime.now(ny).replace(hour=hour, minute=0, second=0, microsecond=0)
+def _overnight_deadline(hour: int, *, now: datetime | None = None) -> datetime:
+    """The wall-clock the overnight window must stop before.
+
+    Weekday ticks: today's local (America/New_York) HH:00 — ahead of the
+    09:00 first momentum tick (CronTrigger minute="0,30" hour="9-15"). The
+    scheduler's thread pool does NOT serialize the window against that
+    tick; this time margin is the sole guard against two models holding
+    ds4 at once, which is why research_drain_deadline_hour is validated <9.
+
+    Weekend ticks (Sat/Sun 00:00): the deadline extends to the NEXT
+    MONDAY's HH:00 — no momentum ticks compete for ds4 on weekends, and
+    the whole backlog should be drained AND vetted before the trading
+    week starts. A Sunday 00:00 tick that would overlap a still-running
+    Saturday tick is skipped by the job's max_instances=1.
+    """
+    current = now or datetime.now(ZoneInfo("America/New_York"))
+    deadline = current.replace(hour=hour, minute=0, second=0, microsecond=0)
+    while deadline.weekday() >= 5:  # Sat=5 / Sun=6 -> roll to Monday
+        deadline += timedelta(days=1)
+    return deadline
 
 
 def _research_overnight_tick(
     journal: Journal, config, *, now=None, should_stop=None, vet_adapter_factory=None,
 ) -> None:
-    """Nightly 00:00 job, two stages under one deadline and one ds4 bracket:
-    (1) screen if >= research_screen_interval_days, then graph-vet the
-    pending_vetting queue (brain buys) oldest-first; (2) drain pending
-    screen hits into brain memos, capped at research_drain_nightly_cap
-    names. Vetting runs FIRST so confirmed memos become tradeable nightly
-    instead of waiting for the drain backlog to clear (a drain-first order
-    starved vetting for days on the first backlog, 2026-07-11); the drain
-    cap keeps each night's newly-minted vetting debt (~30min of graph time
-    per buy) serviceable. Both stages stop at the same local deadline hour /
-    on shutdown; whatever isn't processed tonight carries to the next
-    night. Scheduler-safe: a drain failure records research_drain_error, a
-    vetting failure records research_vetting_error (see
-    _research_vetting_stage); neither raises.
+    """Nightly 00:00 job: screen if >= research_screen_interval_days, then
+    alternate graph-vetting and drain chunks under one deadline and one ds4
+    bracket until both queues are empty or the deadline/shutdown lands:
 
-    No has_event_today gate here (unlike the sibling research ticks): the
-    3-day screen-due check plus the two queue states already make re-firing
-    idempotent/safe — a second run same night either finds both queues empty
-    (no-op, skipping ds4 entirely) or correctly resumes whatever is pending.
+        vet (whole queue) -> drain (research_drain_nightly_cap names)
+            -> vet the drain's new buys -> drain the next chunk -> ...
+
+    Vetting runs FIRST so confirmed memos become tradeable nightly instead
+    of waiting for the drain backlog to clear (a drain-first order starved
+    vetting for days on the first backlog, 2026-07-11), and the loop vets
+    each drain chunk's buys in the SAME window when time remains. Weekday
+    deadline is HH:00 today (frees ds4 before the 09:00 momentum tick);
+    weekend ticks extend to Monday HH:00 so the whole backlog clears before
+    the trading week starts (see _overnight_deadline). One aggregated
+    research_drain_run and research_vetting_run event per tick.
+    Scheduler-safe: a drain failure records research_drain_error, a vetting
+    failure records research_vetting_error (see _research_vetting_stage)
+    and disables further vet iterations that night; neither raises.
+
+    The job fires every 30 minutes (see _start_full_scheduler) so
+    `ops research resume` picks work back up quickly; fires while paused or
+    outside the window return instantly and touch nothing. Re-firing is
+    idempotent/safe: the 3-day screen-due check plus the two queue states
+    mean a second run same night either finds both queues empty (no-op,
+    skipping ds4 entirely; the zero bookkeeping event records once per day)
+    or correctly resumes whatever is pending. A fire that lands while a
+    previous one still runs is skipped by the job's max_instances=1.
     """
     screened_this_run = False
     try:
+        # Operator pause (`ops research pause`): the operator wants their
+        # machine — touch nothing, journal nothing, retry next fire.
+        if os.path.exists(config.research_pause_flag_path):
+            return
+        deadline = _overnight_deadline(config.research_drain_deadline_hour)
+        tick_now = now or (lambda: datetime.now(deadline.tzinfo))
+        if tick_now() >= deadline:
+            # Out-of-window fire (weekday daytime): silent no-op — this is
+            # what makes the half-hourly trigger safe around market hours.
+            return
+
         from ops.research.store import ScreenStore
         from tradingagents.memos.store import MemoStore
 
@@ -538,64 +569,106 @@ def _research_overnight_tick(
             screened_this_run = True
 
         memo_store = MemoStore(config.memo_store_path)
-        pending = store.pending_hits()
-        if not pending and not memo_store.pending_vetting_memos():
+        if not store.pending_hits() and not memo_store.pending_vetting_memos():
             # Nothing to drain OR vet — skip waking the 86 GB ds4 model
-            # entirely. This is the common case (~2 of 3 nights).
-            journal.record_event(
-                events.KIND_RESEARCH_DRAIN_RUN,
-                events.research_drain_run_payload(
-                    asof=date.today().isoformat(), screened_this_run=screened_this_run,
-                    researched=0, failed=0, still_pending=0, hit_deadline=False,
-                ),
-            )
-            return
-
-        deadline = _drain_deadline(config.research_drain_deadline_hour)
-        stop = should_stop or _shutdown_event.is_set
-        tick_now = now or (lambda: datetime.now(deadline.tzinfo))
-        backend = build_managed_backend(load_managed_backend_config())
-        try:
-            # Stage 1 — vet FIRST: promote/reject last night's brain buys
-            # before the drain can eat the window (the adapter brings ds4 up
-            # lazily, so an empty vetting queue still never spins it).
-            _research_vetting_stage(
-                journal, config, memo_store=memo_store, backend=backend,
-                deadline=deadline, should_stop=stop, now=tick_now,
-                adapter_factory=vet_adapter_factory,
-            )
-            # Stage 2 — drain whatever window remains, capped per night.
-            if pending:
-                from tradingagents.dataflows import edgar
-                edgar.get_user_agent()  # fail fast before spinning ds4
-
-                from ops.research.drain import drain_pending
-                from ops.research.models import build_stage_llm
-
-                evidence_llm = build_stage_llm(config.research_evidence_model)
-                thesis_llm = build_stage_llm(config.research_thesis_model)
-                backend.ensure_up()
-                summary = drain_pending(
-                    store=store, memo_store=memo_store,
-                    evidence_llm=evidence_llm, thesis_llm=thesis_llm,
-                    thesis_model_spec=config.research_thesis_model,
-                    max_names=config.research_drain_nightly_cap,
-                    deadline=deadline, should_stop=stop, now=tick_now,
-                )
-                journal.record_event(
-                    events.KIND_RESEARCH_DRAIN_RUN,
-                    events.research_drain_run_payload(
-                        asof=date.today().isoformat(), screened_this_run=screened_this_run,
-                        researched=summary.researched, failed=summary.failed,
-                        still_pending=summary.still_pending, hit_deadline=summary.hit_deadline,
-                    ),
-                )
-            else:
+            # entirely. This is the common case (~2 of 3 nights). Once per
+            # day, not per fire: the half-hourly trigger must not spam it.
+            if not journal.has_event_today(events.KIND_RESEARCH_DRAIN_RUN):
                 journal.record_event(
                     events.KIND_RESEARCH_DRAIN_RUN,
                     events.research_drain_run_payload(
                         asof=date.today().isoformat(), screened_this_run=screened_this_run,
                         researched=0, failed=0, still_pending=0, hit_deadline=False,
+                    ),
+                )
+            return
+
+        base_stop = should_stop or _shutdown_event.is_set
+        pause_flag = config.research_pause_flag_path
+
+        def stop() -> bool:
+            # Pausing mid-run stops the loop between names, freeing ds4
+            # within one name of `ops research pause`.
+            return base_stop() or os.path.exists(pause_flag)
+
+        backend = build_managed_backend(load_managed_backend_config())
+
+        vetted = confirmed = rejected = vet_failed = 0
+        vet_ran = False
+        vet_errored = False
+        vet_hit_deadline = False
+        researched = drain_failed = 0
+        drain_hit_deadline = False
+        drain_llms = None  # (evidence, thesis) — built once, on first chunk
+        try:
+            while not stop() and tick_now() < deadline:
+                pending = store.pending_hits()
+                if not memo_store.pending_vetting_memos() and not pending:
+                    break
+                progress = 0
+                # Vet the queue first (the adapter brings ds4 up lazily, so
+                # an empty vetting queue never spins it by itself).
+                if memo_store.pending_vetting_memos() and not vet_errored:
+                    summary = _research_vetting_stage(
+                        journal, config, memo_store=memo_store, backend=backend,
+                        deadline=deadline, should_stop=stop, now=tick_now,
+                        adapter_factory=vet_adapter_factory,
+                    )
+                    if summary is None:
+                        vet_errored = True
+                    else:
+                        vet_ran = True
+                        vetted += summary.vetted
+                        confirmed += summary.confirmed
+                        rejected += summary.rejected
+                        vet_failed += summary.failed
+                        vet_hit_deadline = vet_hit_deadline or summary.hit_deadline
+                        progress += summary.vetted + summary.failed
+                # Then drain one chunk of screen hits into brain memos.
+                if pending:
+                    if drain_llms is None:
+                        from tradingagents.dataflows import edgar
+                        edgar.get_user_agent()  # fail fast before spinning ds4
+
+                        from ops.research.models import build_stage_llm
+
+                        drain_llms = (
+                            build_stage_llm(config.research_evidence_model),
+                            build_stage_llm(config.research_thesis_model),
+                        )
+                    from ops.research.drain import drain_pending
+
+                    backend.ensure_up()
+                    summary = drain_pending(
+                        store=store, memo_store=memo_store,
+                        evidence_llm=drain_llms[0], thesis_llm=drain_llms[1],
+                        thesis_model_spec=config.research_thesis_model,
+                        max_names=config.research_drain_nightly_cap,
+                        deadline=deadline, should_stop=stop, now=tick_now,
+                    )
+                    researched += summary.researched
+                    drain_failed += summary.failed
+                    drain_hit_deadline = drain_hit_deadline or summary.hit_deadline
+                    progress += summary.researched + summary.failed
+                if progress == 0:
+                    break  # nothing moved (deadline/stop/errors) — don't spin
+            journal.record_event(
+                events.KIND_RESEARCH_DRAIN_RUN,
+                events.research_drain_run_payload(
+                    asof=date.today().isoformat(), screened_this_run=screened_this_run,
+                    researched=researched, failed=drain_failed,
+                    still_pending=len(store.pending_hits()),
+                    hit_deadline=drain_hit_deadline,
+                ),
+            )
+            if vet_ran:
+                journal.record_event(
+                    events.KIND_RESEARCH_VETTING_RUN,
+                    events.research_vetting_run_payload(
+                        asof=date.today().isoformat(), vetted=vetted,
+                        confirmed=confirmed, rejected=rejected, failed=vet_failed,
+                        still_pending=len(memo_store.pending_vetting_memos()),
+                        hit_deadline=vet_hit_deadline,
                     ),
                 )
         finally:
@@ -612,19 +685,21 @@ def _research_overnight_tick(
 def _research_vetting_stage(
     journal: Journal, config, *, memo_store, backend, deadline, should_stop,
     now, adapter_factory=None,
-) -> None:
-    """Stage 2 of the overnight tick: graph-vet the pending_vetting queue.
+):
+    """One graph-vetting pass over the pending_vetting queue.
 
-    Scheduler-safe and drain-independent: any failure records
-    research_vetting_error and returns — the drain's success event is
-    already journaled, memos stay pending_vetting for the next night, and
-    the caller's finally still tears ds4 down. The graph adapter shares the
-    tick's managed backend; its lazy ensure_up means a vet-only night spins
-    ds4 only when a memo actually runs.
+    Returns the VettingSummary, or None when the queue was empty or the
+    pass failed. Scheduler-safe and drain-independent: any failure records
+    research_vetting_error and returns None — the caller disables further
+    vet passes that night, memos stay pending_vetting for the next night,
+    and the tick's finally still tears ds4 down. The aggregated
+    research_vetting_run event is the tick's job, not this stage's. The
+    graph adapter shares the tick's managed backend; its lazy ensure_up
+    means a vet-only night spins ds4 only when a memo actually runs.
     """
     try:
         if not memo_store.pending_vetting_memos():
-            return
+            return None
         from ops.research.models import build_stage_llm
         from ops.research.vetting import vet_pending
         from tradingagents.default_config import DEFAULT_CONFIG
@@ -635,20 +710,11 @@ def _research_vetting_stage(
             adapter = TradingAgentsPipelineAdapter(backend=backend)
         else:
             adapter = adapter_factory(backend)
-        summary = vet_pending(
+        return vet_pending(
             memo_store=memo_store, adapter=adapter,
             falsifier_llm=build_stage_llm(config.research_thesis_model),
             vetted_by_model=f"{DEFAULT_CONFIG['llm_provider']}:{DEFAULT_CONFIG['deep_think_llm']}",
             deadline=deadline, should_stop=should_stop, now=now,
-        )
-        journal.record_event(
-            events.KIND_RESEARCH_VETTING_RUN,
-            events.research_vetting_run_payload(
-                asof=date.today().isoformat(), vetted=summary.vetted,
-                confirmed=summary.confirmed, rejected=summary.rejected,
-                failed=summary.failed, still_pending=summary.still_pending,
-                hit_deadline=summary.hit_deadline,
-            ),
         )
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
         journal.record_event(
@@ -760,9 +826,14 @@ def _start_full_scheduler(
             CronTrigger(hour=16, minute=25, day_of_week="mon-fri"),
             id="research_trade", max_instances=1, misfire_grace_time=300,
         )
+        # Half-hourly, not once-nightly: fires while paused (`ops research
+        # pause`) or outside the overnight window return instantly, and a
+        # fire during a still-running window is skipped by max_instances=1
+        # — the frequent trigger exists so `ops research resume` picks the
+        # queues back up within 30 minutes.
         sched.add_job(
             lambda: _research_overnight_tick(journal, config),
-            CronTrigger(hour=0, minute=0),
+            CronTrigger(minute="0,30"),
             id="research_overnight", max_instances=1, misfire_grace_time=600,
         )
         sched.add_job(

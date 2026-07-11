@@ -1226,6 +1226,161 @@ def test_overnight_tick_loops_until_both_queues_clear(monkeypatch, tmp_path):
         assert backend.shutdown_calls == 1
 
 
+def test_overnight_tick_paused_flag_skips_everything(monkeypatch, tmp_path):
+    """`ops research pause` drops the flag: the tick must return before the
+    screen, the backend, or any event — the operator wants their machine."""
+    import ops.main as main_mod
+    from ops.config import load_config
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    (tmp_path / "paused").touch()
+
+    def _boom(*a, **kw):
+        raise AssertionError("paused tick must touch nothing")
+
+    monkeypatch.setattr("ops.research.run.run_screen", _boom)
+    monkeypatch.setattr(main_mod, "build_managed_backend", _boom)
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+        assert journal.read_events() == []
+
+
+def test_overnight_tick_stop_callable_honors_pause_flag(monkeypatch, tmp_path):
+    """Pausing MID-run stops the loop between names: the should_stop threaded
+    into drain/vet must flip true the moment the flag appears."""
+    import ops.main as main_mod
+    from datetime import date as _date
+    from ops.config import load_config
+    from ops.research.drain import DrainSummary
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+    monkeypatch.setattr("ops.research.models.build_stage_llm", lambda s: f"llm:{s}")
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(main_mod, "build_managed_backend", lambda c: backend)
+
+    screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    screen_store.record_run(asof=_date.today(), universe_size=0, results=[])
+    screen_store.enqueue_hit(
+        "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="test",
+    )
+    monkeypatch.setattr("ops.research.run.run_screen", lambda **kw: None)
+
+    captured = {}
+
+    def _fake_drain(**kw):
+        captured["should_stop"] = kw["should_stop"]
+        for hit in screen_store.pending_hits():
+            screen_store.mark_researched(hit["id"])
+        return DrainSummary(1, 0, 0, False)
+
+    monkeypatch.setattr("ops.research.drain.drain_pending", _fake_drain)
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+
+    stop = captured["should_stop"]
+    assert stop() is False
+    (tmp_path / "paused").touch()
+    assert stop() is True
+
+
+def test_overnight_tick_out_of_window_returns_silently(monkeypatch, tmp_path):
+    """The job now fires every 30 minutes; a weekday-daytime fire (deadline
+    already past) must return without events or backend — that's what makes
+    the frequent trigger safe."""
+    import ops.main as main_mod
+    from datetime import date as _date, datetime, timedelta, timezone
+    from ops.config import load_config
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    monkeypatch.setattr(
+        main_mod, "_overnight_deadline",
+        lambda hour, now=None: datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    monkeypatch.setattr(main_mod, "build_managed_backend",
+                        lambda c: (_ for _ in ()).throw(AssertionError("no ds4 out of window")))
+
+    # Queue non-empty so only the deadline guard can be the reason we skip.
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=_date.today(), universe_size=0, results=[])
+    store.enqueue_hit("AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="test")
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+        assert journal.read_events() == []
+
+
+def test_overnight_tick_zero_event_recorded_once_per_day(monkeypatch, tmp_path):
+    """With half-hourly fires, an idle night must not spam zero drain events:
+    the empty-queues bookkeeping event records once per day."""
+    import ops.main as main_mod
+    from datetime import date
+    from ops.config import load_config
+    from ops.research.store import ScreenStore
+
+    monkeypatch.setenv("OPS_JOURNAL_PATH", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
+    monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
+    monkeypatch.setenv("OPS_RESEARCH_PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
+
+    store = ScreenStore(str(tmp_path / "screen.sqlite"))
+    store.record_run(asof=date.today(), universe_size=0, results=[])
+
+    config = load_config()
+    with Journal(str(tmp_path / "j.sqlite")) as journal:
+        main_mod._research_overnight_tick(journal, config)
+        main_mod._research_overnight_tick(journal, config)
+        drain_events = [
+            e for e in journal.read_events()
+            if e["kind"] == main_mod.events.KIND_RESEARCH_DRAIN_RUN
+        ]
+        assert len(drain_events) == 1
+
+
+def test_full_scheduler_overnight_job_fires_half_hourly():
+    """Resume latency: the overnight job fires every 30 minutes (paused and
+    out-of-window fires no-op instantly), so `ops research resume` picks
+    work back up within half an hour."""
+    from unittest.mock import MagicMock
+
+    from ops.main import _start_full_scheduler
+
+    sched = _start_full_scheduler(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        config=MagicMock(),
+    )
+    try:
+        job = sched.get_job("research_overnight")
+        assert job is not None
+        trigger = str(job.trigger)
+        assert "minute='0,30'" in trigger
+        assert "hour='0'" not in trigger  # no longer once-nightly
+    finally:
+        sched.shutdown(wait=False)
+
+
 def test_full_scheduler_registers_overnight_job():
     """Mirrors test_research_trade_job_registered_and_gated — a MagicMock
     journal/config is enough to verify registration without touching the

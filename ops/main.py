@@ -534,13 +534,28 @@ def _research_overnight_tick(
     failure records research_vetting_error (see _research_vetting_stage)
     and disables further vet iterations that night; neither raises.
 
-    No has_event_today gate here (unlike the sibling research ticks): the
-    3-day screen-due check plus the two queue states already make re-firing
-    idempotent/safe — a second run same night either finds both queues empty
-    (no-op, skipping ds4 entirely) or correctly resumes whatever is pending.
+    The job fires every 30 minutes (see _start_full_scheduler) so
+    `ops research resume` picks work back up quickly; fires while paused or
+    outside the window return instantly and touch nothing. Re-firing is
+    idempotent/safe: the 3-day screen-due check plus the two queue states
+    mean a second run same night either finds both queues empty (no-op,
+    skipping ds4 entirely; the zero bookkeeping event records once per day)
+    or correctly resumes whatever is pending. A fire that lands while a
+    previous one still runs is skipped by the job's max_instances=1.
     """
     screened_this_run = False
     try:
+        # Operator pause (`ops research pause`): the operator wants their
+        # machine — touch nothing, journal nothing, retry next fire.
+        if os.path.exists(config.research_pause_flag_path):
+            return
+        deadline = _overnight_deadline(config.research_drain_deadline_hour)
+        tick_now = now or (lambda: datetime.now(deadline.tzinfo))
+        if tick_now() >= deadline:
+            # Out-of-window fire (weekday daytime): silent no-op — this is
+            # what makes the half-hourly trigger safe around market hours.
+            return
+
         from ops.research.store import ScreenStore
         from tradingagents.memos.store import MemoStore
 
@@ -556,19 +571,26 @@ def _research_overnight_tick(
         memo_store = MemoStore(config.memo_store_path)
         if not store.pending_hits() and not memo_store.pending_vetting_memos():
             # Nothing to drain OR vet — skip waking the 86 GB ds4 model
-            # entirely. This is the common case (~2 of 3 nights).
-            journal.record_event(
-                events.KIND_RESEARCH_DRAIN_RUN,
-                events.research_drain_run_payload(
-                    asof=date.today().isoformat(), screened_this_run=screened_this_run,
-                    researched=0, failed=0, still_pending=0, hit_deadline=False,
-                ),
-            )
+            # entirely. This is the common case (~2 of 3 nights). Once per
+            # day, not per fire: the half-hourly trigger must not spam it.
+            if not journal.has_event_today(events.KIND_RESEARCH_DRAIN_RUN):
+                journal.record_event(
+                    events.KIND_RESEARCH_DRAIN_RUN,
+                    events.research_drain_run_payload(
+                        asof=date.today().isoformat(), screened_this_run=screened_this_run,
+                        researched=0, failed=0, still_pending=0, hit_deadline=False,
+                    ),
+                )
             return
 
-        deadline = _overnight_deadline(config.research_drain_deadline_hour)
-        stop = should_stop or _shutdown_event.is_set
-        tick_now = now or (lambda: datetime.now(deadline.tzinfo))
+        base_stop = should_stop or _shutdown_event.is_set
+        pause_flag = config.research_pause_flag_path
+
+        def stop() -> bool:
+            # Pausing mid-run stops the loop between names, freeing ds4
+            # within one name of `ops research pause`.
+            return base_stop() or os.path.exists(pause_flag)
+
         backend = build_managed_backend(load_managed_backend_config())
 
         vetted = confirmed = rejected = vet_failed = 0
@@ -804,9 +826,14 @@ def _start_full_scheduler(
             CronTrigger(hour=16, minute=25, day_of_week="mon-fri"),
             id="research_trade", max_instances=1, misfire_grace_time=300,
         )
+        # Half-hourly, not once-nightly: fires while paused (`ops research
+        # pause`) or outside the overnight window return instantly, and a
+        # fire during a still-running window is skipped by max_instances=1
+        # — the frequent trigger exists so `ops research resume` picks the
+        # queues back up within 30 minutes.
         sched.add_job(
             lambda: _research_overnight_tick(journal, config),
-            CronTrigger(hour=0, minute=0),
+            CronTrigger(minute="0,30"),
             id="research_overnight", max_instances=1, misfire_grace_time=600,
         )
         sched.add_job(

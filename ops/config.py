@@ -98,6 +98,17 @@ class OpsConfig:
     # keeps it from minting more pending_vetting debt per night (~30min of
     # graph time per buy) than later vetting stages can service.
     research_drain_nightly_cap: int = 15
+    # Operator pause switch for the overnight research window (screen/drain/
+    # vet): `ops research pause` touches this file, `ops research resume`
+    # removes it. The daemon checks it between names, so ds4 frees within
+    # one name (~30 min) of pausing. A file (not an env var) so it can be
+    # flipped without restarting the daemon and survives daemon restarts.
+    research_pause_flag_path: str = field(
+        default_factory=lambda: os.path.join(
+            os.path.expanduser(os.environ.get("XDG_STATE_HOME") or "~/.local/state"),
+            "tradingagents", "research.paused",
+        )
+    )
     # Cost dial: max full-pipeline (LLM) analyses per day; risk is capped separately.
     daily_analysis_budget: int = 8
     # Exit engine (spec Component 6). Entry is top-daily_analysis_budget;
@@ -238,6 +249,10 @@ def load_config() -> OpsConfig:
     drain_cap = _env_int("OPS_RESEARCH_DRAIN_NIGHTLY_CAP")
     if drain_cap is not None:
         kwargs["research_drain_nightly_cap"] = drain_cap
+
+    pause_flag_path = os.environ.get("OPS_RESEARCH_PAUSE_FLAG_PATH")
+    if pause_flag_path is not None:
+        kwargs["research_pause_flag_path"] = pause_flag_path
 
     cash_reserve_pct = _env_decimal("OPS_CASH_RESERVE_PCT")
     if cash_reserve_pct is not None:

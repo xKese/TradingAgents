@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .artifact_store import JsonArtifactStore
+from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .run_archive import JsonResearchRunArchive
 from .watchlist import JsonWatchlistStore
 
@@ -160,6 +161,7 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
 
     store: JsonArtifactStore
     watchlist: JsonWatchlistStore
+    jobs: LocalResearchJobRunner
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
@@ -168,6 +170,20 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if parsed.path == "/api/research-jobs":
+            self._send_json(
+                HTTPStatus.OK,
+                {"jobs": [job.model_dump(mode="json") for job in self.jobs.list_jobs()]},
+            )
+            return
+        if parsed.path.startswith("/api/research-jobs/"):
+            job_id = parsed.path.rsplit("/", 1)[-1]
+            job = self.jobs.get(job_id)
+            if job is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "job not found"})
+            else:
+                self._send_json(HTTPStatus.OK, {"job": job.model_dump(mode="json")})
             return
         if parsed.path == "/api/symbols":
             self._send_json(
@@ -197,6 +213,15 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
 
 
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        if urlparse(self.path).path == "/api/research-jobs":
+            try:
+                request = ResearchJobRequest.model_validate(self._read_json_body())
+            except (UnicodeDecodeError, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            job = self.jobs.submit(request)
+            self._send_json(HTTPStatus.ACCEPTED, {"job": job.model_dump(mode="json")})
+            return
         if urlparse(self.path).path != "/api/watchlist":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -257,12 +282,14 @@ def create_cockpit_server(
 
     store = JsonArtifactStore(data_dir)
     watchlist = JsonWatchlistStore(data_dir)
+    jobs = LocalResearchJobRunner(data_dir)
 
     class BoundCockpitRequestHandler(CockpitRequestHandler):
         pass
 
     BoundCockpitRequestHandler.store = store
     BoundCockpitRequestHandler.watchlist = watchlist
+    BoundCockpitRequestHandler.jobs = jobs
     return ThreadingHTTPServer((host, port), BoundCockpitRequestHandler)
 
 
@@ -344,6 +371,7 @@ _APP_HTML = r'''<!doctype html>
         <input id="watchSymbol" aria-label="Add ticker to watchlist" placeholder="Ticker">
         <button id="addSymbol" type="button">Add</button>
         <button id="removeSymbol" type="button">Remove</button>
+        <button id="runResearch" type="button">Run Research</button>
         <button id="refresh" type="button">Refresh</button>
       </div>
     </div>
@@ -422,6 +450,7 @@ _APP_HTML = r'''<!doctype html>
       $('backtestMeta').textContent = 'Latest archived run';
     }
     let activeRunId = null;
+    let activeJobId = null;
     let watchlistSymbols = new Set();
     function renderRunHistory(runs, selectedRunId) {
       const selector = $('runHistory');
@@ -437,6 +466,43 @@ _APP_HTML = r'''<!doctype html>
       const selected = runs.find(run => run.run_id === selectedRunId) || runs[0];
       const scopes = [selected.has_signal ? 'signal' : null, selected.has_risk_review ? 'risk' : null, selected.has_backtest ? 'backtest' : null].filter(Boolean);
       $('runHistoryDetail').textContent = `${runs.length} archived run${runs.length === 1 ? '' : 's'} - ${scopes.join(', ') || 'data snapshot'}`;
+    }
+    function setResearchButton(isRunning) {
+      $('runResearch').disabled = isRunning || !$('symbol').value;
+      $('runResearch').textContent = isRunning ? 'Research Running' : 'Run Research';
+    }
+    async function pollResearchJob() {
+      if (!activeJobId) return;
+      const payload = await fetch(`/api/research-jobs/${encodeURIComponent(activeJobId)}`).then(response => response.ok ? response.json() : Promise.reject(response));
+      const job = payload.job;
+      if (job.status === 'queued' || job.status === 'running') {
+        $('status').textContent = `Research job ${job.status} for ${job.request.symbol}.`;
+        window.setTimeout(pollResearchJob, 800);
+        return;
+      }
+      activeJobId = null;
+      setResearchButton(false);
+      if (job.status === 'succeeded') {
+        $('status').textContent = `Research completed for ${job.request.symbol}.`;
+        await refreshSymbols(job.request.symbol);
+        await loadSnapshot();
+      } else {
+        $('status').textContent = `Research failed: ${job.error || 'provider unavailable'}`;
+      }
+    }
+    async function startResearch() {
+      const symbol = $('symbol').value;
+      if (!symbol || activeJobId) return;
+      setResearchButton(true);
+      try {
+        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})}).then(response => response.ok ? response.json() : Promise.reject(response));
+        activeJobId = payload.job.job_id;
+        await pollResearchJob();
+      } catch (error) {
+        activeJobId = null;
+        setResearchButton(false);
+        $('status').textContent = 'Unable to start local research.';
+      }
     }
     async function refreshSymbols(preferredSymbol) {
       const payload = await fetch('/api/symbols').then(response => response.json());
@@ -460,6 +526,7 @@ _APP_HTML = r'''<!doctype html>
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
         renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId);
         await refreshWatchlist();
+        setResearchButton(Boolean(activeJobId));
       } catch (error) { $('status').textContent = 'Unable to load local research storage.'; }
     }
     async function addToWatchlist() {
@@ -483,9 +550,11 @@ _APP_HTML = r'''<!doctype html>
       try {
         await refreshSymbols();
         await refreshWatchlist();
+        setResearchButton(Boolean(activeJobId));
       } catch (error) { $('symbol').innerHTML = '<option value="">Storage unavailable</option>'; }
       await loadSnapshot();
     }
+    $('runResearch').addEventListener('click', startResearch);
     $('refresh').addEventListener('click', loadSnapshot);
     $('symbol').addEventListener('change', async () => { activeRunId = null; await loadSnapshot(); });
     $('runHistory').addEventListener('change', async () => { activeRunId = $('runHistory').value || null; await loadSnapshot(); });

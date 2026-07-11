@@ -34,6 +34,12 @@ from .data_contracts import (
     NewsItem,
     PriceBar,
 )
+from .research_jobs import (
+    LocalResearchJobRunner,
+    ResearchJob,
+    ResearchJobRequest,
+    ResearchJobStatus,
+)
 from .risk_contracts import (
     RiskDecision,
     RiskLimitBreach,
@@ -71,6 +77,10 @@ __all__ = [
     "NewsItem",
     "PriceBar",
     "JsonResearchRunArchive",
+    "LocalResearchJobRunner",
+    "ResearchJob",
+    "ResearchJobRequest",
+    "ResearchJobStatus",
     "ResearchRunArchive",
     "ResearchRunSummary",
     "RiskDecision",

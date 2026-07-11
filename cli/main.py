@@ -556,7 +556,15 @@ def get_user_selections():
         if date_from_env.lower() == "today":
             analysis_date = datetime.datetime.now().strftime("%Y-%m-%d")
         else:
-            analysis_date = date_from_env
+            try:
+                parsed_date = datetime.datetime.strptime(date_from_env, "%Y-%m-%d")
+                if parsed_date.date() > datetime.datetime.now().date():
+                    console.print(f"[red]Error: TRADINGAGENTS_ANALYSIS_DATE ({date_from_env}) cannot be in the future[/red]")
+                    raise typer.Exit(1)
+                analysis_date = date_from_env
+            except ValueError:
+                console.print(f"[red]Error: Invalid date format in TRADINGAGENTS_ANALYSIS_DATE: {date_from_env}. Expected YYYY-MM-DD.[/red]")
+                raise typer.Exit(1)
         console.print(f"[green]✓ Analysis date from environment:[/green] {analysis_date}")
     else:
         default_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -588,12 +596,21 @@ def get_user_selections():
     # use "all" for all analysts, or comma-separated: "market,social,news,fundamentals")
     analysts_from_env = os.environ.get("TRADINGAGENTS_ANALYSTS")
     if analysts_from_env:
+        from cli.models import AnalystType as _AT
+        from cli.utils import filter_analysts_for_asset_type
         if analysts_from_env.lower() == "all":
-            from cli.models import AnalystType as _AT
             selected_analysts = list(_AT)
         else:
-            from cli.models import AnalystType as _AT
-            selected_analysts = [_AT(a.strip()) for a in analysts_from_env.split(",")]
+            try:
+                selected_analysts = [_AT(a.strip().lower()) for a in analysts_from_env.split(",")]
+            except ValueError:
+                valid_analysts = ", ".join(a.value for a in _AT)
+                console.print(f"[red]Error: Invalid analyst in TRADINGAGENTS_ANALYSTS. Valid options are: {valid_analysts}[/red]")
+                raise typer.Exit(1)
+        selected_analysts = filter_analysts_for_asset_type(selected_analysts, asset_type)
+        if not selected_analysts:
+            console.print("[red]Error: No valid analysts selected after filtering for asset type.[/red]")
+            raise typer.Exit(1)
         console.print(
             f"[green]✓ Analysts from environment:[/green] {', '.join(a.value for a in selected_analysts)}"
         )

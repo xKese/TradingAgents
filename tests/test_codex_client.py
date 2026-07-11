@@ -216,6 +216,22 @@ def test_available_model_ids_extracts_codex_sdk_models():
 
 
 @pytest.mark.unit
+def test_available_model_ids_supports_newer_cli_protocol_values():
+    codex = SimpleNamespace(
+        _client=SimpleNamespace(
+            _request_raw=lambda method, params: {
+                "data": [
+                    {"id": "gpt-5.6-luna", "supportedReasoningEfforts": [{"reasoningEffort": "ultra"}]},
+                    {"id": "gpt-5.6-sol", "supportedReasoningEfforts": [{"reasoningEffort": "max"}]},
+                ]
+            }
+        )
+    )
+
+    assert _available_model_ids(codex) == ["gpt-5.6-luna", "gpt-5.6-sol"]
+
+
+@pytest.mark.unit
 def test_codex_model_error_shows_model_recovery_without_login_instruction():
     message = _codex_setup_message(
         "This Codex model requires a newer Codex app/CLI/SDK.",
@@ -233,6 +249,9 @@ def test_codex_model_error_shows_model_recovery_without_login_instruction():
 @pytest.mark.unit
 def test_preflight_rejects_unavailable_runtime_model(monkeypatch):
     class FakeCodex:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def __enter__(self):
             return self
 
@@ -246,6 +265,7 @@ def test_preflight_rejects_unavailable_runtime_model(monkeypatch):
             return SimpleNamespace(data=[SimpleNamespace(id="gpt-5.5")])
 
     monkeypatch.setitem(__import__("sys").modules, "openai_codex", SimpleNamespace(Codex=FakeCodex))
+    monkeypatch.setattr(codex_client, "_new_codex_client", FakeCodex)
 
     with pytest.raises(CodexSetupError) as exc:
         codex_client.preflight_codex_runtime("gpt-5.6-luna")

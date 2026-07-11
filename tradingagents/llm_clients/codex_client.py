@@ -15,7 +15,9 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import re
+import shutil
 from collections.abc import Iterable
 from threading import Lock
 from time import perf_counter
@@ -66,9 +68,7 @@ class _CodexRuntime:
     def get(self) -> Any:
         with self._lock:
             if self._codex is None:
-                from openai_codex import Codex
-
-                self._codex = Codex()
+                self._codex = _new_codex_client()
             return self._codex
 
     def close(self) -> None:
@@ -80,6 +80,33 @@ class _CodexRuntime:
 
 _CODEX_RUNTIME = _CodexRuntime()
 atexit.register(_CODEX_RUNTIME.close)
+
+
+def _codex_cli_path() -> str | None:
+    """Prefer the user's installed CLI over the SDK's pinned bundled runtime."""
+    configured = os.environ.get("TRADINGAGENTS_CODEX_CLI_PATH")
+    if configured:
+        return configured
+    return shutil.which("codex")
+
+
+def _new_codex_client() -> Any:
+    """Create Codex against the newest available local CLI when possible.
+
+    The Python SDK bundles a CLI release, but that release can lag behind the
+    separately installed Codex CLI and therefore omit newer subscription
+    models. The SDK supports supplying a CLI binary explicitly; this keeps
+    authentication local while matching the runtime users invoke in a terminal.
+    """
+    from openai_codex import Codex
+
+    cli_path = _codex_cli_path()
+    if not cli_path:
+        return Codex()
+
+    from openai_codex.client import CodexConfig
+
+    return Codex(CodexConfig(codex_bin=cli_path))
 
 
 def _content_to_text(content: Any) -> str:
@@ -183,6 +210,18 @@ def _strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 def _available_model_ids(codex: Any) -> list[str]:
     """Return model IDs advertised by the installed Codex SDK/runtime."""
+    client = getattr(codex, "_client", None)
+    raw_request = getattr(client, "_request_raw", None)
+    if callable(raw_request):
+        try:
+            # Newer Codex CLIs can add protocol enum values before the Python
+            # SDK understands them. Read the raw model-list response so model
+            # availability remains forward-compatible.
+            raw = raw_request("model/list", {"includeHidden": False})
+            data = raw.get("data", []) if isinstance(raw, dict) else []
+            return [str(model["id"]) for model in data if isinstance(model, dict) and model.get("id")]
+        except Exception as exc:  # noqa: BLE001 - fall back to the SDK parser
+            logger.warning("Could not read the raw Codex model list: %s", exc)
     try:
         models = codex.models()
     except Exception as exc:  # noqa: BLE001 - availability check is best-effort
@@ -260,7 +299,7 @@ def _model_recovery_steps() -> list[str]:
 def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
     """Validate Codex SDK/auth/model availability before the graph starts."""
     try:
-        from openai_codex import Codex
+        __import__("openai_codex")
     except ImportError as exc:
         raise CodexSetupError(
             _codex_setup_message(
@@ -272,7 +311,7 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
 
     requested_models = [models] if isinstance(models, str) else list(models)
     try:
-        with Codex() as codex:
+        with _new_codex_client() as codex:
             try:
                 account = codex.account()
             except Exception as exc:  # noqa: BLE001 - convert SDK detail to user steps

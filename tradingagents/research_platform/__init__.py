@@ -34,6 +34,7 @@ from .data_contracts import (
     NewsItem,
     PriceBar,
 )
+from .data_health import build_cache_data_health
 from .narrative_provider import (
     NarrativeMode,
     NarrativeProviderError,
@@ -75,6 +76,7 @@ __all__ = [
     "BacktestTrade",
     "BacktestWarning",
     "BacktestWarningSeverity",
+    "build_cache_data_health",
     "build_report_workspace",
     "ConfidenceLevel",
     "DataProvider",

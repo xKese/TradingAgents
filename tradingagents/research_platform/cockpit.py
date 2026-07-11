@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from tradingagents.dataflows.utils import safe_ticker_component
 
 from .artifact_store import JsonArtifactStore
+from .data_health import build_cache_data_health
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .run_archive import JsonResearchRunArchive
@@ -100,6 +101,12 @@ def build_cockpit_snapshot(
         "agent_outputs": [item.model_dump(mode="json") for item in agent_outputs[:12]],
         "latest_run": _run_summary(latest_run, run_id=selected_run_id),
         "report_workspace": build_report_workspace(latest_run),
+        "data_health": build_cache_data_health(
+            price_bars=bars,
+            fundamentals=fundamentals,
+            news=news,
+            reference_as_of_date=(latest_run.as_of_date.date() if latest_run is not None else None),
+        ),
         "runs": [item.model_dump(mode="json") for item in runs[:20]],
         "artifact_counts": {
             "price_bars": len(bars),
@@ -377,6 +384,7 @@ _APP_HTML = r'''<!doctype html>
     button { cursor: pointer; font-weight: 650; }
     button:hover { border-color: #39706e; background: #edf8f7; } button:disabled { cursor: not-allowed; color: #9aa8ad; background: #f4f7f8; }
     .status { min-height: 20px; color: #64747d; font-size: 13px; margin: 16px 0 12px; }
+    .data-health { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; border: 1px solid #d5dfe3; border-radius: 6px; background: #fff; } .health-item { min-height: 76px; padding: 13px 17px; border-right: 1px solid #d5dfe3; } .health-item:last-child { border-right: 0; } .health-title { color: #64747d; font-size: 12px; font-weight: 650; } .health-status { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 700; color: #176f6c; } .health-status.lagging, .health-status.missing { color: #a06628; } .health-detail { margin-top: 4px; color: #64747d; font-size: 11px; line-height: 1.35; }
     .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid #d5dfe3; border-radius: 6px; background: #fff; }
     .metric { min-height: 102px; padding: 18px; border-right: 1px solid #d5dfe3; }
     .metric:last-child { border-right: 0; }
@@ -401,7 +409,7 @@ _APP_HTML = r'''<!doctype html>
     .coverage-summary { padding: 14px 17px; border-bottom: 1px solid #e4ebed; color: #45565f; font-size: 13px; } .coverage-list { margin: 0; padding: 0; list-style: none; } .coverage-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 11px 17px; border-bottom: 1px solid #e4ebed; } .coverage-label { font-size: 13px; font-weight: 650; } .coverage-detail { color: #64747d; font-size: 12px; } .coverage-status { color: #39706e; font-size: 11px; font-weight: 650; } .coverage-status.missing { color: #a06628; }
     .report-preview { max-height: 360px; overflow: auto; margin: 0; padding: 16px 17px; background: #fbfcfc; color: #35454d; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
     .empty { padding: 40px 18px; color: #64747d; text-align: center; } a { color: #176f6c; }
-    @media (max-width: 860px) { .shell { padding: 20px 16px 32px; } .topbar { align-items: stretch; flex-direction: column; } .metrics { grid-template-columns: 1fr 1fr; } .metric:nth-child(2) { border-right: 0; } .metric:nth-child(-n+2) { border-bottom: 1px solid #d5dfe3; } .workspace { grid-template-columns: 1fr; } }
+    @media (max-width: 860px) { .shell { padding: 20px 16px 32px; } .data-health { grid-template-columns: 1fr; } .health-item { border-right: 0; border-bottom: 1px solid #d5dfe3; } .health-item:last-child { border-bottom: 0; } .topbar { align-items: stretch; flex-direction: column; } .metrics { grid-template-columns: 1fr 1fr; } .metric:nth-child(2) { border-right: 0; } .metric:nth-child(-n+2) { border-bottom: 1px solid #d5dfe3; } .workspace { grid-template-columns: 1fr; } }
     @media (max-width: 460px) { .control { width: 100%; flex-wrap: wrap; } .control #symbol { flex: 1 0 100%; width: 100%; } .control #watchSymbol { flex: 1 1 100px; min-width: 100px; } .control button { flex: 0 0 auto; } .metrics { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid #d5dfe3; } .metric:last-child { border-bottom: 0; } .grid { grid-template-columns: 1fr; } .grid > div:nth-child(odd) { border-right: 0; } }
   </style>
 </head>
@@ -420,6 +428,7 @@ _APP_HTML = r'''<!doctype html>
     </div>
     <p class="status" id="status">Loading local research cache...</p>
     <section class="metrics" aria-label="Market summary" id="metrics"></section>
+    <section class="data-health" aria-label="Cached data health" id="dataHealth"></section>
     <section class="workspace">
       <div class="panel"><div class="panel-title"><h2>Price History</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
       <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
@@ -458,6 +467,13 @@ _APP_HTML = r'''<!doctype html>
         ['Last Close', 'N/A', 'No cached price data'], ['Period Return', 'N/A', 'No cached price data'], ['Latest Volume', 'N/A', 'No cached price data'], ['Latest Decision', latestRun?.risk_review?.decision || latestRun?.signal?.direction || 'N/A', latestRun ? `Archived ${latestRun.as_of_date.slice(0,10)}` : 'No archived decision']
       ];
       $('metrics').innerHTML = cards.map(([label, value, detail, cls]) => `<div class="metric"><div class="metric-label">${escape(label)}</div><div class="metric-value ${cls || 'neutral'}">${escape(value)}</div><div class="metric-detail">${escape(detail)}</div></div>`).join('');
+    }
+    function renderDataHealth(health) {
+      const items = health?.items || [];
+      if (!items.length) { $('dataHealth').innerHTML = '<div class="empty">No cached data health available.</div>'; return; }
+      const reference = health.reference_as_of_date ? `Reference as of ${health.reference_as_of_date}` : 'Latest cached availability';
+      $('dataHealth').innerHTML = items.map(item => `<div class="health-item"><div class="health-title">${escape(item.label)}</div><div class="health-status ${escape(item.status)}">${escape(item.status)}</div><div class="health-detail">${escape(item.detail)}${item.available_as_of_date ? ` - available as of ${escape(item.available_as_of_date)}` : ''}</div></div>`).join('');
+      $('dataHealth').setAttribute('aria-label', `Cached data health: ${reference}`);
     }
     function renderChart(market) {
       if (!market || market.series.length < 2) { $('chart').innerHTML = '<div class="empty">No cached price series available.</div>'; $('chartMeta').textContent = ''; return; }
@@ -606,14 +622,14 @@ _APP_HTML = r'''<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderChart(null); renderFundamentals(null); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
+        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         setResearchButton(Boolean(activeJobId));
       } catch (error) { $('status').textContent = 'Unable to load local research storage.'; }

@@ -271,4 +271,6 @@ def test_cockpit_exposes_latest_financial_quality_snapshot(tmp_path):
 
     assert snapshot["financial_quality"]["period_end"] == "2025-12-31"
     assert snapshot["financial_quality"]["metrics"]["return_on_equity_pct"] == 15.0
+    assert snapshot["financial_health"]["status"] == "watch"
+    assert snapshot["financial_health"]["score"] == 1
     assert len(snapshot["financial_quality_history"]) == 1

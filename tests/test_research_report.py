@@ -256,6 +256,8 @@ def test_render_research_report_renders_financial_quality_separately():
     assert "## Financial Quality" in report
     assert "**Report Period:** 2025-12-31" in report
     assert "return_on_equity_pct" in report
+    assert "## Financial Health" in report
+    assert "**Status:** watch" in report
 
 
 def test_render_research_report_renders_financial_trend_for_multiple_periods():

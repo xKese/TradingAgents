@@ -20,6 +20,7 @@ from tradingagents.dataflows.utils import safe_ticker_component
 
 from .artifact_store import JsonArtifactStore
 from .data_health import build_cache_data_health
+from .financial_health import assess_financial_health
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .run_archive import JsonResearchRunArchive
@@ -92,6 +93,7 @@ def build_cockpit_snapshot(
             reverse=True,
         )[:8]
     ]
+    financial_health = assess_financial_health(latest_financial_quality)
     archive = JsonResearchRunArchive(store.root)
     runs = archive.list_runs(normalized_symbol)
     selected_run_id = run_id or (runs[0].run_id if runs else None)
@@ -114,6 +116,7 @@ def build_cockpit_snapshot(
             if latest_financial_quality is not None
             else None
         ),
+        "financial_health": financial_health.model_dump(mode="json"),
         "financial_quality_history": [
             item.model_dump(mode="json") for item in financial_quality_history
         ],
@@ -457,6 +460,7 @@ _APP_HTML = r'''<!doctype html>
       <div class="panel"><div class="panel-title"><h2>Price History</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
       <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
       <div class="panel"><div class="panel-title"><h2>Financial Quality</h2><span class="panel-meta" id="financialQualityMeta"></span></div><div class="grid" id="financialQuality"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Financial Health</h2><span class="panel-meta" id="financialHealthMeta"></span></div><ul class="items" id="financialHealth"></ul></div>
       <div class="panel"><div class="panel-title"><h2>Financial Trend</h2><span class="panel-meta" id="financialTrendMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Period</th><th>Revenue</th><th>Net Income</th><th>Operating Cash Flow</th><th>ROE</th></tr></thead><tbody id="financialTrend"></tbody></table></div></div>
       <div class="panel"><div class="panel-title"><h2>Structured Research</h2><span class="panel-meta" id="agentsMeta"></span></div><ul class="items" id="agents"></ul></div>
       <div class="panel"><div class="panel-title"><h2>News</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
@@ -525,6 +529,10 @@ _APP_HTML = r'''<!doctype html>
       const entries = Object.entries(snapshot.metrics || {}).slice(0, 12);
       $('financialQuality').innerHTML = entries.length ? entries.map(([key, value]) => `<div><span class="label">${escape(key.replaceAll('_', ' '))}</span><span class="value">${escape(typeof value === 'number' ? Number(value).toLocaleString(undefined, {maximumFractionDigits: 4}) : text(value))}</span></div>`).join('') : '<div class="empty">Financial quality snapshot has no metrics.</div>';
       $('financialQualityMeta').textContent = `Report period ${snapshot.period_end}`;
+    }
+    function renderFinancialHealth(assessment) {
+      $('financialHealthMeta').textContent = `${assessment.status} - ${assessment.score}/4 checks`;
+      $('financialHealth').innerHTML = assessment.checks.map(check => `<li class="item"><div class="item-title">${escape(check.name.replaceAll('_', ' '))}</div><div class="item-meta">${escape(check.status)} | ${escape(text(check.observed))} / ${escape(text(check.threshold))}</div><div class="item-summary">${escape(check.message)}</div></li>`).join('');
     }
     function renderFinancialTrend(items) {
       $('financialTrendMeta').textContent = `${items.length} disclosed periods`;
@@ -672,14 +680,14 @@ _APP_HTML = r'''<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderChart(null); renderFundamentals(null); renderFinancialQuality(null); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderChart(null); renderFundamentals(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderFinancialQuality(snapshot.financial_quality); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
+        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderChart(snapshot.market); renderFundamentals(snapshot.fundamentals); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));

@@ -19,6 +19,7 @@ from .agent_artifacts import (
 from .agent_contracts import AgentOutputEnvelope, AnalystNote, InvestmentThesis, TradeSignal
 from .backtest_contracts import BacktestResult
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
+from .financial_health import assess_financial_health
 from .risk_contracts import RiskReview
 
 
@@ -53,6 +54,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
         _render_market_snapshot(bundle.price_bars),
         _render_fundamentals(bundle.fundamentals),
         _render_financial_quality(bundle.fundamentals),
+        _render_financial_health(bundle.fundamentals),
         _render_financial_trend(bundle.fundamentals),
         _render_news(bundle.news),
         _render_agent_outputs(bundle.agent_outputs),
@@ -171,6 +173,46 @@ def _render_financial_quality(fundamentals: list[FundamentalSnapshot]) -> str:
         ]
     )
 
+
+def _render_financial_health(fundamentals: list[FundamentalSnapshot]) -> str:
+    snapshots = [
+        item
+        for item in fundamentals
+        if item.fiscal_period is not None and item.fiscal_period.startswith("financial_report_")
+    ]
+    if not snapshots:
+        return "## Financial Health\n\nNo disclosed financial quality snapshot available."
+
+    latest = sorted(
+        snapshots,
+        key=lambda item: (item.provenance.as_of_date, item.period_end),
+    )[-1]
+    assessment = assess_financial_health(latest)
+    rows = [
+        "| "
+        + " | ".join(
+            [
+                check.name,
+                check.status.value,
+                _format_value(check.observed),
+                _format_value(check.threshold),
+            ]
+        )
+        + " |"
+        for check in assessment.checks
+    ]
+    return "\n".join(
+        [
+            "## Financial Health",
+            "",
+            f"**Status:** {assessment.status.value}",
+            f"**Healthy Checks:** {assessment.score}/4",
+            "",
+            "| Check | Status | Observed | Reference Threshold |",
+            "| --- | --- | ---: | ---: |",
+            *rows,
+        ]
+    )
 
 def _render_financial_trend(fundamentals: list[FundamentalSnapshot]) -> str:
     snapshots = [

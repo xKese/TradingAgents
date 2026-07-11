@@ -37,6 +37,8 @@ CODEX_INSTALL_COMMAND = 'python -m pip install -e ".[codex]"'
 CODEX_UPDATE_COMMAND = "python -m pip install -U --pre openai-codex"
 CODEX_LOGIN_COMMAND = "codex login"
 CODEX_CLI_UPDATE_COMMAND = "codex update"
+CODEX_CLI_INSTALL_COMMAND = "npm install -g @openai/codex"
+CODEX_CLI_VERIFY_COMMAND = "codex --version"
 CODEX_ACCOUNT_CHECK_COMMAND = (
     'python -c "from openai_codex import Codex; '
     'c=Codex(); print(c.account()); c.close()"'
@@ -289,10 +291,24 @@ def _auth_recovery_steps() -> list[str]:
     ]
 
 
-def _model_recovery_steps() -> list[str]:
+def _model_recovery_steps(cli_available: bool | None = None) -> list[str]:
+    """Return every recovery step needed for a model-unavailable error."""
+    if cli_available is None:
+        cli_available = _codex_cli_path() is not None
+    if not cli_available:
+        return [
+            "Install the standalone Codex CLI (requires Node.js): "
+            f"{CODEX_CLI_INSTALL_COMMAND}",
+            f"Open a new terminal and confirm installation: {CODEX_CLI_VERIFY_COMMAND}",
+            f"Sign in with ChatGPT: {CODEX_LOGIN_COMMAND}",
+            "Restart TradingAgents; it will then use the standalone CLI for current models.",
+        ]
     return [
-        f"Update the Codex Python SDK: {CODEX_UPDATE_COMMAND}",
-        f"List models available to this runtime: {CODEX_MODEL_LIST_COMMAND}",
+        f"Update the standalone Codex CLI: {CODEX_CLI_UPDATE_COMMAND}",
+        f"Confirm the installed version: {CODEX_CLI_VERIFY_COMMAND}",
+        f"Confirm the saved login: {CODEX_ACCOUNT_CHECK_COMMAND}",
+        "Restart TradingAgents. If the model is still unavailable, choose one of "
+        "the models reported by this runtime because your current account may not offer it.",
     ]
 
 
@@ -352,10 +368,16 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
 
     missing = [model for model in requested_models if available and model not in available]
     if missing:
+        standalone_cli_available = _codex_cli_path() is not None
         problem = (
             "Codex provider is selected, but the configured model is not available "
             "in your installed Codex SDK/runtime."
         )
+        if not standalone_cli_available:
+            problem = (
+                "Codex provider is selected, but the configured model requires the "
+                "standalone Codex CLI and no `codex` command was found."
+            )
         if any(model.startswith("gpt-5.6") for model in missing):
             problem += " GPT-5.6 models may require a newer Codex app/CLI/SDK."
         raise CodexSetupError(
@@ -363,7 +385,7 @@ def preflight_codex_runtime(models: str | Iterable[str]) -> list[str]:
                 problem,
                 available_models=available,
                 original_error=f"Unavailable model(s): {', '.join(missing)}",
-                recovery_steps=_model_recovery_steps(),
+                recovery_steps=_model_recovery_steps(standalone_cli_available),
             )
         )
     return available

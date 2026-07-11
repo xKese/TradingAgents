@@ -163,25 +163,20 @@ For Codex subscription access without OpenAI Platform API credits, use the local
 ```bash
 pip install ".[codex]"
 ```
-If the `codex` command is available, run `codex login` and sign in with ChatGPT. If PowerShell says `codex` is not recognized, check whether the Python SDK can see your local Codex/ChatGPT session:
+For current Codex models such as GPT-5.6, TradingAgents uses the standalone Codex CLI when it is installed. Complete these steps in order:
 ```bash
-python -c "from openai_codex import Codex; c=Codex(); print(c.account()); c.close()"
+npm install -g @openai/codex  # only when `codex` is not recognized
+codex update                  # update an existing CLI
+codex --version
+codex login
 ```
-If that prints your ChatGPT account, you are authenticated and can run TradingAgents. Current public Codex model IDs are `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`; exact availability can depend on your Codex SDK/app version and ChatGPT entitlement. To list the models your installed SDK/runtime can actually run:
-```bash
-python -c "from openai_codex import Codex; c=Codex(); print([m.id for m in c.models().data]); c.close()"
-```
-If a GPT-5.6 model returns "requires a newer version of Codex", choose one of the listed models for now or update Codex when a newer SDK/runtime is published. The CLI also offers a custom model ID option for future rollout or workspace-specific models.
-```bash
-python -m pip install -U --pre openai-codex
-codex update  # when the Codex CLI is available
-```
+If `codex` is still not recognized after installation, open a new terminal so its install directory is on `PATH`, then repeat `codex --version`. If the CLI is installed and logged in but TradingAgents still says a model is unavailable, the account does not currently offer that model; select one of the runtime models printed when the app starts. Current public Codex model IDs are `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`.
 ```bash
 TRADINGAGENTS_LLM_PROVIDER=codex
 TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.5
 TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.4-mini
 ```
-This routes model calls through the local Codex SDK/CLI session and uses your ChatGPT/Codex entitlement. It is not the same as OpenAI Platform API access; Codex is an agent surface rather than a drop-in chat-completions API, so TradingAgents includes provider-specific setup checks and a prompt-level structured-output adapter.
+This routes model calls through the local Codex SDK/CLI session and uses your ChatGPT/Codex entitlement. It is not the same as OpenAI Platform API access; Codex is an agent surface rather than a drop-in chat-completions API, so TradingAgents includes provider-specific setup checks and a structured-output adapter.
 
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 

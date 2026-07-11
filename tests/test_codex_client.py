@@ -237,13 +237,23 @@ def test_codex_model_error_shows_model_recovery_without_login_instruction():
         "This Codex model requires a newer Codex app/CLI/SDK.",
         original_error="gpt-5.6-luna requires a newer version of Codex",
         available_models=["gpt-5.5", "gpt-5.4-mini"],
-        recovery_steps=_model_recovery_steps(),
+        recovery_steps=_model_recovery_steps(cli_available=True),
     )
 
-    assert "python -m pip install -U --pre openai-codex" in message
-    assert "c.models()" in message
+    assert "codex update" in message
+    assert "codex --version" in message
     assert "codex login" not in message
     assert "gpt-5.5, gpt-5.4-mini" in message
+
+
+@pytest.mark.unit
+def test_codex_model_error_without_cli_shows_install_login_and_restart_steps():
+    steps = _model_recovery_steps(cli_available=False)
+
+    assert "npm install -g @openai/codex" in steps[0]
+    assert "codex --version" in steps[1]
+    assert "codex login" in steps[2]
+    assert "Restart TradingAgents" in steps[3]
 
 
 @pytest.mark.unit
@@ -266,9 +276,10 @@ def test_preflight_rejects_unavailable_runtime_model(monkeypatch):
 
     monkeypatch.setitem(__import__("sys").modules, "openai_codex", SimpleNamespace(Codex=FakeCodex))
     monkeypatch.setattr(codex_client, "_new_codex_client", FakeCodex)
+    monkeypatch.setattr(codex_client, "_codex_cli_path", lambda: None)
 
     with pytest.raises(CodexSetupError) as exc:
         codex_client.preflight_codex_runtime("gpt-5.6-luna")
 
-    assert "not available" in str(exc.value)
-    assert "python -m pip install -U --pre openai-codex" in str(exc.value)
+    assert "requires the standalone Codex CLI" in str(exc.value)
+    assert "npm install -g @openai/codex" in str(exc.value)

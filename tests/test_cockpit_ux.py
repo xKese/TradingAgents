@@ -46,3 +46,19 @@ def test_render_targets_remain_unique_after_view_reorganization():
 
     assert required.issubset(ids)
     assert all(ids.count(item) == 1 for item in required)
+
+
+def test_product_filters_and_progressive_decision_fields_are_present():
+    assert _APP_HTML.count('data-product-filter=') == 3
+    assert 'data-product-filter="all" aria-pressed="true"' in _APP_HTML
+    assert _APP_HTML.count('class="decision-conditional" hidden') == 3
+    assert 'class="wide decision-conditional" hidden' in _APP_HTML
+    assert "decisionDirection').addEventListener('change', updateDecisionFields)" in _APP_HTML
+
+
+def test_status_feedback_and_keyboard_navigation_are_wired():
+    assert 'function setStatus(message, tone = \'neutral\')' in _APP_HTML
+    assert 'data-tone="busy"' in _APP_HTML
+    assert "tab.addEventListener('keydown', handleTabKeydown)" in _APP_HTML
+    assert "if (event.key === 'Escape') closeWatchMenu()" in _APP_HTML
+    assert "setAttribute('aria-busy'" in _APP_HTML

@@ -618,6 +618,17 @@ _APP_HTML = r"""<!doctype html>
     .status-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 28px; margin-top: 9px; }
     .status { margin: 0; color: #60717a; font-size: 12px; line-height: 1.4; }
     .data-as-of { color: #60717a; font-size: 12px; white-space: nowrap; }
+    .status::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #829198; vertical-align: 1px; }
+    .status[data-tone="busy"]::before { background: #2877a1; animation: status-pulse 1.2s ease-in-out infinite; }
+    .status[data-tone="success"]::before { background: #087f5b; }
+    .status[data-tone="warning"]::before { background: #a06628; }
+    .status[data-tone="error"]::before { background: #b83d47; }
+    @keyframes status-pulse { 50% { opacity: .35; } }
+    .filter-group { display: inline-flex; gap: 0; border: 1px solid #bdcbd0; border-radius: 5px; overflow: hidden; }
+    .filter-button { height: 28px; border: 0; border-right: 1px solid #d1dcdf; border-radius: 0; padding: 0 10px; background: #fff; color: #5e6d75; font-size: 11px; }
+    .filter-button:last-child { border-right: 0; }
+    .filter-button[aria-pressed="true"] { background: #e7f2f1; color: #115d5a; }
+    .decision-conditional[hidden] { display: none; }
     .view-tabs { position: sticky; top: 98px; z-index: 15; display: flex; gap: 2px; margin: 0 -30px 18px; padding: 0 30px; border-bottom: 1px solid #cfdadd; background: #f3f6f7; overflow-x: auto; scrollbar-width: thin; }
     .view-tab { flex: 0 0 auto; height: 45px; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: transparent; color: #5e6d75; padding: 0 17px; }
     .view-tab:hover { border-color: #b9c8cb; background: transparent; }
@@ -773,7 +784,7 @@ _APP_HTML = r"""<!doctype html>
       <div class="section-grid equal">
         <div class="panel"><div class="panel-title"><h2>业务主体</h2><span class="panel-meta" id="gameBusinessMeta"></span></div><ul class="items" id="gameBusiness"></ul></div>
         <div class="panel"><div class="panel-title"><h2>产品催化</h2><span class="panel-meta" id="gameCatalystsMeta"></span></div><ul class="items" id="gameCatalysts"></ul></div>
-        <div class="panel span-2"><div class="panel-title"><h2>产品矩阵</h2><span class="panel-meta" id="gameProductsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>产品</th><th>状态</th><th>类型</th><th>平台</th><th>市场</th></tr></thead><tbody id="gameProducts"></tbody></table></div></div>
+        <div class="panel span-2"><div class="panel-title"><h2>产品矩阵</h2><div class="report-actions"><span class="panel-meta" id="gameProductsMeta"></span><div class="filter-group" role="group" aria-label="筛选游戏产品"><button class="filter-button" type="button" data-product-filter="all" aria-pressed="true">全部</button><button class="filter-button" type="button" data-product-filter="live" aria-pressed="false">在营</button><button class="filter-button" type="button" data-product-filter="pipeline" aria-pressed="false">储备</button></div></div></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>产品</th><th>状态</th><th>类型</th><th>平台</th><th>市场</th></tr></thead><tbody id="gameProducts"></tbody></table></div></div>
         <div class="panel span-2"><div class="panel-title"><h2>游戏版号</h2><span class="panel-meta" id="gameApprovalsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>批准日期</th><th>游戏</th><th>类型</th><th>运营单位</th><th>批复文号</th></tr></thead><tbody id="gameApprovals"></tbody></table></div></div>
       </div>
     </section>
@@ -806,10 +817,10 @@ _APP_HTML = r"""<!doctype html>
           <div class="wide"><label class="label" for="dataProvider">数据源</label><select id="dataProvider"><option value="auto" selected>自动（A/H股优先 Tushare）</option><option value="tushare">Tushare Pro</option><option value="yfinance">Yahoo Finance</option></select></div>
           <div class="wide"><label class="label" for="narrativeMode">分析模式</label><select id="narrativeMode"><option value="deterministic" selected>确定性分析</option><option value="openai_narrative">OpenAI 叙事分析</option></select></div>
           <div><label class="label" for="decisionDirection">方向</label><select id="decisionDirection"><option value="">暂不形成决策</option><option value="buy">买入</option><option value="hold">持有</option><option value="sell">卖出</option></select></div>
-          <div><label class="label" for="decisionHorizon">周期</label><select id="decisionHorizon"><option value="short">短期</option><option value="medium" selected>中期</option><option value="long">长期</option></select></div>
-          <div><label class="label" for="decisionConfidence">信心（%）</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
-          <div><label class="label" for="decisionPosition">拟议仓位（%）</label><input id="decisionPosition" type="number" min="0" max="100" step="0.1" value="5"></div>
-          <div class="wide"><label class="label" for="decisionRationale">判断依据</label><textarea id="decisionRationale">手工研究判断。</textarea></div>
+          <div class="decision-conditional" hidden><label class="label" for="decisionHorizon">周期</label><select id="decisionHorizon"><option value="short">短期</option><option value="medium" selected>中期</option><option value="long">长期</option></select></div>
+          <div class="decision-conditional" hidden><label class="label" for="decisionConfidence">信心（%）</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
+          <div class="decision-conditional" hidden><label class="label" for="decisionPosition">拟议仓位（%）</label><input id="decisionPosition" type="number" min="0" max="100" step="0.1" value="5"></div>
+          <div class="wide decision-conditional" hidden><label class="label" for="decisionRationale">判断依据</label><textarea id="decisionRationale">手工研究判断。</textarea></div>
         </div></div>
         <div class="panel"><div class="panel-title"><h2>决策与风控</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
         <div class="panel"><div class="panel-title"><h2>回测结果</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
@@ -869,6 +880,10 @@ _APP_HTML = r"""<!doctype html>
       if (key.endsWith('_pct')) return conciseNumber(value) + '%';
       return conciseNumber(value);
     }
+    function setStatus(message, tone = 'neutral') {
+      $('status').textContent = message;
+      $('status').dataset.tone = tone;
+    }
     function syncLocation() {
       const params = new URLSearchParams(window.location.search);
       const symbol = $('symbol').value;
@@ -887,6 +902,19 @@ _APP_HTML = r"""<!doctype html>
         tab.setAttribute('aria-selected', String(tab.dataset.viewTarget === activeView));
       });
       if (updateLocation) syncLocation();
+    }
+    function handleTabKeydown(event) {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const tabs = Array.from(document.querySelectorAll('[data-view-target]'));
+      const current = tabs.indexOf(event.currentTarget);
+      let next = current;
+      if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+      if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = tabs.length - 1;
+      event.preventDefault();
+      tabs[next].focus();
+      setActiveView(tabs[next].dataset.viewTarget);
     }
     function closeWatchMenu() {
       const menu = document.querySelector('.watch-menu');
@@ -945,12 +973,20 @@ _APP_HTML = r"""<!doctype html>
       target.innerHTML = fields.map(([label, value]) => '<div><span class="label">' + escape(label) + '</span><span class="value">' + escape(value) + '</span></div>').join('');
       $('companyProfileMeta').textContent = '可用日期 ' + profile.as_of_date;
     }
+    let gameProductItems = [];
+    let activeProductFilter = 'all';
+    function renderGameProducts() {
+      const filtered = gameProductItems.filter(item => activeProductFilter === 'all' || (activeProductFilter === 'live' ? item.status === 'live' || item.status === 'legacy_live' : item.status === 'pipeline'));
+      $('gameProductsMeta').textContent = '显示 ' + filtered.length + ' / ' + gameProductItems.length;
+      document.querySelectorAll('[data-product-filter]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.productFilter === activeProductFilter)));
+      $('gameProducts').innerHTML = filtered.length ? filtered.map(item => '<tr><td><strong>' + escape(item.name) + '</strong>' + (item.aliases?.length ? '<div class="item-meta">' + escape(item.aliases.join(' / ')) + '</div>' : '') + '</td><td><span class="board-status">' + escape(zh(item.status)) + '</span></td><td>' + escape(item.genres.join(', ') || 'N/A') + '</td><td>' + escape(item.platforms.join(', ') || 'N/A') + '</td><td>' + escape(item.markets.join(', ') || 'N/A') + '</td></tr>').join('') : '<tr><td colspan="5" class="empty">当前筛选条件下没有产品。</td></tr>';
+    }
     function renderGameResearch(research) {
       if (!research || !research.available) {
         $('gameBusinessMeta').textContent = '';
         $('gameBusiness').innerHTML = '<li class="empty">该股票暂无游戏行业覆盖。</li>';
-        $('gameProductsMeta').textContent = '';
-        $('gameProducts').innerHTML = '<tr><td colspan="5" class="empty">暂无跟踪产品。</td></tr>';
+        gameProductItems = [];
+        renderGameProducts();
         $('gameCatalystsMeta').textContent = '';
         $('gameCatalysts').innerHTML = '<li class="empty">暂无产品催化。</li>';
         return;
@@ -961,8 +997,8 @@ _APP_HTML = r"""<!doctype html>
       const focus = research.research_focus?.length ? '<li class="item"><div class="item-title">研究重点</div><div class="tags">' + research.research_focus.map(item => '<span class="tag">' + escape(item) + '</span>').join('') + '</div></li>' : '';
       const entities = research.entities.map(item => '<li class="item"><div class="item-title">' + escape(item.name) + '</div><div class="item-meta">' + escape(zh(item.role)) + ' · 已知日期 ' + escape(item.known_as_of) + '</div><div class="item-summary">' + escape(item.relationship) + '</div><div class="item-meta">' + sourceLinks(item.evidence_ids) + '</div></li>').join('');
       $('gameBusiness').innerHTML = focus + entities;
-      $('gameProductsMeta').textContent = research.live_product_count + ' 在营 · ' + research.pipeline_product_count + ' 储备';
-      $('gameProducts').innerHTML = research.products.length ? research.products.map(item => '<tr><td><strong>' + escape(item.name) + '</strong>' + (item.aliases?.length ? '<div class="item-meta">' + escape(item.aliases.join(' / ')) + '</div>' : '') + '</td><td><span class="board-status">' + escape(zh(item.status)) + '</span></td><td>' + escape(item.genres.join(', ') || 'N/A') + '</td><td>' + escape(item.platforms.join(', ') || 'N/A') + '</td><td>' + escape(item.markets.join(', ') || 'N/A') + '</td></tr>').join('') : '<tr><td colspan="5" class="empty">暂无跟踪产品。</td></tr>';
+      gameProductItems = research.products || [];
+      renderGameProducts();
       $('gameCatalystsMeta').textContent = research.catalysts.length + ' 项';
       $('gameCatalysts').innerHTML = research.catalysts.length ? research.catalysts.map(view => { const item = view.catalyst; return '<li class="item"><div class="item-title">' + escape(item.title) + '</div><div class="item-meta">' + escape(zh(view.status)) + ' · ' + escape(item.category) + (item.event_date ? ' · ' + escape(item.event_date) : '') + '</div><div class="item-meta">' + sourceLinks(item.evidence_ids) + '</div></li>'; }).join('') : '<li class="empty">暂无产品催化。</li>';
     }
@@ -1123,63 +1159,72 @@ _APP_HTML = r"""<!doctype html>
     }
     function setResearchButton(isRunning) {
       $('runResearch').disabled = isRunning || !$('symbol').value;
-      $('runResearch').textContent = isRunning ? '研究进行中' : '研究当前股票';
+      $('runResearch').setAttribute('aria-busy', String(isRunning && Boolean(activeJobId)));
+      $('runResearch').textContent = activeJobId ? '研究进行中' : '研究当前股票';
       $('refreshWatchlistResearch').disabled = isRunning;
-      $('refreshWatchlistResearch').textContent = isRunning && activeBatchJobIds.length ? '正在更新自选股' : '更新全部自选股';
+      $('refreshWatchlistResearch').setAttribute('aria-busy', String(Boolean(activeBatchJobIds.length)));
+      $('refreshWatchlistResearch').textContent = activeBatchJobIds.length ? '正在更新自选股' : '更新全部自选股';
     }
     async function pollWatchlistRefresh() {
       if (!activeBatchJobIds.length) return;
       try {
-        const payloads = await Promise.all(activeBatchJobIds.map(jobId => fetch(`/api/research-jobs/${encodeURIComponent(jobId)}`).then(response => response.ok ? response.json() : Promise.reject(response))));
+        const payloads = await Promise.all(activeBatchJobIds.map(jobId => fetch('/api/research-jobs/' + encodeURIComponent(jobId)).then(response => response.ok ? response.json() : Promise.reject(response))));
         const jobs = payloads.map(payload => payload.job);
         const pending = jobs.filter(job => job.status === 'queued' || job.status === 'running');
         const completed = jobs.length - pending.length;
-        $('status').textContent = `Watchlist refresh: ${completed}/${jobs.length} completed.`;
+        setStatus('正在更新自选股：' + completed + '/' + jobs.length, 'busy');
         if (pending.length) { window.setTimeout(pollWatchlistRefresh, 800); return; }
         const failed = jobs.filter(job => job.status === 'failed');
         activeBatchJobIds = [];
         setResearchButton(false);
-        $('status').textContent = failed.length ? `Watchlist refresh completed with ${failed.length} failed job${failed.length === 1 ? '' : 's'}.` : `Watchlist refresh completed for ${jobs.length} symbol${jobs.length === 1 ? '' : 's'}.`;
+        setStatus(failed.length ? '自选股更新完成，' + failed.length + ' 个任务失败。' : '已更新 ' + jobs.length + ' 只自选股。', failed.length ? 'warning' : 'success');
         await refreshSymbols();
-        await loadSnapshot();
+        await loadSnapshot({preserveStatus:true});
       } catch (error) {
         activeBatchJobIds = [];
         setResearchButton(false);
-        $('status').textContent = '自选股更新失败。';
+        setStatus('自选股更新失败。', 'error');
       }
     }
     async function startWatchlistRefresh() {
       if (activeJobId || activeBatchJobIds.length) return;
       setResearchButton(true);
+      setStatus('正在启动自选股更新...', 'busy');
       try {
         const payload = await fetch('/api/watchlist-refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeBatchJobIds = payload.jobs.map(job => job.job_id);
-        if (!activeBatchJobIds.length) { setResearchButton(false); $('status').textContent = '自选股为空。'; return; }
+        if (!activeBatchJobIds.length) { setResearchButton(false); setStatus('自选股为空。', 'warning'); return; }
+        setResearchButton(true);
         await pollWatchlistRefresh();
       } catch (error) {
         activeBatchJobIds = [];
         setResearchButton(false);
-        $('status').textContent = '无法启动自选股更新。';
+        setStatus('无法启动自选股更新。', 'error');
       }
     }
     async function pollResearchJob() {
       if (!activeJobId) return;
-      const payload = await fetch(`/api/research-jobs/${encodeURIComponent(activeJobId)}`).then(response => response.ok ? response.json() : Promise.reject(response));
+      const payload = await fetch('/api/research-jobs/' + encodeURIComponent(activeJobId)).then(response => response.ok ? response.json() : Promise.reject(response));
       const job = payload.job;
       if (job.status === 'queued' || job.status === 'running') {
-        $('status').textContent = `Research job ${job.status} for ${job.request.symbol}.`;
+        setStatus('正在研究 ' + job.request.symbol + ' · ' + (job.status === 'queued' ? '排队中' : '运行中'), 'busy');
         window.setTimeout(pollResearchJob, 800);
         return;
       }
       activeJobId = null;
       setResearchButton(false);
       if (job.status === 'succeeded') {
-        $('status').textContent = `Research completed for ${job.request.symbol}.`;
+        setStatus(job.request.symbol + ' 研究完成。', 'success');
         await refreshSymbols(job.request.symbol);
-        await loadSnapshot();
+        await loadSnapshot({preserveStatus:true});
       } else {
-        $('status').textContent = `Research failed: ${job.error || 'provider unavailable'}`;
+        setStatus('研究失败：' + (job.error || '数据源不可用'), 'error');
       }
+    }
+    function updateDecisionFields() {
+      const hasDecision = Boolean($('decisionDirection').value);
+      document.querySelectorAll('.decision-conditional').forEach(field => { field.hidden = !hasDecision; });
+      $('decisionDirection').setAttribute('aria-expanded', String(hasDecision));
     }
     function manualSignalPayload() {
       const direction = $('decisionDirection').value;
@@ -1203,14 +1248,16 @@ _APP_HTML = r"""<!doctype html>
       const symbol = $('symbol').value;
       if (!symbol || activeJobId) return;
       setResearchButton(true);
+      setStatus('正在启动 ' + symbol + ' 研究...', 'busy');
       try {
         const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol, data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value, manual_signal: manualSignalPayload()})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeJobId = payload.job.job_id;
+        setResearchButton(true);
         await pollResearchJob();
       } catch (error) {
         activeJobId = null;
         setResearchButton(false);
-        $('status').textContent = '无法启动当前股票研究。';
+        setStatus(error?.message || '无法启动当前股票研究。', 'error');
       }
     }
     async function addJournalEntry() {
@@ -1256,10 +1303,10 @@ _APP_HTML = r"""<!doctype html>
       watchlistSymbols = new Set(payload.entries.map(entry => entry.symbol));
       $('removeSymbol').disabled = !watchlistSymbols.has($('symbol').value);
     }
-    async function loadSnapshot() {
+    async function loadSnapshot(options = {}) {
       const symbol = $('symbol').value;
       if (!symbol) {
-        $('status').textContent = '暂无可用股票，请先添加自选股。';
+        setStatus('暂无可用股票，请先添加自选股。', 'warning');
         $('headerAsOf').textContent = '数据日期：--';
         renderMetrics({artifact_counts:{}});
         renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderGameResearch(null);
@@ -1270,7 +1317,7 @@ _APP_HTML = r"""<!doctype html>
         await refreshWatchlistBoard();
         return;
       }
-      $('status').textContent = '正在读取 ' + symbol + ' 的本地研究数据...';
+      if (!options.preserveStatus) setStatus('正在读取 ' + symbol + ' 的本地研究数据...', 'busy');
       try {
         const runQuery = activeRunId ? '&run_id=' + encodeURIComponent(activeRunId) : '';
         const snapshot = await fetch('/api/snapshot?symbol=' + encodeURIComponent(symbol) + runQuery).then(response => response.ok ? response.json() : Promise.reject(response));
@@ -1279,32 +1326,46 @@ _APP_HTML = r"""<!doctype html>
         document.title = companyName + ' · 个人股票投研';
         $('headerAsOf').textContent = '数据日期：' + (snapshot.market?.last_date || snapshot.game_opportunity?.as_of_date || '--');
         $('overviewMeta').textContent = zh(snapshot.game_opportunity?.level || 'insufficient_data') + ' · ' + (snapshot.game_opportunity?.score || 0) + '/' + (snapshot.game_opportunity?.max_score || 12) + ' · 准备度 ' + (snapshot.research_readiness?.required_ready || 0) + '/' + (snapshot.research_readiness?.required_total || 0);
-        $('status').textContent = snapshot.has_data ? '已读取 ' + snapshot.symbol + ' 的本地研究数据。' : '未找到 ' + snapshot.symbol + ' 的研究数据。';
+        if (!options.preserveStatus) setStatus(snapshot.has_data ? '已读取 ' + snapshot.symbol + ' 的本地研究数据。' : '未找到 ' + snapshot.symbol + ' 的研究数据。', snapshot.has_data ? 'success' : 'warning');
         renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderGameResearch(snapshot.game_research); renderGameOpportunity(snapshot.game_opportunity); renderGameOpportunityHistory(snapshot.game_opportunity_history); renderGameApprovals(snapshot.game_approvals); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); activeSnapshot = snapshot; renderDecision(snapshot.latest_run); renderDecisionJournal(snapshot.decision_journal, snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
-        setResearchButton(Boolean(activeJobId));
+        setResearchButton(Boolean(activeJobId || activeBatchJobIds.length));
         syncLocation();
       } catch (error) {
-        $('status').textContent = '本地研究数据读取失败。';
+        setStatus('本地研究数据读取失败。', 'error');
       }
     }
     async function addToWatchlist() {
-      const symbol = $('watchSymbol').value.trim();
-      if (!symbol) return;
-      await fetch('/api/watchlist', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
-      $('watchSymbol').value = '';
-      activeRunId = null;
-      await refreshSymbols(symbol.toUpperCase());
-      await loadSnapshot();
+      const symbol = $('watchSymbol').value.trim().toUpperCase();
+      if (!symbol) { setStatus('请输入股票代码。', 'warning'); return; }
+      setStatus('正在添加 ' + symbol + '...', 'busy');
+      try {
+        const response = await fetch('/api/watchlist', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
+        if (!response.ok) throw new Error('添加失败');
+        $('watchSymbol').value = '';
+        activeRunId = null;
+        await refreshSymbols(symbol);
+        await loadSnapshot({preserveStatus:true});
+        setStatus(symbol + ' 已加入自选股。', 'success');
+      } catch (error) {
+        setStatus(symbol + ' 添加失败。', 'error');
+      }
     }
     async function removeFromWatchlist() {
       const symbol = $('symbol').value;
       if (!symbol || !window.confirm('从自选股移除 ' + symbol + '？')) return;
-      await fetch('/api/watchlist?symbol=' + encodeURIComponent(symbol), {method:'DELETE'});
-      activeRunId = null;
-      await refreshSymbols();
-      await loadSnapshot();
+      setStatus('正在移除 ' + symbol + '...', 'busy');
+      try {
+        const response = await fetch('/api/watchlist?symbol=' + encodeURIComponent(symbol), {method:'DELETE'});
+        if (!response.ok) throw new Error('移除失败');
+        activeRunId = null;
+        await refreshSymbols();
+        await loadSnapshot({preserveStatus:true});
+        setStatus(symbol + ' 已从自选股移除。', 'success');
+      } catch (error) {
+        setStatus(symbol + ' 移除失败。', 'error');
+      }
     }
     function initializeJournalDates() {
       const now = new Date();
@@ -1335,8 +1396,22 @@ _APP_HTML = r"""<!doctype html>
     $('watchSymbol').addEventListener('keydown', async event => { if (event.key === 'Enter') await addToWatchlist(); });
     $('refreshWatchlistResearch').addEventListener('click', startWatchlistRefresh);
     $('reportDisclosure').addEventListener('toggle', async () => { if ($('reportDisclosure').open) await loadReportPreview(); });
-    document.querySelectorAll('[data-view-target]').forEach(tab => tab.addEventListener('click', () => setActiveView(tab.dataset.viewTarget)));
+    document.querySelectorAll('[data-view-target]').forEach(tab => {
+      tab.addEventListener('click', () => setActiveView(tab.dataset.viewTarget));
+      tab.addEventListener('keydown', handleTabKeydown);
+    });
+    document.querySelectorAll('[data-product-filter]').forEach(button => button.addEventListener('click', () => {
+      activeProductFilter = button.dataset.productFilter;
+      renderGameProducts();
+    }));
+    $('decisionDirection').addEventListener('change', updateDecisionFields);
+    document.addEventListener('click', event => {
+      const menu = document.querySelector('.watch-menu');
+      if (menu?.open && !menu.contains(event.target)) closeWatchMenu();
+    });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeWatchMenu(); });
     setActiveView(activeView, false);
+    updateDecisionFields();
     initializeJournalDates();
     start();
   </script>

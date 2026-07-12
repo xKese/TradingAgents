@@ -6,12 +6,15 @@ trade signals and therefore cannot bypass the deterministic risk layer.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 from collections.abc import Callable
+from statistics import mean, stdev
 from time import perf_counter
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.factory import create_llm_client
@@ -31,7 +34,7 @@ from .narrative_provider import (
     ResearchNarrativeContext,
 )
 
-PROMPT_VERSION = "multi-agent-research-v2"
+PROMPT_VERSION = "multi-agent-research-v3"
 MAX_DETERMINISTIC_REPORT_CHARS = 24_000
 ANALYST_ROLES = (
     ("fundamentals", "基本面分析师"),
@@ -49,6 +52,30 @@ class StructuredResearchNote(BaseModel):
     risks: list[str] = Field(default_factory=list, max_length=8)
     evidence_source_ids: list[str] = Field(default_factory=list)
     confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
+    @field_validator("headline", mode="before")
+    @classmethod
+    def _normalize_headline(cls, value: Any) -> str:
+        return _bounded_text(value, 180, "未命名研究结论")
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _normalize_summary(cls, value: Any) -> str:
+        return _bounded_text(value, 3_000, "模型未提供研究摘要。")
+
+    @field_validator("supporting_points", "risks", mode="before")
+    @classmethod
+    def _normalize_bullets(cls, value: Any) -> list[str]:
+        return _bounded_list(value, 8)
+
+    @field_validator("evidence_source_ids", mode="before")
+    @classmethod
+    def _normalize_evidence_ids(cls, value: Any) -> list[str]:
+        return _bounded_list(value, 32)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, value: Any) -> ConfidenceLevel:
+        return _normalize_confidence_level(value)
 
 
 class StructuredThesis(BaseModel):
@@ -61,6 +88,35 @@ class StructuredThesis(BaseModel):
     disconfirming_evidence: list[str] = Field(default_factory=list, max_length=8)
     evidence_source_ids: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
+    @field_validator("headline", mode="before")
+    @classmethod
+    def _normalize_headline(cls, value: Any) -> str:
+        return _bounded_text(value, 180, "研究经理综合结论")
+
+    @field_validator("base_case", mode="before")
+    @classmethod
+    def _normalize_base_case(cls, value: Any) -> str:
+        return _bounded_text(value, 4_000, "模型未提供基础情景。")
+
+    @field_validator("bull_case", "bear_case", mode="before")
+    @classmethod
+    def _normalize_scenarios(cls, value: Any) -> str:
+        return _bounded_text(value, 3_000, "模型未提供该情景。")
+
+    @field_validator("catalysts", "disconfirming_evidence", mode="before")
+    @classmethod
+    def _normalize_bullets(cls, value: Any) -> list[str]:
+        return _bounded_list(value, 8)
+
+    @field_validator("evidence_source_ids", mode="before")
+    @classmethod
+    def _normalize_evidence_ids(cls, value: Any) -> list[str]:
+        return _bounded_list(value, 32)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, value: Any) -> float:
+        return _normalize_confidence_score(value)
 
 
 class LLMResearchConfig(BaseModel):
@@ -130,10 +186,13 @@ class MultiAgentResearchProvider:
 
     def generate(self, context: ResearchNarrativeContext) -> list[AgentOutputEnvelope]:
         report_chars = len(context.deterministic_report_markdown or "")
+        technical_snapshot = _technical_snapshot(context.price_bars)
         self._context_audit = {
             "deterministic_output_count": len(context.deterministic_outputs),
             "deterministic_report_chars": min(report_chars, MAX_DETERMINISTIC_REPORT_CHARS),
             "deterministic_report_truncated": report_chars > MAX_DETERMINISTIC_REPORT_CHARS,
+            "technical_bar_count": int(technical_snapshot.get("bar_count") or 0),
+            "technical_feature_count": sum(value is not None for value in technical_snapshot.values()),
         }
         outputs: list[AgentOutputEnvelope] = []
         notes: list[AgentOutputEnvelope] = []
@@ -205,11 +264,28 @@ class MultiAgentResearchProvider:
 
     def _invoke(self, schema: type[BaseModel], prompt: str) -> tuple[Any, dict[str, Any]]:
         started = perf_counter()
-        response = self.llm.with_structured_output(schema).invoke(prompt)
+        include_raw = True
+        try:
+            structured_llm = self.llm.with_structured_output(schema, include_raw=True)
+        except TypeError:
+            include_raw = False
+            structured_llm = self.llm.with_structured_output(schema)
+        response = structured_llm.invoke(prompt)
         elapsed = round((perf_counter() - started) * 1000)
-        value = response if isinstance(response, schema) else schema.model_validate(response)
-        usage = getattr(response, "usage_metadata", None) or {}
-        return value, {"latency_ms": elapsed, **{f"usage_{k}": v for k, v in usage.items() if isinstance(v, (str, int, float, bool))}}
+        raw = response.get("raw") if include_raw and isinstance(response, dict) else response
+        parsed = response.get("parsed") if include_raw and isinstance(response, dict) else response
+        recovered = False
+        if parsed is None and raw is not None:
+            parsed = _recover_structured_payload(raw)
+            recovered = True
+        value = parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
+        usage = getattr(raw, "usage_metadata", None) or getattr(response, "usage_metadata", None) or {}
+        audit = {
+            "latency_ms": elapsed,
+            "structured_output_recovered": recovered,
+            **{f"usage_{key}": item for key, item in usage.items() if isinstance(item, (str, int, float, bool))},
+        }
+        return value, audit
 
     def _metadata(self, stage: str, audit: dict[str, Any]) -> dict[str, Any]:
         return {"provider": self.config.provider, "model": self.config.model,
@@ -221,13 +297,24 @@ class MultiAgentResearchProvider:
             output_type=AgentOutputType.COCKPIT_PANEL, headline=f"{role_name}已降级",
             summary=f"该阶段未生成模型结论；其余研究阶段继续。原因：{error.__class__.__name__}",
             risks=["模型阶段失败，不能将此输出视为完整研究结论。"], confidence=ConfidenceLevel.LOW,
-            metadata=self._metadata(role_id, {"failed": True, "error_type": error.__class__.__name__}))
+            metadata=self._metadata(role_id, _validation_audit(error)))
 
 
 def _system(role: str, context: ResearchNarrativeContext) -> str:
     ids = ", ".join(item.source_id for item in context.evidence) or "none"
-    return (f"你是{role}。只可使用所给 normalized records 和由它们生成的确定性研究底稿，禁止引入外部事实或虚构引用。"
-            f"只能引用这些 evidence_source_ids: {ids}。不得给出交易方向、仓位或绕过风控。\n")
+    focus = ""
+    if role == "技术与市场分析师":
+        focus = (
+            "优先解释确定性技术特征中的趋势、均线位置、动量、波动、回撤和量价关系；"
+            "不得自行重算或编造指标。"
+        )
+    return (
+        f"你是{role}。所有面向用户的文本必须使用简体中文。"
+        "只可使用所给 normalized records 和由它们生成的确定性研究底稿，"
+        "禁止引入外部事实或虚构引用。"
+        f"{focus}只能引用这些 evidence_source_ids: {ids}。"
+        "不得给出交易方向、仓位或绕过风控。\n"
+    )
 
 
 def _context_prompt(context: ResearchNarrativeContext) -> str:
@@ -235,6 +322,7 @@ def _context_prompt(context: ResearchNarrativeContext) -> str:
     fundamentals = [f"{k}={v}" for row in context.fundamentals[-2:] for k, v in sorted(row.metrics.items())]
     news = [f"{x.published_at.date()}|{x.provider}|{x.title}" for x in context.news[:12]]
     refs = [f"{x.source_id}|{x.description}" for x in context.evidence]
+    technical = _technical_snapshot(context.price_bars)
     deterministic_outputs = [
         f"{x.agent_role}|{x.output_type.value}|{x.headline}|{x.summary}"
         for x in context.deterministic_outputs
@@ -244,7 +332,8 @@ def _context_prompt(context: ResearchNarrativeContext) -> str:
     report = report[:MAX_DETERMINISTIC_REPORT_CHARS]
     return (
         f"Symbol={context.symbol}; as_of={context.as_of_date}\n"
-        f"Prices={prices}\nFundamentals={fundamentals}\nNews={news}\nEvidence={refs}\n"
+        f"Prices={prices}\nDeterministic technical features={technical}\n"
+        f"Fundamentals={fundamentals}\nNews={news}\nEvidence={refs}\n"
         f"Deterministic outputs={deterministic_outputs}\n"
         f"Deterministic report (truncated={report_truncated}):\n{report}\n"
     )
@@ -261,6 +350,127 @@ def _select_evidence(allowed: list[EvidenceRef], requested: list[str]) -> list[E
         raise NarrativeProviderError(f"Model cited evidence outside the normalized context: {unknown}")
     return [by_id[item] for item in dict.fromkeys(requested)]
 
+
+def _recover_structured_payload(raw: Any) -> dict[str, Any]:
+    content = getattr(raw, "content", raw)
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        content = "\n".join(parts)
+    if isinstance(content, dict):
+        return content
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        text = text.rsplit("```", 1)[0].strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise NarrativeProviderError("Structured response did not contain a JSON object.")
+    try:
+        value = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as error:
+        raise NarrativeProviderError(
+            f"Structured response JSON could not be decoded at position {error.pos}."
+        ) from error
+    if not isinstance(value, dict):
+        raise NarrativeProviderError("Structured response JSON must be an object.")
+    return value
+
+def _bounded_text(value: Any, limit: int, fallback: str) -> str:
+    text = str(value or "").strip()
+    return (text or fallback)[:limit]
+
+
+def _bounded_list(value: Any, limit: int) -> list[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    return [str(item).strip() for item in values if str(item).strip()][:limit]
+
+
+def _normalize_confidence_score(value: Any) -> float:
+    if isinstance(value, ConfidenceLevel):
+        return {ConfidenceLevel.LOW: 0.3, ConfidenceLevel.MEDIUM: 0.6, ConfidenceLevel.HIGH: 0.85}[value]
+    if isinstance(value, str):
+        normalized = value.strip().lower().rstrip("%")
+        labels = {"low": 0.3, "medium": 0.6, "high": 0.85, "低": 0.3, "中": 0.6, "高": 0.85}
+        if normalized in labels:
+            return labels[normalized]
+        try:
+            value = float(normalized)
+        except ValueError:
+            return 0.6
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.6
+    if score > 1:
+        score /= 100
+    return min(1.0, max(0.0, score))
+
+
+def _normalize_confidence_level(value: Any) -> ConfidenceLevel:
+    score = _normalize_confidence_score(value)
+    return _confidence(score)
+
+
+def _technical_snapshot(price_bars: list[Any]) -> dict[str, float | int | str | None]:
+    ordered = sorted(price_bars, key=lambda bar: bar.date)
+    if not ordered:
+        return {"bar_count": 0, "status": "unavailable"}
+    closes = [float(bar.adjusted_close or bar.close) for bar in ordered]
+    volumes = [float(bar.volume) for bar in ordered if bar.volume is not None]
+
+    def period_return(days: int) -> float | None:
+        return closes[-1] / closes[-days - 1] - 1 if len(closes) > days and closes[-days - 1] else None
+
+    def moving_average(days: int) -> float | None:
+        return mean(closes[-days:]) if len(closes) >= days else None
+
+    returns = [closes[index] / closes[index - 1] - 1 for index in range(1, len(closes)) if closes[index - 1]]
+    recent_returns = returns[-20:]
+    volatility = stdev(recent_returns) * math.sqrt(252) if len(recent_returns) >= 2 else None
+    window = closes[-60:]
+    peak = window[0]
+    max_drawdown = 0.0
+    for close in window:
+        peak = max(peak, close)
+        if peak:
+            max_drawdown = min(max_drawdown, close / peak - 1)
+    changes = [closes[index] - closes[index - 1] for index in range(max(1, len(closes) - 14), len(closes))]
+    gains = sum(max(change, 0) for change in changes)
+    losses = sum(max(-change, 0) for change in changes)
+    rsi14 = 100.0 if changes and losses == 0 else (100 - 100 / (1 + gains / losses) if losses else None)
+    sma5, sma20, sma60 = moving_average(5), moving_average(20), moving_average(60)
+    volume_ratio = None
+    if len(volumes) >= 20 and mean(volumes[-20:]):
+        volume_ratio = mean(volumes[-5:]) / mean(volumes[-20:])
+    trend = "insufficient"
+    if sma5 is not None and sma20 is not None:
+        trend = "up" if closes[-1] > sma5 > sma20 else "down" if closes[-1] < sma5 < sma20 else "mixed"
+    values: dict[str, float | int | str | None] = {
+        "bar_count": len(ordered), "last_close": closes[-1], "return_5d": period_return(5),
+        "return_20d": period_return(20), "return_60d": period_return(60),
+        "sma_5": sma5, "sma_20": sma20, "sma_60": sma60,
+        "close_vs_sma20": closes[-1] / sma20 - 1 if sma20 else None,
+        "annualized_volatility_20d": volatility, "max_drawdown_60d": max_drawdown,
+        "rsi_14": rsi14, "volume_ratio_5d_vs_20d": volume_ratio, "trend_state": trend,
+    }
+    return {key: round(value, 6) if isinstance(value, float) else value for key, value in values.items()}
+
+
+def _validation_audit(error: Exception) -> dict[str, str | bool]:
+    current: BaseException | None = error
+    for _ in range(3):
+        if isinstance(current, ValidationError):
+            fields = sorted({".".join(str(part) for part in item["loc"]) for item in current.errors()})
+            return {"failed": True, "error_type": "ValidationError", "validation_fields": ",".join(fields)[:500]}
+        current = current.__cause__ or current.__context__ if current is not None else None
+    return {"failed": True, "error_type": error.__class__.__name__}
 
 def _confidence(value: float) -> ConfidenceLevel:
     return ConfidenceLevel.HIGH if value >= .75 else ConfidenceLevel.LOW if value < .4 else ConfidenceLevel.MEDIUM

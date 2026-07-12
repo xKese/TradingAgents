@@ -37,3 +37,9 @@ in the cockpit; missing configuration fails cleanly before model calls.
 ## Deterministic research brief
 
 Before any LLM stage, the workflow renders a read-only deterministic brief from the same normalized price, fundamental, and news records. It contains deterministic analyst outputs, the deterministic thesis, and the preliminary Markdown report. Multi-agent prompt v2 receives this brief with the raw normalized records while retaining the evidence whitelist. The report is capped at 24,000 characters; audit metadata records its included length, truncation status, and deterministic output count.
+
+## DeepSeek output resilience and technical features
+
+Prompt v3 normalizes common OpenAI-compatible structured-output variations before enforcing the stable contracts: numeric or percentage confidence values, scalar list fields, oversized text, and excessive bullet counts. Evidence IDs remain strictly restricted to the normalized evidence whitelist.
+
+The market analyst receives deterministic features computed from normalized OHLCV bars rather than being asked to perform arithmetic: 5/20/60-day returns, 5/20/60-day moving averages, close-to-SMA20 distance, 20-day annualized volatility, 60-day maximum drawdown, RSI(14), 5-day versus 20-day volume ratio, and a deterministic trend state. Audit metadata records the bar and feature counts.

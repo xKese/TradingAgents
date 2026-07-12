@@ -1,4 +1,6 @@
-from datetime import date
+import json
+from datetime import date, timedelta
+from types import SimpleNamespace
 
 from tradingagents.research_platform.agent_contracts import AgentOutputType, EvidenceRef
 from tradingagents.research_platform.multi_agent_research import (
@@ -6,6 +8,7 @@ from tradingagents.research_platform.multi_agent_research import (
     MultiAgentResearchProvider,
     StructuredResearchNote,
     StructuredThesis,
+    _technical_snapshot,
     multi_agent_configuration_status,
 )
 from tradingagents.research_platform.narrative_provider import ResearchNarrativeContext
@@ -144,3 +147,74 @@ def test_legacy_deepseek_token_name_selects_v4_pro_without_exposing_key(monkeypa
     assert status["provider"] == "deepseek"
     assert status["model"] == "deepseek-v4-pro"
     assert "legacy-secret" not in repr(status)
+
+
+def test_deepseek_note_shape_is_normalized_before_constraints():
+    note = StructuredResearchNote(
+        headline="H" * 240,
+        summary="S" * 3_500,
+        supporting_points="single point",
+        risks=[f"risk-{index}" for index in range(12)],
+        evidence_source_ids="price:fixture",
+        confidence=82,
+    )
+    assert len(note.headline) == 180
+    assert len(note.summary) == 3_000
+    assert note.supporting_points == ["single point"]
+    assert len(note.risks) == 8
+    assert note.evidence_source_ids == ["price:fixture"]
+    assert note.confidence.value == "high"
+
+
+def test_deterministic_technical_snapshot_computes_market_features():
+    bars = [
+        SimpleNamespace(
+            date=date(2026, 1, 1) + timedelta(days=index),
+            adjusted_close=None,
+            close=100 + index,
+            volume=1_000 + index * 10,
+        )
+        for index in range(61)
+    ]
+    snapshot = _technical_snapshot(bars)
+    assert snapshot["bar_count"] == 61
+    assert snapshot["return_20d"] > 0
+    assert snapshot["sma_5"] > snapshot["sma_20"] > snapshot["sma_60"]
+    assert snapshot["trend_state"] == "up"
+    assert snapshot["rsi_14"] == 100.0
+    assert snapshot["annualized_volatility_20d"] is not None
+
+
+class RawFallbackLLM:
+    def with_structured_output(self, schema, include_raw=False):
+        class Runner:
+            def invoke(self, prompt):
+                if schema is StructuredThesis:
+                    payload = {
+                        "headline": "manager", "base_case": "base", "bull_case": "bull",
+                        "bear_case": "bear", "catalysts": [], "disconfirming_evidence": [],
+                        "evidence_source_ids": ["price:fixture"], "confidence": "65%",
+                    }
+                else:
+                    payload = {
+                        "headline": "note", "summary": "summary", "supporting_points": "point",
+                        "risks": [], "evidence_source_ids": ["price:fixture"], "confidence": 78,
+                    }
+                raw = SimpleNamespace(
+                    content="```json\n" + json.dumps(payload) + "\n```",
+                    usage_metadata={"input_tokens": 10, "output_tokens": 5},
+                )
+                return {"raw": raw, "parsed": None, "parsing_error": ValueError("fixture")} if include_raw else payload
+        return Runner()
+
+
+def test_raw_json_is_recovered_when_provider_parser_returns_none():
+    outputs = MultiAgentResearchProvider(
+        config=LLMResearchConfig(provider="deepseek", model="configured-model"),
+        llm=RawFallbackLLM(),
+    ).generate(context())
+    assert all(not output.metadata.get("failed") for output in outputs)
+    assert all(output.metadata["structured_output_recovered"] is True for output in outputs)
+    assert outputs[0].confidence.value == "high"
+    assert outputs[-1].payload.confidence == 0.65
+    assert outputs[-1].metadata["usage_input_tokens"] == 10

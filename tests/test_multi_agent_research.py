@@ -104,6 +104,8 @@ def test_configuration_status_never_exposes_key(monkeypatch):
 
 
 def test_configuration_requires_explicit_model(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("Deepseek Token-TA", raising=False)
     monkeypatch.delenv("TRADINGAGENTS_RESEARCH_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("TRADINGAGENTS_RESEARCH_LLM_MODEL", raising=False)
     assert multi_agent_configuration_status()["ready"] is False
@@ -122,3 +124,15 @@ def test_progress_callback_reports_each_bounded_stage():
         "multi_agent:valuation", "multi_agent:bull", "multi_agent:bear",
         "multi_agent:manager", "multi_agent:complete",
     ]
+
+
+def test_legacy_deepseek_token_name_selects_v4_pro_without_exposing_key(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("TRADINGAGENTS_RESEARCH_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("TRADINGAGENTS_RESEARCH_LLM_MODEL", raising=False)
+    monkeypatch.setenv("Deepseek Token-TA", "legacy-secret")
+    status = multi_agent_configuration_status()
+    assert status["ready"] is True
+    assert status["provider"] == "deepseek"
+    assert status["model"] == "deepseek-v4-pro"
+    assert "legacy-secret" not in repr(status)

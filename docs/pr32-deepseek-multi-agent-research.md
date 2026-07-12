@@ -14,6 +14,8 @@ $env:TRADINGAGENTS_RESEARCH_LLM_MODEL = "<exact model id from DeepSeek>"
 $env:DEEPSEEK_API_KEY = "<server-side key>"
 ```
 
+For compatibility with the local workstation, `Deepseek Token-TA` is accepted as a legacy server-side alias for `DEEPSEEK_API_KEY`. When either key is present and provider/model are omitted, the research adapter selects `deepseek` and `deepseek-v4-pro`.
+
 The existing DeepSeek adapter uses the OpenAI-compatible endpoint
 `https://api.deepseek.com`. `TRADINGAGENTS_RESEARCH_LLM_BASE_URL` can override
 the endpoint. The cockpit receives readiness, provider, and model only; keys

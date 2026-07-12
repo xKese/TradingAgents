@@ -70,13 +70,22 @@ class LLMResearchConfig(BaseModel):
 
     @classmethod
     def from_environment(cls) -> LLMResearchConfig:
+        legacy_deepseek_key = os.getenv("Deepseek Token-TA", "").strip()  # noqa: SIM112
+        standard_deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+        if legacy_deepseek_key and not standard_deepseek_key:
+            os.environ["DEEPSEEK_API_KEY"] = legacy_deepseek_key
+            standard_deepseek_key = legacy_deepseek_key
         provider = os.getenv("TRADINGAGENTS_RESEARCH_LLM_PROVIDER", "").strip().lower()
+        if not provider and standard_deepseek_key:
+            provider = "deepseek"
         model = os.getenv("TRADINGAGENTS_RESEARCH_LLM_MODEL", "").strip()
+        if not model and provider == "deepseek":
+            model = "deepseek-v4-pro"
         base_url = os.getenv("TRADINGAGENTS_RESEARCH_LLM_BASE_URL", "").strip() or None
         if not provider or not model:
             raise NarrativeProviderUnavailableError(
                 "Multi-agent research requires TRADINGAGENTS_RESEARCH_LLM_PROVIDER and "
-                "TRADINGAGENTS_RESEARCH_LLM_MODEL. For DeepSeek also set DEEPSEEK_API_KEY."
+                "TRADINGAGENTS_RESEARCH_LLM_MODEL. For DeepSeek set DEEPSEEK_API_KEY (legacy alias: Deepseek Token-TA)."
             )
         key_env = get_api_key_env(provider)
         if key_env and not os.getenv(key_env, "").strip() and provider not in {"ollama", "openai_compatible"}:

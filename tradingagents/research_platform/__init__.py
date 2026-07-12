@@ -46,6 +46,14 @@ from .game_approvals import (
     make_approval_id,
     match_game_approval,
 )
+from .game_opportunity import (
+    GameOpportunityFactor,
+    GameOpportunityFactorStatus,
+    GameOpportunityLevel,
+    GameOpportunitySnapshot,
+    build_game_opportunity_board,
+    build_game_opportunity_snapshot,
+)
 from .game_universe import (
     GameBusinessEntity,
     GameCatalyst,
@@ -131,11 +139,17 @@ __all__ = [
     "build_cache_data_health",
     "build_company_profile",
     "build_game_research_snapshot",
+    "build_game_opportunity_board",
+    "build_game_opportunity_snapshot",
     "GameApprovalDigest",
     "GameApprovalKind",
     "GameApprovalMatch",
     "GameApprovalRecord",
     "GameCompanyMatchStatus",
+    "GameOpportunityFactor",
+    "GameOpportunityFactorStatus",
+    "GameOpportunityLevel",
+    "GameOpportunitySnapshot",
     "GameBusinessEntity",
     "GameCatalyst",
     "GameCatalystCategory",

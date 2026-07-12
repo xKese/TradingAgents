@@ -36,6 +36,8 @@ def test_cockpit_exposes_company_matched_game_approvals(tmp_path):
             digest = loads(response.read().decode("utf-8"))
         with urlopen(f"http://{host}:{port}/api/snapshot?symbol=002602", timeout=2) as response:
             snapshot = loads(response.read().decode("utf-8"))
+        with urlopen(f"http://{host}:{port}/api/game-opportunities", timeout=2) as response:
+            opportunities = loads(response.read().decode("utf-8"))
         with urlopen(f"http://{host}:{port}/", timeout=2) as response:
             html = response.read().decode("utf-8")
     finally:
@@ -46,5 +48,8 @@ def test_cockpit_exposes_company_matched_game_approvals(tmp_path):
     assert digest["matched_count"] == 1
     assert digest["approvals"][0]["approval"]["game_name"] == "Tracked Game"
     assert snapshot["game_approvals"]["matched_count"] == 1
+    assert snapshot["game_opportunity"]["available"] is True
     assert snapshot["has_data"] is True
+    assert {item["symbol"] for item in opportunities["companies"]} == {"002602", "002624"}
+    assert "Game Opportunity Radar" in html
     assert "Game Approvals" in html

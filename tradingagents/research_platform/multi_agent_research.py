@@ -34,7 +34,7 @@ from .narrative_provider import (
     ResearchNarrativeContext,
 )
 
-PROMPT_VERSION = "multi-agent-research-v4"
+PROMPT_VERSION = "multi-agent-research-v5"
 MAX_DETERMINISTIC_REPORT_CHARS = 24_000
 ANALYST_ROLES = (
     ("fundamentals", "基本面分析师"),
@@ -193,6 +193,9 @@ class MultiAgentResearchProvider:
             "deterministic_report_truncated": report_chars > MAX_DETERMINISTIC_REPORT_CHARS,
             "technical_bar_count": int(technical_snapshot.get("bar_count") or 0),
             "technical_feature_count": sum(value is not None for value in technical_snapshot.values()),
+            "game_product_count": len(context.game_research.products) if context.game_research else 0,
+            "game_catalyst_count": len(context.game_research.catalysts) if context.game_research else 0,
+            "game_approval_count": context.game_approvals.matched_count if context.game_approvals else 0,
         }
         outputs: list[AgentOutputEnvelope] = []
         notes: list[AgentOutputEnvelope] = []
@@ -317,6 +320,11 @@ class MultiAgentResearchProvider:
 def _system(role: str, context: ResearchNarrativeContext) -> str:
     ids = ", ".join(item.source_id for item in context.evidence) or "none"
     focus = ""
+    if role == "新闻、游戏产品与版号分析师":
+        focus = (
+            "优先分析已提供的游戏产品状态、产品催化剂和精确法人匹配版号；"
+            "明确区分已上线、储备、持续运营和无日期事项，不得把机会雷达分数当成投资结论。"
+        )
     if role == "技术与市场分析师":
         focus = (
             "优先解释确定性技术特征中的趋势、均线位置、动量、波动、回撤和量价关系；"
@@ -341,17 +349,86 @@ def _context_prompt(context: ResearchNarrativeContext) -> str:
         f"{x.agent_role}|{x.output_type.value}|{x.headline}|{x.summary}"
         for x in context.deterministic_outputs
     ]
+    game_context = _game_context_prompt(context)
     report = context.deterministic_report_markdown or "None available"
     report_truncated = len(report) > MAX_DETERMINISTIC_REPORT_CHARS
     report = report[:MAX_DETERMINISTIC_REPORT_CHARS]
     return (
         f"Symbol={context.symbol}; as_of={context.as_of_date}\n"
         f"Prices={prices}\nDeterministic technical features={technical}\n"
-        f"Fundamentals={fundamentals}\nNews={news}\nEvidence={refs}\n"
+        f"Fundamentals={fundamentals}\nNews={news}\n{game_context}\nEvidence={refs}\n"
         f"Deterministic outputs={deterministic_outputs}\n"
         f"Deterministic report (truncated={report_truncated}):\n{report}\n"
     )
 
+
+def _game_context_prompt(context: ResearchNarrativeContext) -> str:
+    research = context.game_research
+    approvals = context.game_approvals
+    opportunity = context.game_opportunity
+    if research is None or not research.available:
+        return "Game research=None available"
+    products = [
+        {
+            "name": item.name,
+            "status": item.status.value,
+            "genres": item.genres,
+            "platforms": item.platforms,
+            "markets": item.markets,
+            "evidence_source_ids": [f"game:{source_id}" for source_id in item.evidence_ids],
+        }
+        for item in research.products
+    ]
+    catalysts = [
+        {
+            "title": item.catalyst.title,
+            "category": item.catalyst.category.value,
+            "status": item.status.value,
+            "event_date": item.catalyst.event_date.isoformat() if item.catalyst.event_date else None,
+            "evidence_source_ids": [
+                f"game:{source_id}" for source_id in item.catalyst.evidence_ids
+            ],
+        }
+        for item in research.catalysts
+    ]
+    approval_items = [
+        {
+            "game_name": item.approval.game_name,
+            "approval_date": item.approval.approval_date.isoformat(),
+            "kind": item.approval.kind.value,
+            "operator": item.approval.operating_entity,
+            "evidence_source_id": f"approval:{item.approval.approval_id}",
+        }
+        for item in (approvals.approvals[:12] if approvals else [])
+    ]
+    opportunity_view = None
+    if opportunity is not None and opportunity.available:
+        opportunity_view = {
+            "level": opportunity.level.value,
+            "score": opportunity.score,
+            "max_score": opportunity.max_score,
+            "factors": [
+                {
+                    "factor": item.factor_id,
+                    "status": item.status.value,
+                    "detail": item.detail,
+                }
+                for item in opportunity.factors
+            ],
+            "warning": "Screening context only; not an investment recommendation.",
+        }
+    return "Game research=" + json.dumps(
+        {
+            "company_name": research.company_name,
+            "research_focus": research.research_focus,
+            "products": products,
+            "catalysts": catalysts,
+            "approvals": approval_items,
+            "opportunity_radar": opportunity_view,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 def _outputs_prompt(outputs: list[AgentOutputEnvelope]) -> str:
     return "\n".join(f"{x.agent_role}: {x.summary}; refs={[e.source_id for e in x.evidence]}" for x in outputs)

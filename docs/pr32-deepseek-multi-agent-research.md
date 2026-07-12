@@ -46,3 +46,6 @@ The market analyst receives deterministic features computed from normalized OHLC
 ## DeepSeek JSON-mode protocol
 
 Prompt v4 overrides structured output to `json_mode` inside the research adapter for DeepSeek only. DeepSeek V4 rejects forced `tool_choice`, so function-calling could legitimately return a normal answer without invoking the schema tool. JSON mode forces a content JSON object and the compact Pydantic schema is included in the prompt. This does not change the legacy TradingAgents client behavior or other providers.
+## Game-company research context
+
+Prompt v5 adds point-in-time game-company records to the normalized research context: curated live and pipeline products, dated/ongoing catalysts, exact legal-entity NPPA approval matches, and the explainable game opportunity radar. Every curated source and exact approval is converted to the standard evidence whitelist. Review-required brand matches and facts unavailable by the run's as-of date are excluded. The opportunity score is labeled as screening context only and cannot become a trade signal.

@@ -23,6 +23,9 @@ from .agent_contracts import (
     EvidenceRef,
 )
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
+from .game_approvals import GameApprovalDigest
+from .game_opportunity import GameOpportunitySnapshot
+from .game_universe import GameResearchSnapshot
 
 
 class NarrativeMode(str, Enum):
@@ -54,6 +57,9 @@ class ResearchNarrativeContext(BaseModel):
     evidence: list[EvidenceRef] = Field(default_factory=list)
     deterministic_outputs: list[AgentOutputEnvelope] = Field(default_factory=list)
     deterministic_report_markdown: str | None = None
+    game_research: GameResearchSnapshot | None = None
+    game_approvals: GameApprovalDigest | None = None
+    game_opportunity: GameOpportunitySnapshot | None = None
 
 
 class ResearchNarrativeProvider(Protocol):
@@ -198,6 +204,38 @@ def build_narrative_evidence(
         )
     return evidence
 
+
+def build_game_narrative_evidence(
+    *,
+    game_research: GameResearchSnapshot | None,
+    game_approvals: GameApprovalDigest | None,
+) -> list[EvidenceRef]:
+    """Convert point-in-time game sources into the standard evidence whitelist."""
+    evidence: list[EvidenceRef] = []
+    if game_research is not None:
+        evidence.extend(
+            EvidenceRef(
+                source_id=f"game:{item.evidence_id}",
+                description=item.title,
+                as_of_date=item.available_as_of,
+                confidence=item.confidence,
+            )
+            for item in game_research.evidence
+        )
+    if game_approvals is not None:
+        evidence.extend(
+            EvidenceRef(
+                source_id=f"approval:{item.approval.approval_id}",
+                description=(
+                    f"Official approval: {item.approval.game_name}; "
+                    f"operator {item.approval.operating_entity}"
+                ),
+                as_of_date=item.approval.available_as_of,
+                confidence=item.confidence,
+            )
+            for item in game_approvals.approvals
+        )
+    return list({item.source_id: item for item in evidence}.values())
 
 def validate_narrative_outputs(
     context: ResearchNarrativeContext,

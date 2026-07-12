@@ -22,7 +22,7 @@ from .agent_contracts import (
     InvestmentThesis,
     TradeSignal,
 )
-from .artifact_store import ArtifactStore
+from .artifact_store import ArtifactStore, JsonArtifactStore
 from .backtest_contracts import BacktestConfig, BacktestResult, ExecutionConfig
 from .backtest_engine import run_daily_signal_backtest
 from .data_contracts import (
@@ -32,9 +32,13 @@ from .data_contracts import (
     NewsItem,
     PriceBar,
 )
+from .game_approvals import JsonGameApprovalStore
+from .game_opportunity import build_game_opportunity_snapshot
+from .game_universe import build_game_research_snapshot
 from .narrative_provider import (
     ResearchNarrativeContext,
     ResearchNarrativeProvider,
+    build_game_narrative_evidence,
     build_narrative_evidence,
     validate_narrative_outputs,
 )
@@ -131,6 +135,18 @@ def run_ticker_research(
         signal=signal,
     )
     if narrative_provider is not None:
+        game_research = build_game_research_snapshot(
+            config.symbol, as_of_date=config.as_of_date
+        )
+        game_approvals = None
+        game_opportunity = None
+        if isinstance(store, JsonArtifactStore):
+            game_approvals = JsonGameApprovalStore(store.root).digest(
+                config.symbol, as_of_date=config.as_of_date
+            )
+            game_opportunity = build_game_opportunity_snapshot(
+                store, config.symbol, as_of_date=config.as_of_date
+            )
         deterministic_outputs = [
             output
             for output in agent_outputs
@@ -156,13 +172,22 @@ def run_ticker_research(
             news=news,
             deterministic_outputs=deterministic_outputs,
             deterministic_report_markdown=deterministic_report_markdown,
-            evidence=build_narrative_evidence(
-                symbol=config.symbol,
-                as_of_date=config.as_of_date,
-                price_bars=price_bars,
-                fundamentals=fundamentals,
-                news=news,
-            ),
+            game_research=game_research,
+            game_approvals=game_approvals,
+            game_opportunity=game_opportunity,
+            evidence=[
+                *build_narrative_evidence(
+                    symbol=config.symbol,
+                    as_of_date=config.as_of_date,
+                    price_bars=price_bars,
+                    fundamentals=fundamentals,
+                    news=news,
+                ),
+                *build_game_narrative_evidence(
+                    game_research=game_research,
+                    game_approvals=game_approvals,
+                ),
+            ],
         )
         agent_outputs.extend(
             validate_narrative_outputs(context, narrative_provider.generate(context))

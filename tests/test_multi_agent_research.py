@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 
 from tradingagents.research_platform.agent_contracts import AgentOutputType, EvidenceRef
+from tradingagents.research_platform.game_universe import build_game_research_snapshot
 from tradingagents.research_platform.multi_agent_research import (
     LLMResearchConfig,
     MultiAgentResearchProvider,
@@ -232,3 +233,23 @@ def test_technical_evidence_alias_maps_only_to_canonical_price_evidence():
     allowed = context().evidence
     selected = _select_evidence(allowed, ["technical_features:002624:2026-07-12"])
     assert selected == allowed
+
+
+def test_game_products_and_catalysts_are_included_in_agent_context():
+    game_context = context().model_copy(
+        update={
+            "game_research": build_game_research_snapshot(
+                "002602", as_of_date=date(2026, 7, 12)
+            )
+        }
+    )
+    llm = FakeLLM()
+    outputs = MultiAgentResearchProvider(
+        config=LLMResearchConfig(provider="deepseek", model="configured-model"), llm=llm
+    ).generate(game_context)
+
+    assert "Whiteout Survival" in llm.prompts[0]
+    assert "Kingshot" in llm.prompts[0]
+    assert "新SLG与休闲产品的测试和商业化验证" in llm.prompts[0]
+    assert outputs[-1].metadata["game_product_count"] == 5
+    assert outputs[-1].metadata["game_catalyst_count"] == 2

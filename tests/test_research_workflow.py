@@ -241,3 +241,29 @@ def test_run_ticker_research_persists_optional_narrative_output(tmp_path):
     assert "# Personal Research Report: NVDA" in narrative_provider.last_context.deterministic_report_markdown
     assert "Investment Thesis" in narrative_provider.last_context.deterministic_report_markdown
     assert archive.load_latest_bundle("NVDA") == result.bundle
+
+
+def test_workflow_passes_point_in_time_game_context_to_narrative_provider(tmp_path):
+    narrative_provider = FixtureNarrativeProvider()
+    result = run_ticker_research(
+        config=ResearchWorkflowConfig(
+            symbol="002602",
+            as_of_date=date(2026, 7, 12),
+            lookback_days=90,
+        ),
+        provider=FakeProvider(),
+        store=JsonArtifactStore(tmp_path),
+        narrative_provider=narrative_provider,
+    )
+
+    context = narrative_provider.last_context
+    assert context is not None
+    assert context.game_research is not None
+    assert context.game_research.available is True
+    assert {item.name for item in context.game_research.products} >= {
+        "Whiteout Survival", "Kingshot"
+    }
+    assert context.game_approvals is not None
+    assert context.game_opportunity is not None
+    assert any(item.source_id.startswith("game:") for item in context.evidence)
+    assert result.bundle.symbol == "002602"

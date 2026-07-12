@@ -1117,7 +1117,8 @@ _APP_HTML = r"""<!doctype html>
           {title:'反证与失效条件', bullets:thesis.disconfirming_evidence || []}
         ];
         const risks = (output.risks || []).length ? '<section class="agent-section"><h4>风险与观察项</h4><ul>' + output.risks.map(item => '<li>' + escape(item) + '</li>').join('') + '</ul></section>' : '';
-        const validation = failed && meta.validation_fields ? '<section class="agent-section"><h4>结构化校验详情</h4><p>未通过字段：' + escape(meta.validation_fields) + '</p></section>' : '';
+        const failureDetail = meta.validation_fields ? '未通过字段：' + meta.validation_fields : meta.failure_reason ? '失败类别：' + meta.failure_reason : '';
+        const validation = failed && failureDetail ? '<section class="agent-section"><h4>结构化校验详情</h4><p>' + escape(failureDetail) + '</p></section>' : '';
         const evidence = (output.evidence || []).length ? '<div class="agent-evidence"><strong>证据：</strong>' + output.evidence.map(item => escape(item.description) + '（' + escape(item.source_id) + '）').join('；') + '</div>' : '';
         const audit = [meta.provider, meta.model, meta.latency_ms == null ? null : meta.latency_ms + 'ms'].filter(Boolean).join(' · ');
         return '<li class="item agent-card ' + (manager ? 'manager ' : '') + (failed ? 'failed' : '') + '"><details ' + (manager ? 'open' : '') + '><summary><div class="agent-card-title"><span class="agent-role-badge">' + escape(roleLabel(output.agent_role)) + '</span><span>' + escape(output.headline) + '</span><span class="agent-status-badge ' + (failed ? 'failed' : '') + '">' + escape(failed ? '已降级' : confidenceLabel(output.confidence)) + '</span></div><div class="item-meta">' + escape(output.as_of_date) + (audit ? ' · ' + escape(audit) : '') + '</div></summary><div class="agent-body"><p class="agent-lead">' + escape(output.summary) + '</p>' + sections.map(sectionHtml).join('') + validation + risks + evidence + '</div></details></li>';

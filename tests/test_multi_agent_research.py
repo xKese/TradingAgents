@@ -8,6 +8,7 @@ from tradingagents.research_platform.multi_agent_research import (
     MultiAgentResearchProvider,
     StructuredResearchNote,
     StructuredThesis,
+    _select_evidence,
     _technical_snapshot,
     multi_agent_configuration_status,
 )
@@ -218,3 +219,9 @@ def test_raw_json_is_recovered_when_provider_parser_returns_none():
     assert outputs[0].confidence.value == "high"
     assert outputs[-1].payload.confidence == 0.65
     assert outputs[-1].metadata["usage_input_tokens"] == 10
+
+
+def test_technical_evidence_alias_maps_only_to_canonical_price_evidence():
+    allowed = context().evidence
+    selected = _select_evidence(allowed, ["technical_features:002624:2026-07-12"])
+    assert selected == allowed

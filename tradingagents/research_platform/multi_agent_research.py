@@ -345,10 +345,26 @@ def _outputs_prompt(outputs: list[AgentOutputEnvelope]) -> str:
 
 def _select_evidence(allowed: list[EvidenceRef], requested: list[str]) -> list[EvidenceRef]:
     by_id = {item.source_id: item for item in allowed}
-    unknown = sorted(set(requested) - set(by_id))
+    prefix_aliases = {
+        "technical": "price", "technical_features": "price", "market": "price",
+        "ohlcv": "price", "price": "price", "fundamental": "fundamentals",
+        "fundamentals": "fundamentals", "news": "news",
+    }
+    selected: list[EvidenceRef] = []
+    unknown: list[str] = []
+    for source_id in dict.fromkeys(requested):
+        if source_id in by_id:
+            selected.append(by_id[source_id])
+            continue
+        prefix = prefix_aliases.get(source_id.split(":", 1)[0].lower())
+        candidates = [item for item in allowed if prefix and item.source_id.startswith(prefix + ":")]
+        if len(candidates) == 1:
+            selected.append(candidates[0])
+        else:
+            unknown.append(source_id)
     if unknown:
-        raise NarrativeProviderError(f"Model cited evidence outside the normalized context: {unknown}")
-    return [by_id[item] for item in dict.fromkeys(requested)]
+        raise NarrativeProviderError(f"Model cited evidence outside the normalized context: {sorted(unknown)}")
+    return list({item.source_id: item for item in selected}.values())
 
 
 def _recover_structured_payload(raw: Any) -> dict[str, Any]:
@@ -465,6 +481,15 @@ def _technical_snapshot(price_bars: list[Any]) -> dict[str, float | int | str | 
 
 def _validation_audit(error: Exception) -> dict[str, str | bool]:
     current: BaseException | None = error
+    if isinstance(error, NarrativeProviderError):
+        message = str(error)
+        reason = (
+            "evidence_boundary" if "outside the normalized context" in message
+            else "invalid_json" if "could not be decoded" in message
+            else "missing_json" if "did not contain a JSON object" in message
+            else "structured_response"
+        )
+        return {"failed": True, "error_type": "NarrativeProviderError", "failure_reason": reason}
     for _ in range(3):
         if isinstance(current, ValidationError):
             fields = sorted({".".join(str(part) for part in item["loc"]) for item in current.errors()})

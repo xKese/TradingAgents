@@ -695,6 +695,25 @@ _APP_HTML = r"""<!doctype html>
     .item-title { font-weight: 680; line-height: 1.4; }
     .item-meta { color: #64747d; font-size: 11px; margin-top: 4px; }
     .item-summary { color: #45565f; line-height: 1.45; margin-top: 6px; font-size: 12px; }
+    .agent-card { padding: 0; background: #fff; }
+    .agent-card > details > summary { cursor: pointer; list-style: none; padding: 14px 15px; }
+    .agent-card > details > summary::-webkit-details-marker { display: none; }
+    .agent-card > details > summary::after { content: "展开"; float: right; color: #176f6c; font-size: 10px; font-weight: 680; }
+    .agent-card > details[open] > summary::after { content: "收起"; }
+    .agent-card.manager { border-left: 4px solid #176f6c; background: #fbfefe; }
+    .agent-card.failed { border-left: 4px solid #c9822d; background: #fffdf8; }
+    .agent-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding-right: 42px; font-weight: 720; line-height: 1.4; }
+    .agent-role-badge, .agent-status-badge { display: inline-block; padding: 2px 6px; border-radius: 999px; font-size: 10px; font-weight: 720; }
+    .agent-role-badge { background: #e8f3f2; color: #176f6c; }
+    .agent-status-badge { background: #eef2f3; color: #5d6d75; }
+    .agent-status-badge.failed { background: #fff0dc; color: #9a5b18; }
+    .agent-body { padding: 0 15px 15px; border-top: 1px solid #edf1f2; }
+    .agent-lead { margin: 12px 0 0; color: #31454e; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+    .agent-section { margin-top: 13px; padding-top: 11px; border-top: 1px solid #e5ecee; }
+    .agent-section h4 { margin: 0 0 6px; color: #176f6c; font-size: 12px; }
+    .agent-section p { margin: 0; color: #45565f; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+    .agent-section ul { margin: 6px 0 0; padding-left: 18px; color: #45565f; font-size: 12px; line-height: 1.55; }
+    .agent-evidence { margin-top: 12px; color: #64747d; font-size: 10px; line-height: 1.5; }
     .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
     .tag { padding: 3px 6px; border: 1px solid #cbd8db; border-radius: 4px; color: #39706e; font-size: 10px; font-weight: 680; }
     .report-actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -1070,8 +1089,42 @@ _APP_HTML = r"""<!doctype html>
       }).join('') : '<tr><td colspan="5" class="empty">财务报告期不足。</td></tr>';
     }
     function renderAgents(outputs) {
-      $('agentsMeta').textContent = outputs.length + ' 条';
-      $('agents').innerHTML = outputs.length ? outputs.map(output => '<li class="item"><div class="item-title">' + escape(output.headline) + '</div><div class="item-meta">' + escape(output.agent_role) + ' · ' + escape(output.output_type) + ' · ' + escape(output.as_of_date) + '</div><div class="item-summary">' + escape(output.summary) + '</div>' + (output.risks && output.risks.length ? '<div class="tags">' + output.risks.slice(0,3).map(risk => '<span class="tag">风险：' + escape(risk) + '</span>').join('') + '</div>' : '') + '</li>').join('') : '<li class="empty">暂无结构化研究。</li>';
+      const roleLabel = role => ({
+        'Research Manager':'研究经理', 'Market Snapshot':'市场基线',
+        'Fundamentals Snapshot':'基本面基线', 'News Snapshot':'新闻基线'
+      }[role] || role);
+      const confidenceLabel = value => ({high:'高置信', medium:'中等置信', low:'低置信'}[value] || value || '未标注');
+      const stageRank = output => {
+        const meta = output.metadata || {};
+        if (meta.stage === 'manager') return 0;
+        if (meta.failed) return 3;
+        if (meta.provider) return 1;
+        return 2;
+      };
+      const sectionHtml = section => {
+        const bullets = (section.bullets || []).length ? '<ul>' + section.bullets.map(item => '<li>' + escape(item) + '</li>').join('') + '</ul>' : '';
+        return '<section class="agent-section"><h4>' + escape(section.title) + '</h4>' + (section.summary ? '<p>' + escape(section.summary) + '</p>' : '') + bullets + '</section>';
+      };
+      const cardHtml = output => {
+        const meta = output.metadata || {};
+        const failed = Boolean(meta.failed);
+        const manager = meta.stage === 'manager';
+        let sections = [...(output.sections || [])];
+        const thesis = output.payload && output.output_type === 'investment_thesis' ? output.payload : null;
+        if (manager && thesis && !sections.length) sections = [
+          {title:'基础情景', summary:thesis.base_case}, {title:'乐观情景', summary:thesis.bull_case},
+          {title:'悲观情景', summary:thesis.bear_case}, {title:'潜在催化剂', bullets:thesis.catalysts || []},
+          {title:'反证与失效条件', bullets:thesis.disconfirming_evidence || []}
+        ];
+        const risks = (output.risks || []).length ? '<section class="agent-section"><h4>风险与观察项</h4><ul>' + output.risks.map(item => '<li>' + escape(item) + '</li>').join('') + '</ul></section>' : '';
+        const evidence = (output.evidence || []).length ? '<div class="agent-evidence"><strong>证据：</strong>' + output.evidence.map(item => escape(item.description) + '（' + escape(item.source_id) + '）').join('；') + '</div>' : '';
+        const audit = [meta.provider, meta.model, meta.latency_ms == null ? null : meta.latency_ms + 'ms'].filter(Boolean).join(' · ');
+        return '<li class="item agent-card ' + (manager ? 'manager ' : '') + (failed ? 'failed' : '') + '"><details ' + (manager ? 'open' : '') + '><summary><div class="agent-card-title"><span class="agent-role-badge">' + escape(roleLabel(output.agent_role)) + '</span><span>' + escape(output.headline) + '</span><span class="agent-status-badge ' + (failed ? 'failed' : '') + '">' + escape(failed ? '已降级' : confidenceLabel(output.confidence)) + '</span></div><div class="item-meta">' + escape(output.as_of_date) + (audit ? ' · ' + escape(audit) : '') + '</div></summary><div class="agent-body"><p class="agent-lead">' + escape(output.summary) + '</p>' + sections.map(sectionHtml).join('') + risks + evidence + '</div></details></li>';
+      };
+      const ordered = [...outputs].sort((a,b) => stageRank(a) - stageRank(b));
+      const successful = outputs.filter(output => !(output.metadata || {}).failed).length;
+      $('agentsMeta').textContent = outputs.length + ' 条 · ' + successful + ' 条有效';
+      $('agents').innerHTML = ordered.length ? ordered.map(cardHtml).join('') : '<li class="empty">暂无结构化研究。</li>';
     }
     function renderNews(items) {
       $('newsMeta').textContent = items.length + ' 条最近事件';

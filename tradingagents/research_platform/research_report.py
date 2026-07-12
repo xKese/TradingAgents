@@ -11,12 +11,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from tradingagents.dataflows.utils import safe_ticker_component
 
 from .agent_artifacts import (
-    render_agent_outputs,
+    render_agent_output,
     render_analyst_note,
     render_investment_thesis,
     render_trade_signal,
 )
-from .agent_contracts import AgentOutputEnvelope, AnalystNote, InvestmentThesis, TradeSignal
+from .agent_contracts import (
+    AgentOutputEnvelope,
+    AgentOutputSection,
+    AnalystNote,
+    InvestmentThesis,
+    TradeSignal,
+)
 from .backtest_contracts import BacktestResult
 from .company_profile import build_company_profile
 from .data_contracts import FundamentalSnapshot, NewsItem, PriceBar
@@ -390,8 +396,68 @@ def _render_news(news: list[NewsItem]) -> str:
 def _render_agent_outputs(outputs: list[AgentOutputEnvelope]) -> str:
     if not outputs:
         return "## Agent Outputs\n\nNo structured agent outputs available."
-    return "## Agent Outputs\n\n" + render_agent_outputs(outputs)
 
+    manager = [item for item in outputs if item.metadata.get("stage") == "manager"]
+    failed = [item for item in outputs if item.metadata.get("failed") is True]
+    debate = [
+        item for item in outputs
+        if item.metadata.get("stage") in {"bull", "bear"} and item not in failed
+    ]
+    specialists = [
+        item for item in outputs
+        if item.metadata.get("provider")
+        and item not in manager
+        and item not in debate
+        and item not in failed
+    ]
+    baseline = [
+        item for item in outputs
+        if not item.metadata.get("provider") and item not in failed
+    ]
+
+    parts = [
+        "## Agent Outputs",
+        "",
+        "> 阅读顺序：先看研究经理综合，再核对多空辩论和专家意见；"
+        "降级阶段不应作为有效结论。",
+    ]
+    for title, items in (
+        ("研究经理综合", manager),
+        ("多空辩论", debate),
+        ("专家分析", specialists),
+        ("降级或失败阶段", failed),
+        ("确定性研究基线", baseline),
+    ):
+        if not items:
+            continue
+        parts.extend(["", f"### {title}", ""])
+        ordered = sorted(items, key=lambda item: (item.agent_role, item.agent_id))
+        parts.append("\n\n".join(_render_readable_agent_output(item) for item in ordered))
+    return "\n".join(parts)
+
+
+def _render_readable_agent_output(output: AgentOutputEnvelope) -> str:
+    """Backfill scenario sections when rendering older manager archives."""
+    if (
+        output.metadata.get("stage") == "manager"
+        and isinstance(output.payload, InvestmentThesis)
+        and not output.sections
+    ):
+        thesis = output.payload
+        output = output.model_copy(
+            update={
+                "sections": [
+                    AgentOutputSection(title="基础情景", summary=thesis.base_case, evidence=thesis.evidence),
+                    AgentOutputSection(title="乐观情景", summary=thesis.bull_case),
+                    AgentOutputSection(title="悲观情景", summary=thesis.bear_case),
+                    AgentOutputSection(title="潜在催化剂", bullets=thesis.catalysts),
+                    AgentOutputSection(
+                        title="反证与失效条件", bullets=thesis.disconfirming_evidence
+                    ),
+                ]
+            }
+        )
+    return render_agent_output(output)
 
 def _render_analyst_notes(notes: list[AnalystNote]) -> str:
     if not notes:

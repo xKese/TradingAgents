@@ -132,14 +132,19 @@ def test_json_artifact_store_round_trips_agent_outputs(tmp_path):
 
 def test_research_report_renders_agent_outputs():
     output = agent_output_from_trade_signal(_signal())
+    manager = agent_output_from_investment_thesis(_thesis()).model_copy(
+        update={"metadata": {"provider": "deepseek", "stage": "manager"}}
+    )
     bundle = ResearchReportBundle(
         symbol="NVDA",
         as_of_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
-        agent_outputs=[output],
+        agent_outputs=[manager, output],
     )
 
     report = render_research_report(bundle)
 
     assert "## Agent Outputs" in report
+    assert "### 研究经理综合" in report
+    assert "### 确定性研究基线" in report
     assert "### Portfolio Manager: Buy signal for NVDA" in report
     assert "**Type:** trade_signal" in report

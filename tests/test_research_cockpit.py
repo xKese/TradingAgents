@@ -230,6 +230,9 @@ def test_cockpit_posts_selected_narrative_mode():
     assert 'value="multi_agent_research"' in _APP_HTML
     assert 'id="llmResearchStatus"' in _APP_HTML
     assert "/api/llm-research-status" in _APP_HTML
+    assert 'class="agent-role-badge"' in _APP_HTML
+    assert "风险与观察项" in _APP_HTML
+    assert "deterministic_report_chars" not in _APP_HTML
     assert "narrative_mode: $('narrativeMode').value" in _APP_HTML
 
 

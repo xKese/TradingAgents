@@ -168,6 +168,13 @@ class MultiAgentResearchProvider:
                 agent_id="llm-research-manager", agent_role="Research Manager",
                 output_type=AgentOutputType.INVESTMENT_THESIS, headline=thesis.headline,
                 summary=thesis.base_case, evidence=evidence,
+                sections=[
+                    AgentOutputSection(title="基础情景", summary=thesis.base_case, evidence=evidence),
+                    AgentOutputSection(title="乐观情景", summary=thesis.bull_case),
+                    AgentOutputSection(title="悲观情景", summary=thesis.bear_case),
+                    AgentOutputSection(title="潜在催化剂", bullets=thesis.catalysts),
+                    AgentOutputSection(title="反证与失效条件", bullets=thesis.disconfirming_evidence),
+                ],
                 risks=thesis.disconfirming_evidence, payload=payload,
                 confidence=_confidence(thesis.confidence), metadata=self._metadata("manager", audit),
             ))

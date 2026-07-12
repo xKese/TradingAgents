@@ -64,6 +64,9 @@ def test_orchestration_runs_specialists_debate_and_manager():
     assert "Verified deterministic thesis" in llm.prompts[0]
     assert outputs[-1].output_type == AgentOutputType.INVESTMENT_THESIS
     assert outputs[-1].payload.bull_case == "乐观情景"
+    assert [section.title for section in outputs[-1].sections] == [
+        "基础情景", "乐观情景", "悲观情景", "潜在催化剂", "反证与失效条件"
+    ]
     assert outputs[-1].metadata["provider"] == "deepseek"
     assert outputs[-1].metadata["research_only"] is True
     assert outputs[-1].metadata["deterministic_report_chars"] > 0

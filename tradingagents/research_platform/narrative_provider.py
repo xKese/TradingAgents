@@ -30,6 +30,7 @@ class NarrativeMode(str, Enum):
 
     DETERMINISTIC = "deterministic"
     OPENAI_NARRATIVE = "openai_narrative"
+    MULTI_AGENT_RESEARCH = "multi_agent_research"
 
 
 class NarrativeProviderError(RuntimeError):

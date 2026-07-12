@@ -197,3 +197,24 @@ def test_research_job_auto_selects_tushare_only_for_supported_china_hong_kong_sy
         )
         == ResearchDataProvider.YFINANCE
     )
+
+
+def test_local_job_runner_persists_multi_agent_mode_with_fake_provider(tmp_path):
+    runner = LocalResearchJobRunner(
+        tmp_path,
+        provider_factory=lambda request: FixtureProvider(),
+        narrative_provider_factory=lambda request: FixtureNarrativeProvider(),
+    )
+    completed = runner.wait(
+        runner.submit(ResearchJobRequest(
+            symbol="002624", as_of_date=date(2026, 1, 2),
+            narrative_mode="multi_agent_research",
+        )).job_id,
+        timeout=2,
+    )
+    assert completed.status == ResearchJobStatus.SUCCEEDED
+    assert completed.phase == "completed"
+    bundle = JsonResearchRunArchive(tmp_path).load_latest_bundle("002624")
+    assert bundle is not None
+    assert any(output.agent_id == "fixture-narrative" for output in bundle.agent_outputs)
+    runner.shutdown()

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .agent_contracts import TradeDirection, TradeHorizon, TradeSignal
 from .artifact_store import JsonArtifactStore
 from .data_contracts import DataProvider
+from .multi_agent_research import MultiAgentResearchProvider
 from .narrative_provider import (
     NarrativeMode,
     OpenAIResearchNarrativeProvider,
@@ -92,6 +93,7 @@ class ResearchJob(BaseModel):
     report_path: Path | None = None
     run_id: str | None = None
     error: str | None = None
+    phase: str = "queued"
 
 
 def resolve_data_provider(request: ResearchJobRequest) -> ResearchDataProvider:
@@ -182,17 +184,17 @@ class LocalResearchJobRunner:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
     def _execute(self, job_id: str) -> None:
-        self._update(job_id, status=ResearchJobStatus.RUNNING, started_at=_utc_now())
+        self._update(job_id, status=ResearchJobStatus.RUNNING, started_at=_utc_now(), phase="collecting_normalized_evidence")
         job = self.get(job_id)
         if job is None:
             return
         try:
             provider = self.provider_factory(job.request)
-            narrative_provider = (
-                self.narrative_provider_factory(job.request)
-                if job.request.narrative_mode == NarrativeMode.OPENAI_NARRATIVE
-                else None
-            )
+            narrative_provider = None
+            if job.request.narrative_mode in {NarrativeMode.OPENAI_NARRATIVE, NarrativeMode.MULTI_AGENT_RESEARCH}:
+                self._update(job_id, phase="configuring_llm_research")
+                narrative_provider = self.narrative_provider_factory(job.request)
+            self._update(job_id, phase="running_research_workflow")
             signal = _build_manual_signal(job.request)
             result = run_ticker_research(
                 config=ResearchWorkflowConfig(
@@ -215,6 +217,7 @@ class LocalResearchJobRunner:
                 status=ResearchJobStatus.FAILED,
                 completed_at=_utc_now(),
                 error=str(error) or error.__class__.__name__,
+                phase="failed",
             )
             return
 
@@ -224,6 +227,7 @@ class LocalResearchJobRunner:
             completed_at=_utc_now(),
             report_path=result.report_path,
             run_id=result.archived_run.run_id if result.archived_run is not None else None,
+            phase="completed",
         )
 
     def _update(self, job_id: str, **updates: object) -> None:
@@ -242,6 +246,8 @@ class LocalResearchJobRunner:
         self,
         request: ResearchJobRequest,
     ) -> ResearchNarrativeProvider:
+        if request.narrative_mode == NarrativeMode.MULTI_AGENT_RESEARCH:
+            return MultiAgentResearchProvider.from_environment()
         return OpenAIResearchNarrativeProvider.from_environment()
 
 

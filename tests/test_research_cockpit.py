@@ -227,6 +227,9 @@ def test_cockpit_posts_selected_narrative_mode():
     assert "data_provider: $('dataProvider').value" in _APP_HTML
     assert 'id="narrativeMode"' in _APP_HTML
     assert 'value="openai_narrative"' in _APP_HTML
+    assert 'value="multi_agent_research"' in _APP_HTML
+    assert 'id="llmResearchStatus"' in _APP_HTML
+    assert "/api/llm-research-status" in _APP_HTML
     assert "narrative_mode: $('narrativeMode').value" in _APP_HTML
 
 

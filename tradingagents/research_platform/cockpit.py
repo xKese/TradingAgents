@@ -35,6 +35,7 @@ from .game_opportunity_history import (
     build_game_opportunity_history_view,
 )
 from .game_universe import build_game_research_snapshot, list_game_universe_symbols
+from .multi_agent_research import multi_agent_configuration_status
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .research_readiness import build_research_readiness
@@ -261,6 +262,9 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if parsed.path == "/api/llm-research-status":
+            self._send_json(HTTPStatus.OK, multi_agent_configuration_status())
             return
         if parsed.path == "/api/research-jobs":
             self._send_json(
@@ -815,7 +819,7 @@ _APP_HTML = r"""<!doctype html>
       <div class="section-grid equal">
         <div class="panel"><div class="panel-title"><h2>形成判断</h2><span class="panel-meta">可选手工信号</span></div><div class="grid decision-form">
           <div class="wide"><label class="label" for="dataProvider">数据源</label><select id="dataProvider"><option value="auto" selected>自动（A/H股优先 Tushare）</option><option value="tushare">Tushare Pro</option><option value="yfinance">Yahoo Finance</option></select></div>
-          <div class="wide"><label class="label" for="narrativeMode">分析模式</label><select id="narrativeMode"><option value="deterministic" selected>确定性分析</option><option value="openai_narrative">OpenAI 叙事分析</option></select></div>
+          <div class="wide"><label class="label" for="narrativeMode">分析模式</label><select id="narrativeMode"><option value="deterministic" selected>确定性分析</option><option value="multi_agent_research">多智能体研究（研究命题，不批准仓位）</option><option value="openai_narrative">OpenAI 叙事分析</option></select><div class="item-meta" id="llmResearchStatus">正在检查服务端模型配置…</div></div>
           <div><label class="label" for="decisionDirection">方向</label><select id="decisionDirection"><option value="">暂不形成决策</option><option value="buy">买入</option><option value="hold">持有</option><option value="sell">卖出</option></select></div>
           <div class="decision-conditional" hidden><label class="label" for="decisionHorizon">周期</label><select id="decisionHorizon"><option value="short">短期</option><option value="medium" selected>中期</option><option value="long">长期</option></select></div>
           <div class="decision-conditional" hidden><label class="label" for="decisionConfidence">信心（%）</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
@@ -836,6 +840,11 @@ _APP_HTML = r"""<!doctype html>
     const escape = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[char]));
     const initialParams = new URLSearchParams(window.location.search);
     const requestedSymbol = (initialParams.get('symbol') || '').toUpperCase();
+    fetch('/api/llm-research-status').then(response => response.json()).then(status => {
+      const target = $('llmResearchStatus');
+      target.textContent = status.ready ? `已就绪：${status.provider} / ${status.model}` : status.message;
+      target.className = 'item-meta ' + (status.ready ? 'positive' : 'warning');
+    }).catch(() => { $('llmResearchStatus').textContent = '无法读取服务端模型配置状态'; });
     const validViews = new Set(['overview', 'game', 'financials', 'research', 'decision']);
     let activeView = validViews.has(initialParams.get('view')) ? initialParams.get('view') : 'overview';
     const translations = {

@@ -191,7 +191,11 @@ def test_run_ticker_research_handles_empty_provider():
     assert "No normalized price bars available." in result.markdown
 
 class FixtureNarrativeProvider:
+    def __init__(self):
+        self.last_context = None
+
     def generate(self, context):
+        self.last_context = context
         from tradingagents.research_platform.agent_contracts import (
             AgentOutputEnvelope,
             AgentOutputType,
@@ -216,6 +220,7 @@ class FixtureNarrativeProvider:
 
 def test_run_ticker_research_persists_optional_narrative_output(tmp_path):
     archive = JsonResearchRunArchive(tmp_path / "cache")
+    narrative_provider = FixtureNarrativeProvider()
     result = run_ticker_research(
         config=ResearchWorkflowConfig(
             symbol="NVDA",
@@ -224,11 +229,15 @@ def test_run_ticker_research_persists_optional_narrative_output(tmp_path):
         ),
         provider=FakeProvider(),
         archive=archive,
-        narrative_provider=FixtureNarrativeProvider(),
+        narrative_provider=narrative_provider,
     )
 
     narrative = next(
         output for output in result.bundle.agent_outputs if output.agent_id == "fixture-narrative"
     )
     assert narrative.evidence
+    assert narrative_provider.last_context is not None
+    assert len(narrative_provider.last_context.deterministic_outputs) == 4
+    assert "# Personal Research Report: NVDA" in narrative_provider.last_context.deterministic_report_markdown
+    assert "Investment Thesis" in narrative_provider.last_context.deterministic_report_markdown
     assert archive.load_latest_bundle("NVDA") == result.bundle

@@ -48,6 +48,7 @@ def context():
         symbol="002624", as_of_date=date(2026, 7, 12),
         evidence=[EvidenceRef(source_id="price:fixture", description="normalized bars",
                               as_of_date=date(2026, 7, 12), confidence=.9)],
+        deterministic_report_markdown="# Deterministic report\nVerified deterministic thesis.",
     )
 
 
@@ -59,10 +60,14 @@ def test_orchestration_runs_specialists_debate_and_manager():
 
     assert len(outputs) == 7
     assert len(llm.prompts) == 7
+    assert "Deterministic report" in llm.prompts[0]
+    assert "Verified deterministic thesis" in llm.prompts[0]
     assert outputs[-1].output_type == AgentOutputType.INVESTMENT_THESIS
     assert outputs[-1].payload.bull_case == "乐观情景"
     assert outputs[-1].metadata["provider"] == "deepseek"
     assert outputs[-1].metadata["research_only"] is True
+    assert outputs[-1].metadata["deterministic_report_chars"] > 0
+    assert outputs[-1].metadata["deterministic_report_truncated"] is False
     assert all(output.output_type != AgentOutputType.TRADE_SIGNAL for output in outputs)
 
 

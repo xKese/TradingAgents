@@ -15,6 +15,7 @@ from .agent_artifacts import (
 )
 from .agent_contracts import (
     AgentOutputEnvelope,
+    AgentOutputType,
     AnalystNote,
     ConfidenceLevel,
     EvidenceRef,
@@ -130,12 +131,31 @@ def run_ticker_research(
         signal=signal,
     )
     if narrative_provider is not None:
+        deterministic_outputs = [
+            output
+            for output in agent_outputs
+            if output.output_type != AgentOutputType.TRADE_SIGNAL
+        ]
+        deterministic_report_markdown = render_research_report(
+            ResearchReportBundle(
+                symbol=config.symbol,
+                as_of_date=datetime.combine(config.as_of_date, time.min, tzinfo=timezone.utc),
+                price_bars=price_bars,
+                fundamentals=fundamentals,
+                news=news,
+                agent_outputs=deterministic_outputs,
+                analyst_notes=analyst_notes,
+                thesis=thesis,
+            )
+        )
         context = ResearchNarrativeContext(
             symbol=config.symbol,
             as_of_date=config.as_of_date,
             price_bars=price_bars,
             fundamentals=fundamentals,
             news=news,
+            deterministic_outputs=deterministic_outputs,
+            deterministic_report_markdown=deterministic_report_markdown,
             evidence=build_narrative_evidence(
                 symbol=config.symbol,
                 as_of_date=config.as_of_date,

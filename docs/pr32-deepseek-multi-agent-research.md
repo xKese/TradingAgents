@@ -32,3 +32,8 @@ rejected; a failed role degrades explicitly while remaining roles continue.
 The manager emits an `InvestmentThesis`, never a `TradeSignal`. LLM output
 cannot approve sizing or bypass deterministic risk review. Select **多智能体研究**
 in the cockpit; missing configuration fails cleanly before model calls.
+
+
+## Deterministic research brief
+
+Before any LLM stage, the workflow renders a read-only deterministic brief from the same normalized price, fundamental, and news records. It contains deterministic analyst outputs, the deterministic thesis, and the preliminary Markdown report. Multi-agent prompt v2 receives this brief with the raw normalized records while retaining the evidence whitelist. The report is capped at 24,000 characters; audit metadata records its included length, truncation status, and deterministic output count.

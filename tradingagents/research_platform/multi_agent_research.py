@@ -31,7 +31,8 @@ from .narrative_provider import (
     ResearchNarrativeContext,
 )
 
-PROMPT_VERSION = "multi-agent-research-v1"
+PROMPT_VERSION = "multi-agent-research-v2"
+MAX_DETERMINISTIC_REPORT_CHARS = 24_000
 ANALYST_ROLES = (
     ("fundamentals", "基本面分析师"),
     ("market", "技术与市场分析师"),
@@ -111,6 +112,7 @@ class MultiAgentResearchProvider:
         self.config = config
         self.llm = llm
         self.progress_callback = progress_callback
+        self._context_audit: dict[str, str | int | float | bool | None] = {}
 
     def set_progress_callback(self, callback: Callable[[str], None]) -> None:
         self.progress_callback = callback
@@ -127,6 +129,12 @@ class MultiAgentResearchProvider:
         return cls(config=config, llm=llm)
 
     def generate(self, context: ResearchNarrativeContext) -> list[AgentOutputEnvelope]:
+        report_chars = len(context.deterministic_report_markdown or "")
+        self._context_audit = {
+            "deterministic_output_count": len(context.deterministic_outputs),
+            "deterministic_report_chars": min(report_chars, MAX_DETERMINISTIC_REPORT_CHARS),
+            "deterministic_report_truncated": report_chars > MAX_DETERMINISTIC_REPORT_CHARS,
+        }
         outputs: list[AgentOutputEnvelope] = []
         notes: list[AgentOutputEnvelope] = []
         for role_id, role_name in ANALYST_ROLES:
@@ -198,7 +206,7 @@ class MultiAgentResearchProvider:
 
     def _metadata(self, stage: str, audit: dict[str, Any]) -> dict[str, Any]:
         return {"provider": self.config.provider, "model": self.config.model,
-            "prompt_version": PROMPT_VERSION, "stage": stage, "research_only": True, **audit}
+            "prompt_version": PROMPT_VERSION, "stage": stage, "research_only": True, **self._context_audit, **audit}
 
     def _failure(self, context: ResearchNarrativeContext, role_id: str, role_name: str, error: Exception) -> AgentOutputEnvelope:
         return AgentOutputEnvelope(symbol=context.symbol, as_of_date=context.as_of_date,
@@ -211,7 +219,7 @@ class MultiAgentResearchProvider:
 
 def _system(role: str, context: ResearchNarrativeContext) -> str:
     ids = ", ".join(item.source_id for item in context.evidence) or "none"
-    return (f"你是{role}。只可使用所给 normalized records，禁止引入外部事实或虚构引用。"
+    return (f"你是{role}。只可使用所给 normalized records 和由它们生成的确定性研究底稿，禁止引入外部事实或虚构引用。"
             f"只能引用这些 evidence_source_ids: {ids}。不得给出交易方向、仓位或绕过风控。\n")
 
 
@@ -220,7 +228,19 @@ def _context_prompt(context: ResearchNarrativeContext) -> str:
     fundamentals = [f"{k}={v}" for row in context.fundamentals[-2:] for k, v in sorted(row.metrics.items())]
     news = [f"{x.published_at.date()}|{x.provider}|{x.title}" for x in context.news[:12]]
     refs = [f"{x.source_id}|{x.description}" for x in context.evidence]
-    return f"Symbol={context.symbol}; as_of={context.as_of_date}\nPrices={prices}\nFundamentals={fundamentals}\nNews={news}\nEvidence={refs}\n"
+    deterministic_outputs = [
+        f"{x.agent_role}|{x.output_type.value}|{x.headline}|{x.summary}"
+        for x in context.deterministic_outputs
+    ]
+    report = context.deterministic_report_markdown or "None available"
+    report_truncated = len(report) > MAX_DETERMINISTIC_REPORT_CHARS
+    report = report[:MAX_DETERMINISTIC_REPORT_CHARS]
+    return (
+        f"Symbol={context.symbol}; as_of={context.as_of_date}\n"
+        f"Prices={prices}\nFundamentals={fundamentals}\nNews={news}\nEvidence={refs}\n"
+        f"Deterministic outputs={deterministic_outputs}\n"
+        f"Deterministic report (truncated={report_truncated}):\n{report}\n"
+    )
 
 
 def _outputs_prompt(outputs: list[AgentOutputEnvelope]) -> str:

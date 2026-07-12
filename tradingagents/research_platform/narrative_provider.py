@@ -52,6 +52,8 @@ class ResearchNarrativeContext(BaseModel):
     fundamentals: list[FundamentalSnapshot] = Field(default_factory=list)
     news: list[NewsItem] = Field(default_factory=list)
     evidence: list[EvidenceRef] = Field(default_factory=list)
+    deterministic_outputs: list[AgentOutputEnvelope] = Field(default_factory=list)
+    deterministic_report_markdown: str | None = None
 
 
 class ResearchNarrativeProvider(Protocol):

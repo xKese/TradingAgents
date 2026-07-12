@@ -34,7 +34,7 @@ from .narrative_provider import (
     ResearchNarrativeContext,
 )
 
-PROMPT_VERSION = "multi-agent-research-v3"
+PROMPT_VERSION = "multi-agent-research-v4"
 MAX_DETERMINISTIC_REPORT_CHARS = 24_000
 ANALYST_ROLES = (
     ("fundamentals", "基本面分析师"),
@@ -265,8 +265,21 @@ class MultiAgentResearchProvider:
     def _invoke(self, schema: type[BaseModel], prompt: str) -> tuple[Any, dict[str, Any]]:
         started = perf_counter()
         include_raw = True
+        structured_method = "json_mode" if self.config.provider == "deepseek" else None
+        if structured_method == "json_mode":
+            schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+            prompt = (
+                prompt
+                + "\n只返回一个JSON对象，不要Markdown代码块或额外说明。JSON必须匹配此schema："
+                + schema_json
+            )
         try:
-            structured_llm = self.llm.with_structured_output(schema, include_raw=True)
+            if structured_method is not None:
+                structured_llm = self.llm.with_structured_output(
+                    schema, method=structured_method, include_raw=True
+                )
+            else:
+                structured_llm = self.llm.with_structured_output(schema, include_raw=True)
         except TypeError:
             include_raw = False
             structured_llm = self.llm.with_structured_output(schema)
@@ -283,6 +296,7 @@ class MultiAgentResearchProvider:
         audit = {
             "latency_ms": elapsed,
             "structured_output_recovered": recovered,
+            "structured_method": structured_method or "provider_default",
             **{f"usage_{key}": item for key, item in usage.items() if isinstance(item, (str, int, float, bool))},
         }
         return value, audit

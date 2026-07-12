@@ -43,3 +43,6 @@ Before any LLM stage, the workflow renders a read-only deterministic brief from 
 Prompt v3 normalizes common OpenAI-compatible structured-output variations before enforcing the stable contracts: numeric or percentage confidence values, scalar list fields, oversized text, and excessive bullet counts. Evidence IDs remain strictly restricted to the normalized evidence whitelist.
 
 The market analyst receives deterministic features computed from normalized OHLCV bars rather than being asked to perform arithmetic: 5/20/60-day returns, 5/20/60-day moving averages, close-to-SMA20 distance, 20-day annualized volatility, 60-day maximum drawdown, RSI(14), 5-day versus 20-day volume ratio, and a deterministic trend state. Audit metadata records the bar and feature counts.
+## DeepSeek JSON-mode protocol
+
+Prompt v4 overrides structured output to `json_mode` inside the research adapter for DeepSeek only. DeepSeek V4 rejects forced `tool_choice`, so function-calling could legitimately return a normal answer without invoking the schema tool. JSON mode forces a content JSON object and the compact Pydantic schema is included in the prompt. This does not change the legacy TradingAgents client behavior or other providers.

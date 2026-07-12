@@ -187,7 +187,11 @@ def test_deterministic_technical_snapshot_computes_market_features():
 
 
 class RawFallbackLLM:
-    def with_structured_output(self, schema, include_raw=False):
+    def __init__(self):
+        self.methods = []
+
+    def with_structured_output(self, schema, method=None, include_raw=False):
+        self.methods.append(method)
         class Runner:
             def invoke(self, prompt):
                 if schema is StructuredThesis:
@@ -210,12 +214,15 @@ class RawFallbackLLM:
 
 
 def test_raw_json_is_recovered_when_provider_parser_returns_none():
+    llm = RawFallbackLLM()
     outputs = MultiAgentResearchProvider(
         config=LLMResearchConfig(provider="deepseek", model="configured-model"),
-        llm=RawFallbackLLM(),
+        llm=llm,
     ).generate(context())
     assert all(not output.metadata.get("failed") for output in outputs)
     assert all(output.metadata["structured_output_recovered"] is True for output in outputs)
+    assert set(llm.methods) == {"json_mode"}
+    assert all(output.metadata["structured_method"] == "json_mode" for output in outputs)
     assert outputs[0].confidence.value == "high"
     assert outputs[-1].payload.confidence == 0.65
     assert outputs[-1].metadata["usage_input_tokens"] == 10

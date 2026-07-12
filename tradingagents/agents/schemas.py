@@ -65,6 +65,21 @@ class TraderAction(str, Enum):
     SELL = "Sell"
 
 
+class HoldingRecommendation(str, Enum):
+    """Overnight-vs-intraday holding-duration call made by the Portfolio Manager.
+
+    Distinct from ``rating`` (direction) and ``time_horizon`` (a coarse,
+    optional multi-week/month band): this is the specific overnight decision
+    that matters most for options positions, where the position itself may
+    not even exist past today's close (theta decay), and a name-specific gap
+    can swing the position more than a full session of intraday movement.
+    """
+
+    HOLD_OVERNIGHT = "Hold Overnight"
+    SQUARE_OFF_INTRADAY = "Square Off Intraday"
+    DATA_DEPENDENT = "Data-Dependent"
+
+
 # ---------------------------------------------------------------------------
 # Research Manager
 # ---------------------------------------------------------------------------
@@ -221,6 +236,32 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    holding_recommendation: HoldingRecommendation = Field(
+        description=(
+            "Whether to hold this position overnight or square it off before "
+            "today's close — evaluated independently of the directional rating "
+            "and the multi-week time_horizon above. Weigh overnight gap risk "
+            "(a name-specific catalyst, or a broad market move while this "
+            "market is closed) and, if the position is held via options, "
+            "theta decay through the close, against whichever intraday move "
+            "has already been captured. Use Hold Overnight only when the "
+            "thesis specifically depends on something that resolves after "
+            "today's close (an anticipated catalyst, a multi-day setup still "
+            "developing). Use Square Off Intraday when the case is that "
+            "today's move is what the thesis was for and there's no specific "
+            "reason to carry overnight risk. Use Data-Dependent only when the "
+            "call genuinely hinges on how the position performs into the "
+            "close (e.g. only hold overnight if still profitable) — state "
+            "that condition explicitly in holding_rationale, not just the tier."
+        ),
+    )
+    holding_rationale: str = Field(
+        description=(
+            "One to two sentences justifying the holding_recommendation "
+            "specifically — the overnight risk being weighed, not a restatement "
+            "of the directional thesis already covered in investment_thesis."
+        ),
+    )
 
     @field_validator("price_target", mode="before")
     @classmethod
@@ -242,6 +283,10 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         f"**Executive Summary**: {decision.executive_summary}",
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
+        "",
+        f"**Holding Recommendation**: {decision.holding_recommendation.value}",
+        "",
+        f"**Holding Rationale**: {decision.holding_rationale}",
     ]
     if decision.price_target is not None:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])

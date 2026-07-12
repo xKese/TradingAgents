@@ -10,7 +10,12 @@ to it.
 
 import pytest
 
-from tradingagents.agents.utils.rating import RATINGS_5_TIER, parse_rating
+from tradingagents.agents.utils.rating import (
+    HOLDING_RECOMMENDATIONS,
+    RATINGS_5_TIER,
+    parse_holding_recommendation,
+    parse_rating,
+)
 from tradingagents.graph.signal_processing import SignalProcessor
 
 # ---------------------------------------------------------------------------
@@ -62,6 +67,51 @@ class TestParseRating:
 
 
 # ---------------------------------------------------------------------------
+# Heuristic parser: overnight-vs-intraday holding call (issue #27)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestParseHoldingRecommendation:
+    def test_explicit_label_hold_overnight(self):
+        assert parse_holding_recommendation(
+            "Holding Recommendation: Hold Overnight\nEarnings due tomorrow."
+        ) == "Hold Overnight"
+
+    def test_explicit_label_with_markdown_bold(self):
+        assert parse_holding_recommendation(
+            "**Holding Recommendation**: Square Off Intraday\n"
+            "No overnight catalyst."
+        ) == "Square Off Intraday"
+
+    def test_explicit_label_with_trailing_qualifier(self):
+        # The model may append reasoning after the label on the same line.
+        text = "Holding Recommendation: Hold Overnight — thesis depends on tomorrow's guidance."
+        assert parse_holding_recommendation(text) == "Hold Overnight"
+
+    def test_rendered_pm_markdown_shape(self):
+        # The exact shape produced by render_pm_decision must always parse.
+        text = (
+            "**Rating**: Buy\n\n"
+            "**Executive Summary**: Enter at $189-192, 6% portfolio cap.\n\n"
+            "**Investment Thesis**: AI capex cycle intact.\n\n"
+            "**Holding Recommendation**: Data-Dependent\n\n"
+            "**Holding Rationale**: Hold only if still green into the close."
+        )
+        assert parse_holding_recommendation(text) == "Data-Dependent"
+
+    def test_no_label_returns_default(self):
+        assert parse_holding_recommendation("No mention of holding duration at all.") == "Data-Dependent"
+
+    def test_no_label_custom_default(self):
+        assert parse_holding_recommendation("Plain prose.", default="Hold Overnight") == "Hold Overnight"
+
+    def test_all_three_values_recognised(self):
+        for v in HOLDING_RECOMMENDATIONS:
+            assert parse_holding_recommendation(f"Holding Recommendation: {v}") == v
+
+
+# ---------------------------------------------------------------------------
 # SignalProcessor: thin adapter over the heuristic
 # ---------------------------------------------------------------------------
 
@@ -87,3 +137,8 @@ class TestSignalProcessor:
     def test_default_when_no_rating_present(self):
         sp = SignalProcessor()
         assert sp.process_signal("Plain prose without a recommendation.") == "Hold"
+
+    def test_returns_holding_recommendation_from_pm_markdown(self):
+        sp = SignalProcessor()
+        md = "**Holding Recommendation**: Square Off Intraday\n\n**Holding Rationale**: Reasons."
+        assert sp.process_holding_recommendation(md) == "Square Off Intraday"

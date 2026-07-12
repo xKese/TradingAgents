@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tradingagents.agents.utils.rating import parse_rating
+from tradingagents.agents.utils.rating import parse_holding_recommendation, parse_rating
 
 
 class SignalProcessor:
@@ -29,3 +29,7 @@ class SignalProcessor:
     def process_signal(self, full_signal: str) -> str:
         """Return one of Buy / Overweight / Hold / Underweight / Sell."""
         return parse_rating(full_signal)
+
+    def process_holding_recommendation(self, full_signal: str) -> str:
+        """Return one of Hold Overnight / Square Off Intraday / Data-Dependent."""
+        return parse_holding_recommendation(full_signal)

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
-from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+from tradingagents.agents.schemas import HoldingRecommendation, PortfolioDecision, PortfolioRating
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.graph.propagation import Propagator
 from tradingagents.graph.reflection import Reflector
@@ -93,6 +93,8 @@ def _structured_pm_llm(captured: dict, decision: PortfolioDecision | None = None
             rating=PortfolioRating.HOLD,
             executive_summary="Hold the position; await catalyst.",
             investment_thesis="Balanced view; neither side carried the debate.",
+            holding_recommendation=HoldingRecommendation.DATA_DEPENDENT,
+            holding_rationale="No overnight-specific catalyst either way.",
         )
     structured = MagicMock()
     structured.invoke.side_effect = lambda prompt: (
@@ -716,6 +718,8 @@ class TestPortfolioManagerInjection:
             investment_thesis="AI capex cycle remains intact; institutional flows constructive.",
             price_target=215.0,
             time_horizon="3-6 months",
+            holding_recommendation=HoldingRecommendation.HOLD_OVERNIGHT,
+            holding_rationale="Multi-week setup still developing; no reason to exit intraday.",
         )
         llm = _structured_pm_llm(captured, decision)
         pm_node = create_portfolio_manager(llm)

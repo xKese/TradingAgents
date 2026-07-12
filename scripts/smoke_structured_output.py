@@ -152,7 +152,7 @@ def main() -> int:
     checks = [
         ("Research Manager", investment_plan, ["**Recommendation**:"]),
         ("Trader",           trader_plan,     ["**Action**:", "FINAL TRANSACTION PROPOSAL:"]),
-        ("Portfolio Manager", final_decision, ["**Rating**:", "**Executive Summary**:", "**Investment Thesis**:"]),
+        ("Portfolio Manager", final_decision, ["**Rating**:", "**Executive Summary**:", "**Investment Thesis**:", "**Holding Recommendation**:", "**Holding Rationale**:"]),
     ]
     print("\n" + "=" * 70 + "\nStructure checks\n" + "=" * 70)
     failures = 0

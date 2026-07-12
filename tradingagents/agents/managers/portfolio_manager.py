@@ -52,6 +52,11 @@ def create_portfolio_manager(llm):
 - **Underweight**: Reduce exposure, take partial profits
 - **Sell**: Exit position or avoid entry
 
+**Holding Recommendation** (use exactly one, independent of the rating above):
+- **Hold Overnight**: only when the thesis specifically depends on something that resolves after today's close (an anticipated catalyst, a multi-day setup still developing)
+- **Square Off Intraday**: today's move is what the thesis was for; no specific reason to carry overnight gap risk (and, if held via options, overnight theta decay)
+- **Data-Dependent**: the call genuinely hinges on how the position performs into the close — state that condition explicitly
+
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**

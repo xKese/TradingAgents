@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_analyst
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
+    HoldingRecommendation,
     PortfolioDecision,
     PortfolioRating,
     ResearchPlan,
@@ -94,6 +95,8 @@ class TestNullishFloatCoercion:
             executive_summary="s",
             investment_thesis="t",
             price_target="N/A",
+            holding_recommendation=HoldingRecommendation.DATA_DEPENDENT,
+            holding_rationale="r",
         )
         assert d.price_target is None
 

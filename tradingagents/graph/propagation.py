@@ -22,6 +22,7 @@ class Propagator:
         asset_type: str = "stock",
         past_context: str = "",
         instrument_context: str = "",
+        external_signal_context: str = "",
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -30,6 +31,12 @@ class Propagator:
         ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
         fall back to ticker-only context via
         ``get_instrument_context_from_state``.
+
+        ``external_signal_context`` is an optional natural-language summary of
+        a prior signal from an external scanner (trading-workspace#37, e.g.
+        news-gap-ml's technical-trigger leg) — informational context for the
+        market analyst to reason *about*, not a substitute for its own
+        independent analysis. Empty by default; most callers never set it.
         """
         return {
             "messages": [("human", company_name)],
@@ -38,6 +45,7 @@ class Propagator:
             "instrument_context": instrument_context,
             "trade_date": str(trade_date),
             "past_context": past_context,
+            "external_signal_context": external_signal_context,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

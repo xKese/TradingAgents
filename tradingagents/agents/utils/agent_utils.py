@@ -42,6 +42,7 @@ __all__ = [
     "build_instrument_context",
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
+    "get_external_signal_context_from_state",
     "get_language_instruction",
     "create_msg_delete",
 ]
@@ -185,6 +186,17 @@ def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
         str(state["company_of_interest"]),
         state.get("asset_type", "stock"),
     )
+
+
+def get_external_signal_context_from_state(state: Mapping[str, Any]) -> str:
+    """Return the external-scanner signal context for the current run, or ""
+    when none was injected (trading-workspace#37 — most callers never set
+    this; only news-gap-ml's technical-trigger leg does). No fallback
+    construction here, unlike get_instrument_context_from_state — there's no
+    deterministic way to derive this lazily if it wasn't provided at run
+    start, so an absent value just means "no prior signal to consider"."""
+    context = state.get("external_signal_context")
+    return context if isinstance(context, str) and context.strip() else ""
 
 
 def create_msg_delete():

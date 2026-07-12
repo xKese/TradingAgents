@@ -46,3 +46,37 @@ def parse_rating(text: str, default: str = "Hold") -> str:
                 return clean.capitalize()
 
     return default
+
+
+# Overnight-vs-intraday holding call (see HoldingRecommendation in schemas.py).
+# Values are multi-word, so this uses a "rest of line" capture rather than
+# _RATING_LABEL_RE's single-word one — matched by prefix against the three
+# canonical values rather than exact string equality, tolerant of trailing
+# punctuation/qualifiers the model appends after the label.
+_HOLDING_LABEL_RE = re.compile(r"holding\s*recommendation.*?[:\-]\s*(.+)", re.IGNORECASE)
+HOLDING_RECOMMENDATIONS: tuple[str, ...] = ("Hold Overnight", "Square Off Intraday", "Data-Dependent")
+
+
+def parse_holding_recommendation(text: str, default: str = "Data-Dependent") -> str:
+    """Heuristically extract the overnight-vs-intraday holding call from prose text.
+
+    Same two-pass strategy as parse_rating: an explicit "Holding
+    Recommendation: X" label first, then the first canonical value found
+    anywhere in the text. Defaults to "Data-Dependent" rather than either
+    extreme when nothing matches — an unparseable response should read as
+    "needs a human look," not as a confident call either way.
+    """
+    for line in text.splitlines():
+        m = _HOLDING_LABEL_RE.search(line)
+        if m:
+            candidate = m.group(1).strip(" *")
+            for value in HOLDING_RECOMMENDATIONS:
+                if candidate.lower().startswith(value.lower()):
+                    return value
+
+    lower_text = text.lower()
+    for value in HOLDING_RECOMMENDATIONS:
+        if value.lower() in lower_text:
+            return value
+
+    return default

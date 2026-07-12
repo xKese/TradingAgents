@@ -21,6 +21,12 @@ from tradingagents.dataflows.utils import safe_ticker_component
 from .artifact_store import JsonArtifactStore
 from .company_profile import build_company_profile
 from .data_health import build_cache_data_health
+from .decision_journal import (
+    JsonDecisionJournal,
+    build_journal_views,
+    create_journal_entry,
+    review_journal_entry,
+)
 from .financial_health import assess_financial_health
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
@@ -100,6 +106,12 @@ def build_cockpit_snapshot(
     company_profile = build_company_profile(fundamentals, symbol=normalized_symbol)
     valuation_context = build_valuation_context(fundamentals)
     financial_health = assess_financial_health(latest_financial_quality)
+    journal = JsonDecisionJournal(store.root)
+    journal_views = build_journal_views(
+        journal.list_entries(normalized_symbol),
+        price_bars=bars,
+        as_of_date=date.today(),
+    )
     archive = JsonResearchRunArchive(store.root)
     runs = archive.list_runs(normalized_symbol)
     selected_run_id = run_id or (runs[0].run_id if runs else None)
@@ -150,6 +162,7 @@ def build_cockpit_snapshot(
         "report_workspace": build_report_workspace(latest_run),
         "data_health": data_health,
         "runs": [item.model_dump(mode="json") for item in runs[:20]],
+        "decision_journal": [item.model_dump(mode="json") for item in journal_views],
         "artifact_counts": {
             "price_bars": len(bars),
             "fundamental_snapshots": len(fundamentals),
@@ -260,6 +273,19 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if parsed.path == "/api/decision-journal":
+            query = parse_qs(parsed.query)
+            symbol = query.get("symbol", [None])[0]
+            entries = JsonDecisionJournal(self.store.root).list_entries(symbol)
+            views = []
+            for entry in entries:
+                bars = self.store.load_price_bars(entry.symbol, _EARLIEST_DATE, date.max)
+                views.extend(build_journal_views([entry], price_bars=bars, as_of_date=date.today()))
+            self._send_json(
+                HTTPStatus.OK,
+                {"entries": [item.model_dump(mode="json") for item in views]},
+            )
+            return
         if parsed.path == "/api/snapshot":
             query = parse_qs(parsed.query)
             symbol = query.get("symbol", [""])[0]
@@ -301,7 +327,71 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-        if urlparse(self.path).path == "/api/research-jobs":
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/decision-journal":
+            try:
+                payload = self._read_json_body()
+                symbol = str(payload.get("symbol", "")).strip().upper()
+                run_id = str(payload.get("run_id", "")).strip()
+                review_due_date = date.fromisoformat(str(payload.get("review_due_date", "")))
+                bundle = JsonResearchRunArchive(self.store.root).load_bundle(symbol, run_id)
+                if bundle is None:
+                    raise ValueError("research run was not found for this symbol")
+                if bundle.signal is None:
+                    raise ValueError("research run has no manual decision to journal")
+                price_bars = [
+                    *bundle.price_bars,
+                    *self.store.load_price_bars(
+                        symbol,
+                        _EARLIEST_DATE,
+                        bundle.as_of_date.date(),
+                        as_of_date=bundle.as_of_date.date(),
+                    ),
+                ]
+                journal = JsonDecisionJournal(self.store.root)
+                if journal.find_for_run(symbol, run_id) is not None:
+                    raise ValueError("research run is already in the decision journal")
+                entry = create_journal_entry(
+                    symbol=symbol,
+                    research_run_id=run_id,
+                    signal=bundle.signal,
+                    review_due_date=review_due_date,
+                    price_bars=price_bars,
+                )
+                journal.add_entry(entry)
+            except (UnicodeDecodeError, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            self._send_json(HTTPStatus.CREATED, {"entry": entry.model_dump(mode="json")})
+            return
+        if parsed.path.startswith("/api/decision-journal/") and parsed.path.endswith("/review"):
+            entry_id = parsed.path.removeprefix("/api/decision-journal/").removesuffix("/review").strip("/")
+            try:
+                payload = self._read_json_body()
+                reviewed_on = date.fromisoformat(str(payload.get("reviewed_on", "")))
+                journal = JsonDecisionJournal(self.store.root)
+                entry = journal.get_entry(entry_id)
+                if entry is None:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "decision journal entry was not found"})
+                    return
+                reviewed = review_journal_entry(
+                    entry,
+                    reviewed_on=reviewed_on,
+                    price_bars=self.store.load_price_bars(
+                        entry.symbol,
+                        _EARLIEST_DATE,
+                        reviewed_on,
+                        as_of_date=reviewed_on,
+                    ),
+                    note=str(payload.get("note", "")),
+                )
+                journal.replace_entry(reviewed)
+            except (UnicodeDecodeError, ValueError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            self._send_json(HTTPStatus.OK, {"entry": reviewed.model_dump(mode="json")})
+            return
+        if parsed.path == "/api/research-jobs":
             try:
                 request = ResearchJobRequest.model_validate(self._read_json_body())
             except (UnicodeDecodeError, ValueError) as error:
@@ -517,6 +607,7 @@ _APP_HTML = r"""<!doctype html>
         <div class="wide"><label class="label" for="decisionRationale">Rationale</label><textarea id="decisionRationale">Manual cockpit decision.</textarea></div>
       </div></div>
       <div class="panel"><div class="panel-title"><h2>Decision and Risk</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Decision Journal</h2><button id="addJournalEntry" type="button">Journal Selected Decision</button></div><div class="grid decision-form"><div><label class="label" for="journalReviewDue">Review Due Date</label><input id="journalReviewDue" type="date"></div><div><label class="label" for="journalReviewedOn">Review Date</label><input id="journalReviewedOn" type="date"></div><div class="wide"><label class="label" for="journalReviewNote">Review Note</label><textarea id="journalReviewNote" placeholder="Optional review note"></textarea></div></div><ul class="items" id="decisionJournal"></ul><div class="empty" id="decisionJournalEmpty">Select an archived manual decision to add it to your journal.</div></div>
       <div class="panel"><div class="panel-title"><h2>Backtest Snapshot</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
     </section>
   </main>
@@ -624,6 +715,23 @@ _APP_HTML = r"""<!doctype html>
       $('decision').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
       $('decisionMeta').textContent = `Generated ${run.generated_at.slice(0,16).replace('T', ' ')}`;
     }
+    function renderDecisionJournal(views, run) {
+      const items = views || [];
+      const canJournal = Boolean(run?.run_id && run?.signal);
+      $('addJournalEntry').disabled = !canJournal;
+      $('decisionJournalEmpty').hidden = items.length > 0;
+      if (!items.length) { $('decisionJournal').innerHTML = ''; return; }
+      $('decisionJournal').innerHTML = items.map(view => {
+        const entry = view.entry;
+        const review = entry.review;
+        const returnValue = review ? review.directional_return_pct : view.directional_return_pct;
+        const price = review ? review.review_price : view.latest_available_price;
+        const priceDate = review ? review.review_price_date : view.latest_available_price_date;
+        const detail = review ? `Reviewed ${review.reviewed_on}` : `Due ${entry.review_due_date}`;
+        const action = review ? '' : `<button type="button" data-journal-review="${escape(entry.entry_id)}">Record Review</button>`;
+        return `<li class="item"><div class="item-title">${escape(entry.direction)} - ${escape(entry.horizon)} - ${escape(entry.symbol)}</div><div class="item-meta">${escape(view.status)} | ${escape(detail)} | Entry ${escape(money(entry.entry_price, entry.currency))} on ${escape(entry.entry_price_date)}</div><div class="item-summary">${escape(entry.rationale)}</div><div class="tags"><span class="tag">Directional return: ${escape(pct(returnValue))}</span><span class="tag">Reference: ${escape(price == null ? 'N/A' : money(price, entry.currency))}${priceDate ? ` on ${escape(priceDate)}` : ''}</span></div>${review?.note ? `<div class="item-summary">${escape(review.note)}</div>` : ''}<div class="report-actions">${action}</div></li>`;
+      }).join('');
+    }
     function clearReportWorkspace(message) {
       $('openReport').removeAttribute('href'); $('openReport').setAttribute('aria-disabled', 'true');
       $('exportReport').removeAttribute('href'); $('exportReport').setAttribute('aria-disabled', 'true');
@@ -654,6 +762,7 @@ _APP_HTML = r"""<!doctype html>
       $('backtest').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
       $('backtestMeta').textContent = 'Latest archived run';
     }
+    let activeSnapshot = null;
     let activeRunId = null;
     let activeJobId = null;
     let activeBatchJobIds = [];
@@ -764,6 +873,33 @@ _APP_HTML = r"""<!doctype html>
         $('status').textContent = 'Unable to start local research.';
       }
     }
+    async function addJournalEntry() {
+      const run = activeSnapshot?.latest_run;
+      const reviewDueDate = $('journalReviewDue').value;
+      if (!run?.run_id || !run?.signal || !reviewDueDate) {
+        $('status').textContent = 'Select an archived manual decision and a review due date.';
+        return;
+      }
+      $('addJournalEntry').disabled = true;
+      try {
+        const payload = await fetch('/api/decision-journal', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol: activeSnapshot.symbol, run_id: run.run_id, review_due_date: reviewDueDate})}).then(response => response.ok ? response.json() : response.json().then(body => Promise.reject(new Error(body.error || 'Unable to journal decision'))));
+        $('status').textContent = `Decision journaled for ${payload.entry.symbol}.`;
+        await loadSnapshot();
+      } catch (error) {
+        $('status').textContent = error.message || 'Unable to journal the selected decision.';
+        renderDecisionJournal(activeSnapshot?.decision_journal, activeSnapshot?.latest_run);
+      }
+    }
+    async function recordJournalReview(entryId) {
+      const reviewedOn = $('journalReviewedOn').value;
+      if (!reviewedOn) { $('status').textContent = 'Choose a review date before recording a review.'; return; }
+      try {
+        const payload = await fetch(`/api/decision-journal/${encodeURIComponent(entryId)}/review`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reviewed_on: reviewedOn, note: $('journalReviewNote').value.trim()})}).then(response => response.ok ? response.json() : response.json().then(body => Promise.reject(new Error(body.error || 'Unable to record review'))));
+        $('journalReviewNote').value = '';
+        $('status').textContent = `Review recorded for ${payload.entry.symbol}.`;
+        await loadSnapshot();
+      } catch (error) { $('status').textContent = error.message || 'Unable to record the review.'; }
+    }
     async function refreshSymbols(preferredSymbol) {
       const payload = await fetch('/api/symbols').then(response => response.json());
       const current = preferredSymbol || $('symbol').value;
@@ -781,14 +917,14 @@ _APP_HTML = r"""<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderDecisionJournal([], null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); renderDecision(snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
+        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); activeSnapshot = snapshot; renderDecision(snapshot.latest_run); renderDecisionJournal(snapshot.decision_journal, snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));
@@ -811,6 +947,14 @@ _APP_HTML = r"""<!doctype html>
       await refreshSymbols();
       await loadSnapshot();
     }
+    function initializeJournalDates() {
+      const now = new Date();
+      const reviewDue = new Date(now);
+      reviewDue.setDate(reviewDue.getDate() + 90);
+      const toIsoDate = value => value.toISOString().slice(0, 10);
+      $('journalReviewDue').value = toIsoDate(reviewDue);
+      $('journalReviewedOn').value = toIsoDate(now);
+    }
     async function start() {
       try {
         await refreshSymbols();
@@ -820,6 +964,8 @@ _APP_HTML = r"""<!doctype html>
       } catch (error) { $('symbol').innerHTML = '<option value="">Storage unavailable</option>'; }
       await loadSnapshot();
     }
+    $('addJournalEntry').addEventListener('click', addJournalEntry);
+    $('decisionJournal').addEventListener('click', async event => { const button = event.target.closest('[data-journal-review]'); if (!button) return; await recordJournalReview(button.dataset.journalReview); });
     $('runResearch').addEventListener('click', startResearch);
     $('refresh').addEventListener('click', loadSnapshot);
     $('symbol').addEventListener('change', async () => { activeRunId = null; await loadSnapshot(); });
@@ -828,6 +974,7 @@ _APP_HTML = r"""<!doctype html>
     $('removeSymbol').addEventListener('click', removeFromWatchlist);
     $('watchlistBoard').addEventListener('click', async event => { const button = event.target.closest('[data-watch-symbol]'); if (!button) return; activeRunId = null; await refreshSymbols(button.dataset.watchSymbol); await loadSnapshot(); });
     $('watchSymbol').addEventListener('keydown', async event => { if (event.key === 'Enter') await addToWatchlist(); });
+    initializeJournalDates();
     start();
   </script>
 </body>

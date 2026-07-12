@@ -1,7 +1,9 @@
 from datetime import date, datetime, timedelta, timezone
-from json import loads
+from json import dumps, loads
 from threading import Thread
 from urllib.request import Request, urlopen
+
+import pytest
 
 from tradingagents.research_platform.agent_artifacts import agent_output_from_analyst_note
 from tradingagents.research_platform.agent_contracts import (
@@ -207,6 +209,9 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="addJournalEntry"' in _APP_HTML
+    assert 'id="decisionJournal"' in _APP_HTML
+    assert "/api/decision-journal" in _APP_HTML
     assert 'id="refreshWatchlistResearch"' in _APP_HTML
     assert "/api/watchlist-refresh" in _APP_HTML
     assert 'id="companyProfile"' in _APP_HTML
@@ -360,3 +365,96 @@ def test_cockpit_accepts_empty_watchlist_refresh_batch(tmp_path):
 
     assert payload["symbols"] == []
     assert payload["jobs"] == []
+
+
+def test_cockpit_journals_and_reviews_an_archived_manual_decision(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    bars = [
+        PriceBar(
+            symbol="NVDA",
+            date=date(2026, 1, 5),
+            open=100,
+            high=100,
+            low=100,
+            close=100,
+            volume=100,
+            currency="USD",
+            provenance=_provenance(),
+        ),
+        PriceBar(
+            symbol="NVDA",
+            date=date(2026, 1, 12),
+            open=110,
+            high=110,
+            low=110,
+            close=110,
+            volume=100,
+            currency="USD",
+            provenance=DataProvenance(
+                provider="fixture",
+                as_of_date=date(2026, 1, 12),
+                retrieved_at=datetime(2026, 1, 12, tzinfo=timezone.utc),
+            ),
+        ),
+    ]
+    store.save_price_bars(bars)
+    summary = JsonResearchRunArchive(tmp_path).save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
+            price_bars=bars[:1],
+            signal=TradeSignal(
+                symbol="NVDA",
+                as_of_date=date(2026, 1, 5),
+                direction=TradeDirection.BUY,
+                horizon=TradeHorizon.MEDIUM,
+                confidence=0.8,
+                rationale="Fixture manual decision.",
+                proposed_position_pct=0.05,
+            ),
+        )
+    )
+    server = create_cockpit_server(tmp_path, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+
+    try:
+        create_request = Request(
+            f"http://{host}:{port}/api/decision-journal",
+            data=dumps(
+                {
+                    "symbol": "NVDA",
+                    "run_id": summary.run_id,
+                    "review_due_date": "2026-01-10",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(create_request, timeout=2) as response:
+            created = loads(response.read().decode("utf-8"))
+            assert response.status == 201
+        entry_id = created["entry"]["entry_id"]
+        review_request = Request(
+            f"http://{host}:{port}/api/decision-journal/{entry_id}/review",
+            data=dumps({"reviewed_on": "2026-01-12", "note": "Recorded review."}).encode(
+                "utf-8"
+            ),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(review_request, timeout=2) as response:
+            reviewed = loads(response.read().decode("utf-8"))
+            assert response.status == 200
+        with urlopen(f"http://{host}:{port}/api/decision-journal?symbol=NVDA", timeout=2) as response:
+            journal = loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.RequestHandlerClass.jobs.shutdown()
+
+    assert reviewed["entry"]["review"]["review_price"] == 110
+    assert reviewed["entry"]["review"]["directional_return_pct"] == pytest.approx(0.1)
+    assert journal["entries"][0]["status"] == "reviewed"

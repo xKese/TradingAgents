@@ -209,6 +209,9 @@ def test_cockpit_combines_watchlist_symbols_and_selects_archived_run(tmp_path):
 def test_cockpit_posts_selected_narrative_mode():
     from tradingagents.research_platform.cockpit import _APP_HTML
 
+    assert 'id="gameBusiness"' in _APP_HTML
+    assert 'id="gameProducts"' in _APP_HTML
+    assert 'id="gameCatalysts"' in _APP_HTML
     assert 'id="addJournalEntry"' in _APP_HTML
     assert 'id="decisionJournal"' in _APP_HTML
     assert "/api/decision-journal" in _APP_HTML
@@ -458,3 +461,30 @@ def test_cockpit_journals_and_reviews_an_archived_manual_decision(tmp_path):
     assert reviewed["entry"]["review"]["review_price"] == 110
     assert reviewed["entry"]["review"]["directional_return_pct"] == pytest.approx(0.1)
     assert journal["entries"][0]["status"] == "reviewed"
+
+
+def test_cockpit_exposes_seed_game_universe_without_cached_artifacts(tmp_path):
+    server = create_cockpit_server(tmp_path, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        with urlopen(f"http://{host}:{port}/api/symbols", timeout=2) as response:
+            symbols = loads(response.read().decode("utf-8"))["symbols"]
+        with urlopen(f"http://{host}:{port}/api/game-universe", timeout=2) as response:
+            universe = loads(response.read().decode("utf-8"))
+        with urlopen(f"http://{host}:{port}/api/snapshot?symbol=002624", timeout=2) as response:
+            snapshot = loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.RequestHandlerClass.jobs.shutdown()
+
+    assert {"002602", "002624"}.issubset(symbols)
+    assert [item["symbol"] for item in universe["companies"]] == ["002602", "002624"]
+    assert snapshot["has_data"] is True
+    assert snapshot["game_research"]["available"] is True
+    assert {item["name"] for item in snapshot["game_research"]["products"]} >= {
+        "异环",
+        "诛仙世界",
+    }

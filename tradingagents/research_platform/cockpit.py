@@ -28,6 +28,7 @@ from .decision_journal import (
     review_journal_entry,
 )
 from .financial_health import assess_financial_health
+from .game_universe import build_game_research_snapshot, list_game_universe_symbols
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .research_readiness import build_research_readiness
@@ -104,6 +105,7 @@ def build_cockpit_snapshot(
         )[:8]
     ]
     company_profile = build_company_profile(fundamentals, symbol=normalized_symbol)
+    game_research = build_game_research_snapshot(normalized_symbol)
     valuation_context = build_valuation_context(fundamentals)
     financial_health = assess_financial_health(latest_financial_quality)
     journal = JsonDecisionJournal(store.root)
@@ -139,7 +141,9 @@ def build_cockpit_snapshot(
     )
     return {
         "symbol": normalized_symbol,
-        "has_data": bool(bars or fundamentals or news or agent_outputs or latest_run),
+        "has_data": bool(
+            bars or fundamentals or news or agent_outputs or latest_run or game_research.available
+        ),
         "market": market,
         "fundamentals": (
             latest_fundamentals.model_dump(mode="json") if latest_fundamentals is not None else None
@@ -150,6 +154,7 @@ def build_cockpit_snapshot(
             else None
         ),
         "company_profile": company_profile.model_dump(mode="json"),
+        "game_research": game_research.model_dump(mode="json"),
         "valuation_context": valuation_context.model_dump(mode="json"),
         "research_readiness": readiness.model_dump(mode="json"),
         "financial_health": financial_health.model_dump(mode="json"),
@@ -257,8 +262,20 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/symbols":
             self._send_json(
                 HTTPStatus.OK,
-                {"symbols": discover_cached_symbols(self.store, self.watchlist)},
+                {
+                    "symbols": sorted(
+                        set(discover_cached_symbols(self.store, self.watchlist))
+                        | set(list_game_universe_symbols())
+                    )
+                },
             )
+            return
+        if parsed.path == "/api/game-universe":
+            snapshots = [
+                build_game_research_snapshot(symbol).model_dump(mode="json")
+                for symbol in list_game_universe_symbols()
+            ]
+            self._send_json(HTTPStatus.OK, {"companies": snapshots})
             return
         if parsed.path == "/api/watchlist-board":
             self._send_json(HTTPStatus.OK, build_watchlist_board(self.store, self.watchlist))
@@ -587,6 +604,9 @@ _APP_HTML = r"""<!doctype html>
     <section class="workspace">
       <div class="panel"><div class="panel-title"><h2>Price History</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
       <div class="panel"><div class="panel-title"><h2>Company Profile</h2><span class="panel-meta" id="companyProfileMeta"></span></div><div class="grid" id="companyProfile"></div></div>
+      <div class="panel"><div class="panel-title"><h2>Game Business</h2><span class="panel-meta" id="gameBusinessMeta"></span></div><ul class="items" id="gameBusiness"></ul></div>
+      <div class="panel"><div class="panel-title"><h2>Game Product Matrix</h2><span class="panel-meta" id="gameProductsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Product</th><th>Status</th><th>Genre</th><th>Platforms</th><th>Markets</th></tr></thead><tbody id="gameProducts"></tbody></table></div></div>
+      <div class="panel"><div class="panel-title"><h2>Game Catalyst Tracker</h2><span class="panel-meta" id="gameCatalystsMeta"></span></div><ul class="items" id="gameCatalysts"></ul></div>
       <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
       <div class="panel"><div class="panel-title"><h2>Valuation Context</h2><span class="panel-meta" id="valuationContextMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Metric</th><th>Latest</th><th>Percentile</th><th>Low</th><th>Median</th><th>High</th><th>Days</th></tr></thead><tbody id="valuationContext"></tbody></table></div></div>
       <div class="panel"><div class="panel-title"><h2>Financial Quality</h2><span class="panel-meta" id="financialQualityMeta"></span></div><div class="grid" id="financialQuality"></div></div>
@@ -660,6 +680,27 @@ _APP_HTML = r"""<!doctype html>
       const fields = [['Name', profile.name], ['Industry', profile.industry], ['Area', profile.area], ['Market', profile.market], ['Exchange', profile.exchange], ['Listing Date', profile.list_date]].filter(([, value]) => value);
       target.innerHTML = fields.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
       $('companyProfileMeta').textContent = `Available as of ${profile.as_of_date}`;
+    }
+    function renderGameResearch(research) {
+      if (!research || !research.available) {
+        $('gameBusinessMeta').textContent = '';
+        $('gameBusiness').innerHTML = '<li class="empty">No curated game-industry coverage for this symbol.</li>';
+        $('gameProductsMeta').textContent = '';
+        $('gameProducts').innerHTML = '<tr><td colspan="5" class="empty">No tracked game products.</td></tr>';
+        $('gameCatalystsMeta').textContent = '';
+        $('gameCatalysts').innerHTML = '<li class="empty">No tracked game catalysts.</li>';
+        return;
+      }
+      const evidence = new Map((research.evidence || []).map(item => [item.evidence_id, item]));
+      const sourceLinks = ids => (ids || []).map(id => evidence.get(id)).filter(Boolean).map(item => `<a href="${escape(item.source_url)}" target="_blank" rel="noreferrer">${escape(item.title)}</a>`).join(' | ');
+      $('gameBusinessMeta').textContent = `${research.company_name} - as of ${research.as_of_date}`;
+      const focus = research.research_focus?.length ? `<li class="item"><div class="item-title">Research Focus</div><div class="tags">${research.research_focus.map(item => `<span class="tag">${escape(item)}</span>`).join('')}</div></li>` : '';
+      const entities = research.entities.map(item => `<li class="item"><div class="item-title">${escape(item.name)}</div><div class="item-meta">${escape(item.role)} | known ${escape(item.known_as_of)}</div><div class="item-summary">${escape(item.relationship)}</div><div class="item-meta">${sourceLinks(item.evidence_ids)}</div></li>`).join('');
+      $('gameBusiness').innerHTML = focus + entities;
+      $('gameProductsMeta').textContent = `${research.live_product_count} live - ${research.pipeline_product_count} pipeline`;
+      $('gameProducts').innerHTML = research.products.length ? research.products.map(item => `<tr><td><strong>${escape(item.name)}</strong>${item.aliases?.length ? `<div class="item-meta">${escape(item.aliases.join(' / '))}</div>` : ''}</td><td><span class="board-status">${escape(item.status)}</span></td><td>${escape(item.genres.join(', ') || 'N/A')}</td><td>${escape(item.platforms.join(', ') || 'N/A')}</td><td>${escape(item.markets.join(', ') || 'N/A')}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No tracked game products.</td></tr>';
+      $('gameCatalystsMeta').textContent = `${research.catalysts.length} tracked`;
+      $('gameCatalysts').innerHTML = research.catalysts.length ? research.catalysts.map(view => { const item = view.catalyst; return `<li class="item"><div class="item-title">${escape(item.title)}</div><div class="item-meta">${escape(view.status)} | ${escape(item.category)}${item.event_date ? ` | ${escape(item.event_date)}` : ''}</div><div class="item-meta">${sourceLinks(item.evidence_ids)}</div></li>`; }).join('') : '<li class="empty">No tracked game catalysts.</li>';
     }
     function renderFundamentals(fundamentals) {
       if (!fundamentals) { $('fundamentals').innerHTML = '<div class="empty">No cached fundamentals available.</div>'; $('fundamentalsMeta').textContent = ''; return; }
@@ -917,14 +958,14 @@ _APP_HTML = r"""<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderDecisionJournal([], null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
+      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderGameResearch(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderDecisionJournal([], null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
       $('status').textContent = `Loading ${symbol} from local research storage...`;
       try {
         const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
         const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
         $('title').textContent = `${snapshot.symbol} Research Cockpit`;
         $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
-        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); activeSnapshot = snapshot; renderDecision(snapshot.latest_run); renderDecisionJournal(snapshot.decision_journal, snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
+        renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderGameResearch(snapshot.game_research); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); activeSnapshot = snapshot; renderDecision(snapshot.latest_run); renderDecisionJournal(snapshot.decision_journal, snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));

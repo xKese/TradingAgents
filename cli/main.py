@@ -50,6 +50,12 @@ from tradingagents.graph.analyst_execution import (
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import write_report_tree
 
+try:
+    from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
+except (ImportError, AttributeError):
+    class NoConsoleScreenBufferError(Exception):  # type: ignore[no-redef]
+        pass
+
 console = Console()
 
 app = typer.Typer(
@@ -1285,7 +1291,15 @@ def analyze(
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint)
+    try:
+        run_analysis(checkpoint=checkpoint)
+    except NoConsoleScreenBufferError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print(
+            "[yellow]Run TradingAgents from an interactive terminal such as "
+            "Windows Terminal, PowerShell, or cmd.exe.[/yellow]"
+        )
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

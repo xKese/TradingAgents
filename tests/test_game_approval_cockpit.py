@@ -57,6 +57,9 @@ def test_cockpit_exposes_company_matched_game_approvals(tmp_path):
     assert opportunity_history["symbol"] == "002602"
     assert snapshot["has_data"] is True
     assert {item["symbol"] for item in opportunities["companies"]} == {"002602", "002624"}
-    assert "Game Opportunity Radar" in html
-    assert "Opportunity Changes" in html
-    assert "Game Approvals" in html
+    assert "游戏机会雷达" in html
+    assert "最新变化" in html
+    assert "游戏版号" in html
+    assert html.count('data-view-target=') == 5
+    assert 'id="reportDisclosure"' in html
+    assert '<details id="reportDisclosure"' in html

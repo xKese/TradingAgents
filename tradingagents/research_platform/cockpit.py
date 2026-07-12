@@ -579,106 +579,242 @@ def main(argv: list[str] | None = None) -> int:
 
 
 _APP_HTML = r"""<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Research Cockpit</title>
+  <title>个人股票投研</title>
   <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #15212b; background: #f4f7f8; }
+    :root { color-scheme: light; font-family: Inter, "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif; color: #17232c; background: #f3f6f7; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: #f4f7f8; }
-    button, input, select { font: inherit; }
-    .shell { max-width: 1440px; margin: 0 auto; padding: 28px 32px 44px; }
-    .topbar { display: flex; justify-content: space-between; gap: 20px; align-items: end; border-bottom: 1px solid #d5dfe3; padding-bottom: 20px; }
-    h1 { margin: 0; font-size: 25px; line-height: 1.2; font-weight: 700; letter-spacing: 0; }
-    .eyebrow { margin: 0 0 7px; color: #39706e; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-    .control { display: flex; gap: 8px; align-items: center; }
-    input, select, button { height: 36px; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #15212b; padding: 0 11px; }
-    select { min-width: 150px; } input { width: 104px; } textarea { min-height: 74px; resize: vertical; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #15212b; padding: 9px 11px; font: inherit; } .decision-form input, .decision-form select, .decision-form textarea { width: 100%; min-width: 0; } .decision-form .wide { grid-column: 1 / -1; }
-    button { cursor: pointer; font-weight: 650; }
-    button:hover { border-color: #39706e; background: #edf8f7; } button:disabled { cursor: not-allowed; color: #9aa8ad; background: #f4f7f8; }
-    .status { min-height: 20px; color: #64747d; font-size: 13px; margin: 16px 0 12px; }
-    .data-health { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; border: 1px solid #d5dfe3; border-radius: 6px; background: #fff; } .health-item { min-height: 76px; padding: 13px 17px; border-right: 1px solid #d5dfe3; } .health-item:last-child { border-right: 0; } .health-title { color: #64747d; font-size: 12px; font-weight: 650; } .health-status { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 700; color: #176f6c; } .health-status.lagging, .health-status.missing { color: #a06628; } .health-detail { margin-top: 4px; color: #64747d; font-size: 11px; line-height: 1.35; }
-    .watchlist-board { margin-top: 12px; } .table-wrap { overflow-x: auto; } .watchlist-table { width: 100%; border-collapse: collapse; font-size: 13px; } .watchlist-table th, .watchlist-table td { padding: 11px 17px; border-bottom: 1px solid #e4ebed; text-align: left; white-space: nowrap; } .watchlist-table th { color: #64747d; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; } .watchlist-table tr:last-child td { border-bottom: 0; } .watch-symbol { height: auto; border: 0; border-radius: 0; background: transparent; color: #176f6c; padding: 0; font-weight: 700; } .watch-symbol:hover { background: transparent; text-decoration: underline; } .board-status { font-size: 12px; font-weight: 700; color: #39706e; } .board-status.lagging, .board-status.missing { color: #a06628; }
-    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid #d5dfe3; border-radius: 6px; background: #fff; }
-    .metric { min-height: 102px; padding: 18px; border-right: 1px solid #d5dfe3; }
+    body { margin: 0; background: #f3f6f7; }
+    button, input, select, textarea { font: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, .view-tab:focus-visible { outline: 3px solid rgba(23, 111, 108, .22); outline-offset: 2px; }
+    .shell { max-width: 1440px; margin: 0 auto; padding: 0 30px 48px; }
+    .app-header { position: sticky; top: 0; z-index: 20; margin: 0 -30px; padding: 18px 30px 12px; border-bottom: 1px solid #cfdadd; background: rgba(243, 246, 247, .97); }
+    .header-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { min-width: 220px; }
+    h1 { margin: 0; font-size: 23px; line-height: 1.2; font-weight: 720; letter-spacing: 0; }
+    .eyebrow { margin: 0 0 5px; color: #39706e; font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    .commandbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    input, select, button, .menu-summary { height: 38px; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #17232c; padding: 0 11px; }
+    select { min-width: 150px; }
+    button { cursor: pointer; font-weight: 680; }
+    button:hover, .menu-summary:hover { border-color: #39706e; background: #edf7f6; }
+    button:disabled { cursor: not-allowed; color: #95a3a9; background: #f4f7f8; }
+    .primary-action { border-color: #176f6c; background: #176f6c; color: #fff; }
+    .primary-action:hover { border-color: #115d5a; background: #115d5a; }
+    .secondary-action { border-color: #708088; }
+    .watch-menu { position: relative; }
+    .menu-summary { display: flex; align-items: center; cursor: pointer; font-weight: 680; list-style: none; }
+    .menu-summary::-webkit-details-marker { display: none; }
+    .menu-summary::after { content: "▾"; margin-left: 8px; color: #64747d; font-size: 11px; }
+    .watch-menu[open] .menu-summary::after { content: "▴"; }
+    .menu-content { position: absolute; right: 0; top: 44px; z-index: 30; width: 290px; padding: 12px; border: 1px solid #c3d0d4; border-radius: 6px; background: #fff; box-shadow: 0 12px 30px rgba(30, 49, 57, .14); }
+    .menu-row { display: flex; gap: 7px; }
+    .menu-row + .menu-row { margin-top: 8px; }
+    .menu-row input { min-width: 0; width: 100%; }
+    .menu-row button { flex: 1; white-space: nowrap; }
+    .status-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 28px; margin-top: 9px; }
+    .status { margin: 0; color: #60717a; font-size: 12px; line-height: 1.4; }
+    .data-as-of { color: #60717a; font-size: 12px; white-space: nowrap; }
+    .view-tabs { position: sticky; top: 98px; z-index: 15; display: flex; gap: 2px; margin: 0 -30px 18px; padding: 0 30px; border-bottom: 1px solid #cfdadd; background: #f3f6f7; overflow-x: auto; scrollbar-width: thin; }
+    .view-tab { flex: 0 0 auto; height: 45px; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: transparent; color: #5e6d75; padding: 0 17px; }
+    .view-tab:hover { border-color: #b9c8cb; background: transparent; }
+    .view-tab[aria-selected="true"] { border-bottom-color: #176f6c; color: #17232c; }
+    .view { display: none; }
+    .view.active { display: block; }
+    .view-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin: 0 0 12px; }
+    .view-heading h2 { font-size: 19px; }
+    .view-meta { color: #64747d; font-size: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid #d1dcdf; border-radius: 6px; background: #fff; }
+    .metric { min-height: 92px; padding: 16px 17px; border-right: 1px solid #dbe4e6; }
     .metric:last-child { border-right: 0; }
-    .metric-label { color: #64747d; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
-    .metric-value { margin-top: 9px; font-size: 24px; font-weight: 700; overflow-wrap: anywhere; }
-    .metric-detail { margin-top: 5px; color: #64747d; font-size: 12px; }
-    .positive { color: #087f5b; } .negative { color: #bf3f46; } .neutral { color: #15212b; }
-    .workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .85fr); gap: 18px; margin-top: 18px; }
-    .panel { background: #fff; border: 1px solid #d5dfe3; border-radius: 6px; overflow: hidden; }
-    .panel-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px; padding: 15px 17px; border-bottom: 1px solid #d5dfe3; }
-    h2 { margin: 0; font-size: 15px; letter-spacing: 0; } .panel-meta { color: #64747d; font-size: 12px; }
-    .chart { height: 248px; padding: 16px 18px 12px; } svg { display: block; width: 100%; height: 100%; overflow: visible; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; } .grid > div { padding: 14px 17px; border-bottom: 1px solid #e4ebed; }
-    .grid > div:nth-child(odd) { border-right: 1px solid #e4ebed; }
-    .label { display: block; color: #64747d; font-size: 12px; } .value { display: block; margin-top: 4px; font-weight: 650; overflow-wrap: anywhere; }
+    .metric-label { color: #64747d; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .metric-value { margin-top: 7px; font-size: 22px; font-weight: 720; overflow-wrap: anywhere; }
+    .metric-detail { margin-top: 4px; color: #64747d; font-size: 11px; }
+    .positive { color: #087f5b; }
+    .negative { color: #b83d47; }
+    .neutral { color: #17232c; }
+    .section-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); gap: 16px; margin-top: 16px; align-items: start; }
+    .section-grid.equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .span-2 { grid-column: 1 / -1; }
+    .panel { background: #fff; border: 1px solid #d1dcdf; border-radius: 6px; overflow: hidden; min-width: 0; }
+    .panel-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 10px; min-height: 48px; padding: 13px 16px; border-bottom: 1px solid #dbe4e6; }
+    h2 { margin: 0; font-size: 14px; letter-spacing: 0; }
+    .panel-meta { color: #64747d; font-size: 11px; }
+    .data-health { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .health-item { min-height: 76px; padding: 12px 15px; border-right: 1px solid #dbe4e6; }
+    .health-item:last-child { border-right: 0; }
+    .health-title { color: #64747d; font-size: 11px; font-weight: 680; }
+    .health-status { display: inline-block; margin-top: 5px; font-size: 12px; font-weight: 720; color: #176f6c; }
+    .health-status.lagging, .health-status.missing { color: #a06628; }
+    .health-detail { margin-top: 4px; color: #64747d; font-size: 11px; line-height: 1.35; }
+    .readiness-disclosure > summary, .report-disclosure > summary { cursor: pointer; list-style: none; }
+    .readiness-disclosure > summary::-webkit-details-marker, .report-disclosure > summary::-webkit-details-marker { display: none; }
+    .readiness-disclosure > summary::after, .report-disclosure > summary::after { content: "展开"; color: #176f6c; font-size: 11px; font-weight: 680; }
+    .readiness-disclosure[open] > summary::after, .report-disclosure[open] > summary::after { content: "收起"; }
+    .table-wrap { overflow-x: auto; }
+    .watchlist-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .watchlist-table th, .watchlist-table td { padding: 10px 15px; border-bottom: 1px solid #e3eaec; text-align: left; white-space: nowrap; }
+    .watchlist-table th { color: #64747d; font-size: 10px; font-weight: 720; text-transform: uppercase; letter-spacing: .04em; }
+    .watchlist-table tr:last-child td { border-bottom: 0; }
+    .watch-symbol { height: auto; border: 0; border-radius: 0; background: transparent; color: #176f6c; padding: 0; font-weight: 720; }
+    .watch-symbol:hover { background: transparent; text-decoration: underline; }
+    .board-status { font-size: 11px; font-weight: 720; color: #39706e; }
+    .board-status.lagging, .board-status.missing, .board-status.weak { color: #a06628; }
+    .board-status.supportive, .board-status.ready, .board-status.aligned { color: #087f5b; }
+    .chart { height: 250px; padding: 15px 17px 11px; }
+    svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; }
+    .grid > div { padding: 12px 15px; border-bottom: 1px solid #e3eaec; min-width: 0; }
+    .grid > div:nth-child(odd) { border-right: 1px solid #e3eaec; }
+    .label { display: block; color: #64747d; font-size: 11px; }
+    .value { display: block; margin-top: 4px; font-weight: 680; overflow-wrap: anywhere; }
+    textarea { min-height: 78px; resize: vertical; border: 1px solid #b8c7cd; border-radius: 5px; background: #fff; color: #17232c; padding: 9px 11px; }
+    .decision-form input, .decision-form select, .decision-form textarea { width: 100%; min-width: 0; }
+    .decision-form .wide { grid-column: 1 / -1; }
     .items { margin: 0; padding: 0; list-style: none; }
-    .item { padding: 14px 17px; border-bottom: 1px solid #e4ebed; } .item:last-child { border-bottom: 0; }
-    .item-title { font-weight: 650; line-height: 1.42; } .item-meta { color: #64747d; font-size: 12px; margin-top: 5px; }
-    .item-summary { color: #45565f; line-height: 1.45; margin-top: 7px; font-size: 13px; }
-    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; } .tag { padding: 3px 6px; border: 1px solid #cbd8db; border-radius: 4px; color: #39706e; font-size: 11px; font-weight: 650; }
-    .report-actions { display: flex; flex-wrap: wrap; gap: 8px; } .action-link { color: #176f6c; font-size: 12px; font-weight: 650; text-decoration: none; } .action-link:hover { text-decoration: underline; } .action-link[aria-disabled="true"] { color: #9aa8ad; pointer-events: none; }
-    .coverage-summary { padding: 14px 17px; border-bottom: 1px solid #e4ebed; color: #45565f; font-size: 13px; } .coverage-list { margin: 0; padding: 0; list-style: none; } .coverage-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 11px 17px; border-bottom: 1px solid #e4ebed; } .coverage-label { font-size: 13px; font-weight: 650; } .coverage-detail { color: #64747d; font-size: 12px; } .coverage-status { color: #39706e; font-size: 11px; font-weight: 650; } .coverage-status.missing { color: #a06628; }
-    .report-preview { max-height: 360px; overflow: auto; margin: 0; padding: 16px 17px; background: #fbfcfc; color: #35454d; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
-    .empty { padding: 40px 18px; color: #64747d; text-align: center; } a { color: #176f6c; }
-    @media (max-width: 860px) { .shell { padding: 20px 16px 32px; } .watchlist-table th, .watchlist-table td { padding: 10px 12px; } .data-health { grid-template-columns: 1fr; } .health-item { border-right: 0; border-bottom: 1px solid #d5dfe3; } .health-item:last-child { border-bottom: 0; } .topbar { align-items: stretch; flex-direction: column; } .metrics { grid-template-columns: 1fr 1fr; } .metric:nth-child(2) { border-right: 0; } .metric:nth-child(-n+2) { border-bottom: 1px solid #d5dfe3; } .workspace { grid-template-columns: 1fr; } }
-    @media (max-width: 460px) { .control { width: 100%; flex-wrap: wrap; } .control #symbol { flex: 1 0 100%; width: 100%; } .control #watchSymbol { flex: 1 1 100px; min-width: 100px; } .control button { flex: 0 0 auto; } .metrics { grid-template-columns: 1fr; } .metric { border-right: 0; border-bottom: 1px solid #d5dfe3; } .metric:last-child { border-bottom: 0; } .grid { grid-template-columns: 1fr; } .grid > div:nth-child(odd) { border-right: 0; } }
+    .item { padding: 12px 15px; border-bottom: 1px solid #e3eaec; }
+    .item:last-child { border-bottom: 0; }
+    .item-title { font-weight: 680; line-height: 1.4; }
+    .item-meta { color: #64747d; font-size: 11px; margin-top: 4px; }
+    .item-summary { color: #45565f; line-height: 1.45; margin-top: 6px; font-size: 12px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .tag { padding: 3px 6px; border: 1px solid #cbd8db; border-radius: 4px; color: #39706e; font-size: 10px; font-weight: 680; }
+    .report-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .action-link { color: #176f6c; font-size: 12px; font-weight: 680; text-decoration: none; }
+    .action-link:hover { text-decoration: underline; }
+    .action-link[aria-disabled="true"] { color: #95a3a9; pointer-events: none; }
+    .coverage-summary { padding: 12px 15px; border-bottom: 1px solid #e3eaec; color: #45565f; font-size: 12px; }
+    .coverage-list { margin: 0; padding: 0; list-style: none; }
+    .coverage-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; padding: 10px 15px; border-bottom: 1px solid #e3eaec; }
+    .coverage-label { font-size: 12px; font-weight: 680; }
+    .coverage-detail { color: #64747d; font-size: 11px; }
+    .coverage-status { color: #39706e; font-size: 10px; font-weight: 680; }
+    .coverage-status.missing { color: #a06628; }
+    .report-preview { max-height: 520px; overflow: auto; margin: 0; padding: 15px; background: #fbfcfc; color: #35454d; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+    .empty { padding: 28px 16px; color: #64747d; text-align: center; }
+    a { color: #176f6c; }
+    @media (max-width: 920px) {
+      .shell { padding: 0 16px 34px; }
+      .app-header { position: static; margin: 0 -16px; padding: 16px; }
+      .header-row { align-items: stretch; flex-direction: column; }
+      .brand { min-width: 0; }
+      .commandbar { justify-content: flex-start; }
+      .view-tabs { position: sticky; top: 0; margin: 0 -16px 16px; padding: 0 16px; }
+      .section-grid, .section-grid.equal { grid-template-columns: 1fr; }
+      .span-2 { grid-column: auto; }
+      .data-health { grid-template-columns: 1fr; }
+      .health-item { border-right: 0; border-bottom: 1px solid #dbe4e6; }
+      .health-item:last-child { border-bottom: 0; }
+    }
+    @media (max-width: 560px) {
+      .commandbar { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+      .commandbar #symbol { grid-column: 1 / -1; width: 100%; }
+      .commandbar > button, .watch-menu, .menu-summary { width: 100%; }
+      .menu-content { position: fixed; left: 12px; right: 12px; top: auto; width: auto; }
+      .status-row { align-items: flex-start; flex-direction: column; gap: 3px; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .metric { min-height: 82px; border-bottom: 1px solid #dbe4e6; }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric-value { font-size: 19px; }
+      .grid { grid-template-columns: 1fr; }
+      .grid > div:nth-child(odd) { border-right: 0; }
+      .view-tab { padding: 0 13px; }
+    }
   </style>
 </head>
 <body>
   <main class="shell">
-    <div class="topbar">
-      <div><p class="eyebrow">Local-first equity research</p><h1 id="title">Research Cockpit</h1></div>
-      <div class="control">
-        <select id="symbol" aria-label="Ticker symbol"></select>
-        <input id="watchSymbol" aria-label="Add ticker to watchlist" placeholder="Ticker">
-        <button id="addSymbol" type="button">Add</button>
-        <button id="removeSymbol" type="button">Remove</button>
-        <button id="runResearch" type="button">Run Research</button>
-        <button id="refreshWatchlistResearch" type="button">Refresh Watchlist</button>
-        <button id="refresh" type="button">Refresh</button>
+    <header class="app-header">
+      <div class="header-row">
+        <div class="brand"><p class="eyebrow">个人股票投研</p><h1 id="title">研究驾驶舱</h1></div>
+        <div class="commandbar" aria-label="研究操作">
+          <select id="symbol" aria-label="选择股票"></select>
+          <button id="refreshWatchlistResearch" class="secondary-action" type="button">更新全部自选股</button>
+          <button id="runResearch" class="primary-action" type="button">研究当前股票</button>
+          <details class="watch-menu">
+            <summary class="menu-summary">自选管理</summary>
+            <div class="menu-content">
+              <div class="menu-row"><input id="watchSymbol" aria-label="输入股票代码" placeholder="股票代码"><button id="addSymbol" type="button">添加</button></div>
+              <div class="menu-row"><button id="removeSymbol" type="button">移除当前股票</button><button id="refresh" type="button">读取本地数据</button></div>
+            </div>
+          </details>
+        </div>
       </div>
-    </div>
-    <p class="status" id="status">Loading local research cache...</p>
-    <section class="metrics" aria-label="Market summary" id="metrics"></section>
-    <section class="data-health" aria-label="Cached data health" id="dataHealth"></section>
-    <section class="panel" aria-label="Research readiness"><div class="panel-title"><h2>Research Readiness</h2><span class="panel-meta" id="readinessMeta"></span></div><ul class="items" id="readiness"></ul></section>
-    <section class="panel watchlist-board" aria-label="Watchlist board"><div class="panel-title"><h2>Watchlist</h2><span class="panel-meta" id="watchlistMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Symbol</th><th>Last Close</th><th>Price As Of</th><th>Data Health</th><th>Latest Research</th><th>Decision</th></tr></thead><tbody id="watchlistBoard"></tbody></table></div></section>
-    <section class="workspace">
-      <div class="panel"><div class="panel-title"><h2>Price History</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
-      <div class="panel"><div class="panel-title"><h2>Company Profile</h2><span class="panel-meta" id="companyProfileMeta"></span></div><div class="grid" id="companyProfile"></div></div>
-      <div class="panel"><div class="panel-title"><h2>Game Business</h2><span class="panel-meta" id="gameBusinessMeta"></span></div><ul class="items" id="gameBusiness"></ul></div>
-      <div class="panel"><div class="panel-title"><h2>Game Product Matrix</h2><span class="panel-meta" id="gameProductsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Product</th><th>Status</th><th>Genre</th><th>Platforms</th><th>Markets</th></tr></thead><tbody id="gameProducts"></tbody></table></div></div>
-      <div class="panel"><div class="panel-title"><h2>Game Catalyst Tracker</h2><span class="panel-meta" id="gameCatalystsMeta"></span></div><ul class="items" id="gameCatalysts"></ul></div>
-      <div class="panel"><div class="panel-title"><h2>Game Opportunity Radar</h2><span class="panel-meta" id="gameOpportunityMeta"></span></div><ul class="items" id="gameOpportunity"></ul></div>
-      <div class="panel"><div class="panel-title"><h2>Opportunity Changes</h2><span class="panel-meta" id="gameOpportunityHistoryMeta"></span></div><ul class="items" id="gameOpportunityHistory"></ul></div>
-      <div class="panel"><div class="panel-title"><h2>Game Approvals</h2><span class="panel-meta" id="gameApprovalsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Approval Date</th><th>Game</th><th>Kind</th><th>Operator</th><th>Approval Number</th></tr></thead><tbody id="gameApprovals"></tbody></table></div></div>
-      <div class="panel"><div class="panel-title"><h2>Latest Fundamentals</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
-      <div class="panel"><div class="panel-title"><h2>Valuation Context</h2><span class="panel-meta" id="valuationContextMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Metric</th><th>Latest</th><th>Percentile</th><th>Low</th><th>Median</th><th>High</th><th>Days</th></tr></thead><tbody id="valuationContext"></tbody></table></div></div>
-      <div class="panel"><div class="panel-title"><h2>Financial Quality</h2><span class="panel-meta" id="financialQualityMeta"></span></div><div class="grid" id="financialQuality"></div></div>
-      <div class="panel"><div class="panel-title"><h2>Financial Health</h2><span class="panel-meta" id="financialHealthMeta"></span></div><ul class="items" id="financialHealth"></ul></div>
-      <div class="panel"><div class="panel-title"><h2>Financial Trend</h2><span class="panel-meta" id="financialTrendMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>Period</th><th>Revenue</th><th>Net Income</th><th>Operating Cash Flow</th><th>ROE</th></tr></thead><tbody id="financialTrend"></tbody></table></div></div>
-      <div class="panel"><div class="panel-title"><h2>Structured Research</h2><span class="panel-meta" id="agentsMeta"></span></div><ul class="items" id="agents"></ul></div>
-      <div class="panel"><div class="panel-title"><h2>News</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
+      <div class="status-row"><p class="status" id="status" role="status">正在读取本地研究数据...</p><span class="data-as-of" id="headerAsOf">数据日期：--</span></div>
+    </header>
 
-      <div class="panel"><div class="panel-title"><h2>Research Runs</h2><select id="runHistory" aria-label="Archived research run"></select></div><div class="empty" id="runHistoryDetail"></div></div>
-      <div class="panel"><div class="panel-title"><h2>Research Report</h2><div class="report-actions"><a id="openReport" class="action-link" target="_blank" rel="noreferrer" aria-disabled="true">Open Markdown</a><a id="exportReport" class="action-link" aria-disabled="true">Export .md</a></div></div><div id="reportCoverage" class="empty">Select an archived research run to view coverage.</div><pre id="reportPreview" class="report-preview">No archived report available.</pre></div>
-      <div class="panel"><div class="panel-title"><h2>Decision Draft</h2><span class="panel-meta">Optional manual signal</span></div><div class="grid decision-form">
-        <div class="wide"><label class="label" for="dataProvider">Data Provider</label><select id="dataProvider"><option value="auto" selected>Auto (Tushare for A/H)</option><option value="tushare">Tushare Pro</option><option value="yfinance">Yahoo Finance</option></select></div>
-        <div class="wide"><label class="label" for="narrativeMode">Analysis Mode</label><select id="narrativeMode"><option value="deterministic" selected>Deterministic</option><option value="openai_narrative">OpenAI Narrative</option></select></div>
-        <div><label class="label" for="decisionDirection">Direction</label><select id="decisionDirection"><option value="">No decision</option><option value="buy">Buy</option><option value="hold">Hold</option><option value="sell">Sell</option></select></div>
-        <div><label class="label" for="decisionHorizon">Horizon</label><select id="decisionHorizon"><option value="short">Short</option><option value="medium" selected>Medium</option><option value="long">Long</option></select></div>
-        <div><label class="label" for="decisionConfidence">Confidence (%)</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
-        <div><label class="label" for="decisionPosition">Proposed Position (%)</label><input id="decisionPosition" type="number" min="0" max="100" step="0.1" value="5"></div>
-        <div class="wide"><label class="label" for="decisionRationale">Rationale</label><textarea id="decisionRationale">Manual cockpit decision.</textarea></div>
-      </div></div>
-      <div class="panel"><div class="panel-title"><h2>Decision and Risk</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
-      <div class="panel"><div class="panel-title"><h2>Decision Journal</h2><button id="addJournalEntry" type="button">Journal Selected Decision</button></div><div class="grid decision-form"><div><label class="label" for="journalReviewDue">Review Due Date</label><input id="journalReviewDue" type="date"></div><div><label class="label" for="journalReviewedOn">Review Date</label><input id="journalReviewedOn" type="date"></div><div class="wide"><label class="label" for="journalReviewNote">Review Note</label><textarea id="journalReviewNote" placeholder="Optional review note"></textarea></div></div><ul class="items" id="decisionJournal"></ul><div class="empty" id="decisionJournalEmpty">Select an archived manual decision to add it to your journal.</div></div>
-      <div class="panel"><div class="panel-title"><h2>Backtest Snapshot</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
+    <nav class="view-tabs" role="tablist" aria-label="研究视图">
+      <button class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="view-overview" data-view-target="overview">研究概览</button>
+      <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="view-game" data-view-target="game">游戏业务</button>
+      <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="view-financials" data-view-target="financials">财务估值</button>
+      <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="view-research" data-view-target="research">研究报告</button>
+      <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="view-decision" data-view-target="decision">决策复盘</button>
+    </nav>
+
+    <section class="view active" id="view-overview" role="tabpanel" data-view="overview">
+      <div class="view-heading"><h2>研究概览</h2><span class="view-meta" id="overviewMeta">--</span></div>
+      <section class="metrics" aria-label="市场摘要" id="metrics"></section>
+      <div class="section-grid">
+        <div class="panel"><div class="panel-title"><h2>游戏机会雷达</h2><span class="panel-meta" id="gameOpportunityMeta"></span></div><ul class="items" id="gameOpportunity"></ul></div>
+        <div class="panel"><div class="panel-title"><h2>最新变化</h2><span class="panel-meta" id="gameOpportunityHistoryMeta"></span></div><ul class="items" id="gameOpportunityHistory"></ul></div>
+        <div class="panel span-2"><div class="panel-title"><h2>数据状态</h2><span class="panel-meta">价格 · 财务 · 事件</span></div><section class="data-health" aria-label="缓存数据状态" id="dataHealth"></section></div>
+        <div class="panel"><div class="panel-title"><h2>价格走势</h2><span class="panel-meta" id="chartMeta"></span></div><div class="chart" id="chart"></div></div>
+        <div class="panel"><div class="panel-title"><h2>公司概况</h2><span class="panel-meta" id="companyProfileMeta"></span></div><div class="grid" id="companyProfile"></div></div>
+        <div class="panel span-2"><div class="panel-title"><h2>自选股</h2><span class="panel-meta" id="watchlistMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>股票</th><th>最新价格</th><th>价格日期</th><th>数据状态</th><th>最近研究</th><th>决策</th></tr></thead><tbody id="watchlistBoard"></tbody></table></div></div>
+        <details class="panel span-2 readiness-disclosure"><summary class="panel-title"><h2>研究准备度</h2><span class="panel-meta" id="readinessMeta"></span></summary><ul class="items" id="readiness"></ul></details>
+      </div>
+    </section>
+
+    <section class="view" id="view-game" role="tabpanel" data-view="game" hidden>
+      <div class="view-heading"><h2>游戏业务</h2><span class="view-meta">主体 · 产品 · 催化 · 版号</span></div>
+      <div class="section-grid equal">
+        <div class="panel"><div class="panel-title"><h2>业务主体</h2><span class="panel-meta" id="gameBusinessMeta"></span></div><ul class="items" id="gameBusiness"></ul></div>
+        <div class="panel"><div class="panel-title"><h2>产品催化</h2><span class="panel-meta" id="gameCatalystsMeta"></span></div><ul class="items" id="gameCatalysts"></ul></div>
+        <div class="panel span-2"><div class="panel-title"><h2>产品矩阵</h2><span class="panel-meta" id="gameProductsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>产品</th><th>状态</th><th>类型</th><th>平台</th><th>市场</th></tr></thead><tbody id="gameProducts"></tbody></table></div></div>
+        <div class="panel span-2"><div class="panel-title"><h2>游戏版号</h2><span class="panel-meta" id="gameApprovalsMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>批准日期</th><th>游戏</th><th>类型</th><th>运营单位</th><th>批复文号</th></tr></thead><tbody id="gameApprovals"></tbody></table></div></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-financials" role="tabpanel" data-view="financials" hidden>
+      <div class="view-heading"><h2>财务估值</h2><span class="view-meta">质量 · 趋势 · 历史分位</span></div>
+      <div class="section-grid equal">
+        <div class="panel"><div class="panel-title"><h2>最新估值</h2><span class="panel-meta" id="fundamentalsMeta"></span></div><div class="grid" id="fundamentals"></div></div>
+        <div class="panel"><div class="panel-title"><h2>财务健康</h2><span class="panel-meta" id="financialHealthMeta"></span></div><ul class="items" id="financialHealth"></ul></div>
+        <div class="panel span-2"><div class="panel-title"><h2>估值区间</h2><span class="panel-meta" id="valuationContextMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>指标</th><th>最新</th><th>历史分位</th><th>低位</th><th>中位</th><th>高位</th><th>样本</th></tr></thead><tbody id="valuationContext"></tbody></table></div></div>
+        <div class="panel"><div class="panel-title"><h2>财务质量</h2><span class="panel-meta" id="financialQualityMeta"></span></div><div class="grid" id="financialQuality"></div></div>
+        <div class="panel"><div class="panel-title"><h2>财务趋势</h2><span class="panel-meta" id="financialTrendMeta"></span></div><div class="table-wrap"><table class="watchlist-table"><thead><tr><th>报告期</th><th>营收</th><th>净利润</th><th>经营现金流</th><th>ROE</th></tr></thead><tbody id="financialTrend"></tbody></table></div></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-research" role="tabpanel" data-view="research" hidden>
+      <div class="view-heading"><h2>研究报告</h2><span class="view-meta">研究记录 · 证据 · 报告</span></div>
+      <div class="section-grid equal">
+        <div class="panel"><div class="panel-title"><h2>结构化研究</h2><span class="panel-meta" id="agentsMeta"></span></div><ul class="items" id="agents"></ul></div>
+        <div class="panel"><div class="panel-title"><h2>公司事件</h2><span class="panel-meta" id="newsMeta"></span></div><ul class="items" id="news"></ul></div>
+        <div class="panel"><div class="panel-title"><h2>研究记录</h2><select id="runHistory" aria-label="选择历史研究记录"></select></div><div class="empty" id="runHistoryDetail"></div></div>
+        <div class="panel"><div class="panel-title"><h2>报告覆盖</h2><div class="report-actions"><a id="openReport" class="action-link" target="_blank" rel="noreferrer" aria-disabled="true">打开报告</a><a id="exportReport" class="action-link" aria-disabled="true">导出 Markdown</a></div></div><div id="reportCoverage" class="empty">请选择一条研究记录。</div><details id="reportDisclosure" class="report-disclosure"><summary class="panel-title"><h2>报告全文</h2><span class="panel-meta">Markdown</span></summary><pre id="reportPreview" class="report-preview">暂无研究报告。</pre></details></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-decision" role="tabpanel" data-view="decision" hidden>
+      <div class="view-heading"><h2>决策复盘</h2><span class="view-meta">判断 · 风控 · 回测 · 复盘</span></div>
+      <div class="section-grid equal">
+        <div class="panel"><div class="panel-title"><h2>形成判断</h2><span class="panel-meta">可选手工信号</span></div><div class="grid decision-form">
+          <div class="wide"><label class="label" for="dataProvider">数据源</label><select id="dataProvider"><option value="auto" selected>自动（A/H股优先 Tushare）</option><option value="tushare">Tushare Pro</option><option value="yfinance">Yahoo Finance</option></select></div>
+          <div class="wide"><label class="label" for="narrativeMode">分析模式</label><select id="narrativeMode"><option value="deterministic" selected>确定性分析</option><option value="openai_narrative">OpenAI 叙事分析</option></select></div>
+          <div><label class="label" for="decisionDirection">方向</label><select id="decisionDirection"><option value="">暂不形成决策</option><option value="buy">买入</option><option value="hold">持有</option><option value="sell">卖出</option></select></div>
+          <div><label class="label" for="decisionHorizon">周期</label><select id="decisionHorizon"><option value="short">短期</option><option value="medium" selected>中期</option><option value="long">长期</option></select></div>
+          <div><label class="label" for="decisionConfidence">信心（%）</label><input id="decisionConfidence" type="number" min="0" max="100" step="1" value="60"></div>
+          <div><label class="label" for="decisionPosition">拟议仓位（%）</label><input id="decisionPosition" type="number" min="0" max="100" step="0.1" value="5"></div>
+          <div class="wide"><label class="label" for="decisionRationale">判断依据</label><textarea id="decisionRationale">手工研究判断。</textarea></div>
+        </div></div>
+        <div class="panel"><div class="panel-title"><h2>决策与风控</h2><span class="panel-meta" id="decisionMeta"></span></div><div class="grid" id="decision"></div></div>
+        <div class="panel"><div class="panel-title"><h2>回测结果</h2><span class="panel-meta" id="backtestMeta"></span></div><div class="grid" id="backtest"></div></div>
+        <div class="panel"><div class="panel-title"><h2>决策日志</h2><button id="addJournalEntry" type="button">记录当前决策</button></div><div class="grid decision-form"><div><label class="label" for="journalReviewDue">计划复盘日期</label><input id="journalReviewDue" type="date"></div><div><label class="label" for="journalReviewedOn">实际复盘日期</label><input id="journalReviewedOn" type="date"></div><div class="wide"><label class="label" for="journalReviewNote">复盘记录</label><textarea id="journalReviewNote" placeholder="记录结果、偏差和后续调整"></textarea></div></div><ul class="items" id="decisionJournal"></ul><div class="empty" id="decisionJournalEmpty">选择包含手工决策的研究记录后，可写入决策日志。</div></div>
+      </div>
     </section>
   </main>
   <script>
@@ -687,35 +823,113 @@ _APP_HTML = r"""<!doctype html>
     const pct = v => v == null ? 'N/A' : `${(Number(v) * 100).toFixed(2)}%`;
     const text = value => value == null || value === '' ? 'N/A' : String(value);
     const escape = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[char]));
+    const initialParams = new URLSearchParams(window.location.search);
+    const requestedSymbol = (initialParams.get('symbol') || '').toUpperCase();
+    const validViews = new Set(['overview', 'game', 'financials', 'research', 'decision']);
+    let activeView = validViews.has(initialParams.get('view')) ? initialParams.get('view') : 'overview';
+    const translations = {
+      'Last Close':'最新收盘', 'Period Return':'区间涨跌', 'Latest Volume':'最新成交量', 'Latest Decision':'最新决策',
+      'Market data':'市场数据', 'Fundamentals':'基本面', 'Valuation context':'估值区间', 'Financial health':'财务健康',
+      'Investment thesis':'投资逻辑', 'Corporate events':'公司事件', 'Manual decision':'手工决策', 'Risk review':'风控复核',
+      'Backtest':'回测', 'Name':'公司名称', 'Industry':'行业', 'Area':'地区', 'Market':'板块', 'Exchange':'交易所',
+      'Listing Date':'上市日期', 'Official approvals':'官方版号', 'Product catalysts':'产品催化',
+      'Financial delivery':'财务兑现', 'Market confirmation':'市场确认', 'P/E (TTM)':'市盈率（TTM）',
+      'Price to Book':'市净率', 'Price to Sales (TTM)':'市销率（TTM）', 'Dividend Yield (%)':'股息率',
+      'ready':'就绪', 'aligned':'正常', 'lagging':'滞后', 'missing':'缺失', 'required':'必需', 'optional':'可选',
+      'supportive':'支持', 'mixed':'混合', 'weak':'偏弱', 'healthy':'健康', 'watch':'关注',
+      'high_attention':'高关注', 'low_signal':'低信号', 'insufficient_data':'数据不足',
+      'listed_company':'上市公司', 'game_business':'游戏业务', 'developer_publisher':'研发发行',
+      'live':'在营', 'pipeline':'储备', 'legacy_live':'长线运营', 'upcoming':'即将发生',
+      'completed':'已完成', 'ongoing':'持续跟踪', 'undated':'待定档', 'domestic':'国产', 'imported':'进口',
+      'buy':'买入', 'hold':'持有', 'sell':'卖出', 'short':'短期', 'medium':'中期', 'long':'长期',
+      'cash_conversion':'现金转化', 'leverage':'杠杆水平', 'liquidity':'流动性', 'return_on_equity':'净资产收益率'
+    };
+    const zh = value => translations[String(value)] || String(value);
+    const compactAmount = value => {
+      if (value == null || !Number.isFinite(Number(value))) return 'N/A';
+      const number = Number(value);
+      if (Math.abs(number) >= 1e8) return (number / 1e8).toFixed(2) + ' 亿元';
+      if (Math.abs(number) >= 1e4) return (number / 1e4).toFixed(2) + ' 万';
+      return number.toLocaleString('zh-CN', {maximumFractionDigits: 2});
+    };
+    const conciseNumber = value => value == null || !Number.isFinite(Number(value)) ? 'N/A' : Number(value).toLocaleString('zh-CN', {maximumFractionDigits: 2});
+    const metricLabel = key => ({
+      pe_ratio:'市盈率', pe_ratio_ttm:'市盈率（TTM）', price_to_book:'市净率', price_to_sales:'市销率',
+      price_to_sales_ttm:'市销率（TTM）', turnover_rate_pct:'换手率', total_market_value_10k_cny:'总市值',
+      circulating_market_value_10k_cny:'流通市值', reported_total_revenue:'营业收入', reported_revenue:'营业收入',
+      reported_net_income:'净利润', reported_operating_profit:'营业利润', reported_total_assets:'总资产',
+      reported_total_liabilities:'总负债', reported_total_equity:'所有者权益', reported_operating_cashflow:'经营现金流',
+      reported_free_cashflow:'自由现金流', return_on_equity_pct:'ROE', return_on_assets_pct:'ROA',
+      gross_profit_margin_pct:'毛利率', debt_to_assets_pct:'资产负债率', current_ratio:'流动比率'
+    }[key] || key.replaceAll('_', ' '));
+    function metricValue(key, value) {
+      if (typeof value !== 'number') return text(value);
+      if (key.endsWith('_10k_cny')) return (value / 10000).toFixed(2) + ' 亿元';
+      if (key.startsWith('reported_')) return compactAmount(value);
+      if (key.endsWith('_pct')) return conciseNumber(value) + '%';
+      return conciseNumber(value);
+    }
+    function syncLocation() {
+      const params = new URLSearchParams(window.location.search);
+      const symbol = $('symbol').value;
+      if (symbol) params.set('symbol', symbol); else params.delete('symbol');
+      params.set('view', activeView);
+      window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
+    }
+    function setActiveView(view, updateLocation = true) {
+      activeView = validViews.has(view) ? view : 'overview';
+      document.querySelectorAll('[data-view]').forEach(section => {
+        const selected = section.dataset.view === activeView;
+        section.classList.toggle('active', selected);
+        section.hidden = !selected;
+      });
+      document.querySelectorAll('[data-view-target]').forEach(tab => {
+        tab.setAttribute('aria-selected', String(tab.dataset.viewTarget === activeView));
+      });
+      if (updateLocation) syncLocation();
+    }
+    function closeWatchMenu() {
+      const menu = document.querySelector('.watch-menu');
+      if (menu) menu.open = false;
+    }
+    function opportunityDetail(factor) {
+      const metrics = factor.metrics || {};
+      if (factor.factor_id === 'approvals') return metrics.approvals_365d ? '近365天精确关联版号 ' + metrics.approvals_365d + ' 个，最近距今 ' + metrics.days_since_latest + ' 天。' : '本地缓存中暂无精确关联版号。';
+      if (factor.factor_id === 'catalysts') return '即将发生 ' + (metrics.upcoming || 0) + ' 项，持续或待定档 ' + (metrics.ongoing_or_undated || 0) + ' 项。';
+      if (factor.factor_id === 'financial') return '净利润同比 ' + (metrics.net_profit_yoy_pct == null ? 'N/A' : conciseNumber(metrics.net_profit_yoy_pct) + '%') + '，经营现金流 ' + compactAmount(metrics.operating_cashflow) + '。';
+      if (factor.factor_id === 'market') return '20日 ' + pct(metrics.return_20d) + '，60日 ' + pct(metrics.return_60d) + '。';
+      return factor.detail;
+    }
     function renderMetrics(snapshot) {
       const market = snapshot.market;
       const latestRun = snapshot.latest_run;
+      const decision = latestRun?.risk_review?.decision || latestRun?.signal?.direction;
       const cards = market ? [
-        ['Last Close', money(market.last_close, market.currency), market.last_date],
-        ['Period Return', pct(market.period_return_pct), `${market.bar_count} cached bars`, market.period_return_pct >= 0 ? 'positive' : 'negative'],
-        ['Latest Volume', market.latest_volume == null ? 'N/A' : Number(market.latest_volume).toLocaleString(), market.first_date],
-        ['Latest Decision', latestRun?.risk_review?.decision || latestRun?.signal?.direction || 'N/A', latestRun ? `Archived ${latestRun.as_of_date.slice(0,10)}` : `${snapshot.artifact_counts.agent_outputs} structured outputs`]
+        ['最新收盘', money(market.last_close, market.currency), market.last_date],
+        ['区间涨跌', pct(market.period_return_pct), market.bar_count + ' 个交易日', market.period_return_pct >= 0 ? 'positive' : 'negative'],
+        ['最新成交量', market.latest_volume == null ? 'N/A' : Number(market.latest_volume).toLocaleString('zh-CN'), '价格区间自 ' + market.first_date],
+        ['最新决策', decision ? zh(decision) : '尚未形成', latestRun ? '研究日期 ' + latestRun.as_of_date.slice(0,10) : snapshot.artifact_counts.agent_outputs + ' 条结构化研究']
       ] : [
-        ['Last Close', 'N/A', 'No cached price data'], ['Period Return', 'N/A', 'No cached price data'], ['Latest Volume', 'N/A', 'No cached price data'], ['Latest Decision', latestRun?.risk_review?.decision || latestRun?.signal?.direction || 'N/A', latestRun ? `Archived ${latestRun.as_of_date.slice(0,10)}` : 'No archived decision']
+        ['最新收盘', 'N/A', '暂无价格数据'], ['区间涨跌', 'N/A', '暂无价格数据'], ['最新成交量', 'N/A', '暂无价格数据'], ['最新决策', decision ? zh(decision) : '尚未形成', latestRun ? '已有研究记录' : '暂无研究记录']
       ];
-      $('metrics').innerHTML = cards.map(([label, value, detail, cls]) => `<div class="metric"><div class="metric-label">${escape(label)}</div><div class="metric-value ${cls || 'neutral'}">${escape(value)}</div><div class="metric-detail">${escape(detail)}</div></div>`).join('');
+      $('metrics').innerHTML = cards.map(([label, value, detail, cls]) => '<div class="metric"><div class="metric-label">' + escape(label) + '</div><div class="metric-value ' + (cls || 'neutral') + '">' + escape(value) + '</div><div class="metric-detail">' + escape(detail) + '</div></div>').join('');
     }
     function renderDataHealth(health) {
       const items = health?.items || [];
-      if (!items.length) { $('dataHealth').innerHTML = '<div class="empty">No cached data health available.</div>'; return; }
-      const reference = health.reference_as_of_date ? `Reference as of ${health.reference_as_of_date}` : 'Latest cached availability';
-      $('dataHealth').innerHTML = items.map(item => `<div class="health-item"><div class="health-title">${escape(item.label)}</div><div class="health-status ${escape(item.status)}">${escape(item.status)}</div><div class="health-detail">${escape(item.detail)}${item.available_as_of_date ? ` - available as of ${escape(item.available_as_of_date)}` : ''}</div></div>`).join('');
-      $('dataHealth').setAttribute('aria-label', `Cached data health: ${reference}`);
+      if (!items.length) { $('dataHealth').innerHTML = '<div class="empty">暂无缓存数据状态。</div>'; return; }
+      const reference = health.reference_as_of_date ? '研究基准 ' + health.reference_as_of_date : '最近缓存';
+      $('dataHealth').innerHTML = items.map(item => '<div class="health-item"><div class="health-title">' + escape(zh(item.label)) + '</div><div class="health-status ' + escape(item.status) + '">' + escape(zh(item.status)) + '</div><div class="health-detail">' + escape(item.detail) + (item.available_as_of_date ? ' · 可用日期 ' + escape(item.available_as_of_date) : '') + '</div></div>').join('');
+      $('dataHealth').setAttribute('aria-label', '缓存数据状态：' + reference);
     }
     function renderReadiness(readiness) {
-      if (!readiness) { $('readinessMeta').textContent = ''; $('readiness').innerHTML = '<li class="empty">No research readiness data available.</li>'; return; }
-      $('readinessMeta').textContent = `${readiness.status} - ${readiness.required_ready}/${readiness.required_total} required`;
-      $('readiness').innerHTML = readiness.items.map(item => `<li class="item"><div class="item-title">${escape(item.label)}</div><div class="item-meta">${escape(item.status)} | ${escape(item.required ? 'required' : 'optional')}</div><div class="item-summary">${escape(item.detail)}</div></li>`).join('');
+      if (!readiness) { $('readinessMeta').textContent = ''; $('readiness').innerHTML = '<li class="empty">暂无研究准备度信息。</li>'; return; }
+      $('readinessMeta').textContent = zh(readiness.status) + ' · ' + readiness.required_ready + '/' + readiness.required_total + ' 必需项';
+      $('readiness').innerHTML = readiness.items.map(item => '<li class="item"><div class="item-title">' + escape(zh(item.label)) + '</div><div class="item-meta">' + escape(zh(item.status)) + ' · ' + escape(item.required ? '必需' : '可选') + '</div><div class="item-summary">' + escape(item.detail) + '</div></li>').join('');
     }
     function renderWatchlistBoard(board) {
       const items = board?.items || [];
-      $('watchlistMeta').textContent = board ? `${board.researched}/${board.total} researched` : '';
-      $('watchlistBoard').innerHTML = items.length ? items.map(item => `<tr><td><button class="watch-symbol" type="button" data-watch-symbol="${escape(item.symbol)}">${escape(item.symbol)}</button></td><td>${escape(item.last_close == null ? 'N/A' : money(item.last_close, item.currency))}</td><td>${escape(item.last_price_date || 'N/A')}</td><td><span class="board-status ${escape(item.data_status)}">${escape(item.data_status)}</span></td><td>${escape(item.latest_research_at ? item.latest_research_at.slice(0,16).replace('T', ' ') : 'None')}</td><td>${escape(item.risk_decision || item.decision || 'None')}</td></tr>`).join('') : '<tr><td class="empty" colspan="6">No watchlist symbols yet.</td></tr>';
+      $('watchlistMeta').textContent = board ? board.researched + '/' + board.total + ' 已完成研究' : '';
+      $('watchlistBoard').innerHTML = items.length ? items.map(item => '<tr><td><button class="watch-symbol" type="button" data-watch-symbol="' + escape(item.symbol) + '">' + escape(item.symbol) + '</button></td><td>' + escape(item.last_close == null ? 'N/A' : money(item.last_close, item.currency)) + '</td><td>' + escape(item.last_price_date || 'N/A') + '</td><td><span class="board-status ' + escape(item.data_status) + '">' + escape(zh(item.data_status)) + '</span></td><td>' + escape(item.latest_research_at ? item.latest_research_at.slice(0,16).replace('T', ' ') : '暂无') + '</td><td>' + escape(zh(item.risk_decision || item.decision || '暂无')) + '</td></tr>').join('') : '<tr><td class="empty" colspan="6">自选股为空。</td></tr>';
     }
     function renderChart(market) {
       if (!market || market.series.length < 2) { $('chart').innerHTML = '<div class="empty">No cached price series available.</div>'; $('chartMeta').textContent = ''; return; }
@@ -726,111 +940,114 @@ _APP_HTML = r"""<!doctype html>
     }
     function renderCompanyProfile(profile) {
       const target = $('companyProfile');
-      if (!profile || !profile.available) { target.innerHTML = '<div class="empty">No vendor-supplied company profile available.</div>'; $('companyProfileMeta').textContent = ''; return; }
-      const fields = [['Name', profile.name], ['Industry', profile.industry], ['Area', profile.area], ['Market', profile.market], ['Exchange', profile.exchange], ['Listing Date', profile.list_date]].filter(([, value]) => value);
-      target.innerHTML = fields.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
-      $('companyProfileMeta').textContent = `Available as of ${profile.as_of_date}`;
+      if (!profile || !profile.available) { target.innerHTML = '<div class="empty">暂无公司概况。</div>'; $('companyProfileMeta').textContent = ''; return; }
+      const fields = [['公司名称', profile.name], ['行业', profile.industry], ['地区', profile.area], ['板块', profile.market], ['交易所', profile.exchange], ['上市日期', profile.list_date]].filter(([, value]) => value);
+      target.innerHTML = fields.map(([label, value]) => '<div><span class="label">' + escape(label) + '</span><span class="value">' + escape(value) + '</span></div>').join('');
+      $('companyProfileMeta').textContent = '可用日期 ' + profile.as_of_date;
     }
     function renderGameResearch(research) {
       if (!research || !research.available) {
         $('gameBusinessMeta').textContent = '';
-        $('gameBusiness').innerHTML = '<li class="empty">No curated game-industry coverage for this symbol.</li>';
+        $('gameBusiness').innerHTML = '<li class="empty">该股票暂无游戏行业覆盖。</li>';
         $('gameProductsMeta').textContent = '';
-        $('gameProducts').innerHTML = '<tr><td colspan="5" class="empty">No tracked game products.</td></tr>';
+        $('gameProducts').innerHTML = '<tr><td colspan="5" class="empty">暂无跟踪产品。</td></tr>';
         $('gameCatalystsMeta').textContent = '';
-        $('gameCatalysts').innerHTML = '<li class="empty">No tracked game catalysts.</li>';
+        $('gameCatalysts').innerHTML = '<li class="empty">暂无产品催化。</li>';
         return;
       }
       const evidence = new Map((research.evidence || []).map(item => [item.evidence_id, item]));
-      const sourceLinks = ids => (ids || []).map(id => evidence.get(id)).filter(Boolean).map(item => `<a href="${escape(item.source_url)}" target="_blank" rel="noreferrer">${escape(item.title)}</a>`).join(' | ');
-      $('gameBusinessMeta').textContent = `${research.company_name} - as of ${research.as_of_date}`;
-      const focus = research.research_focus?.length ? `<li class="item"><div class="item-title">Research Focus</div><div class="tags">${research.research_focus.map(item => `<span class="tag">${escape(item)}</span>`).join('')}</div></li>` : '';
-      const entities = research.entities.map(item => `<li class="item"><div class="item-title">${escape(item.name)}</div><div class="item-meta">${escape(item.role)} | known ${escape(item.known_as_of)}</div><div class="item-summary">${escape(item.relationship)}</div><div class="item-meta">${sourceLinks(item.evidence_ids)}</div></li>`).join('');
+      const sourceLinks = ids => (ids || []).map(id => evidence.get(id)).filter(Boolean).map(item => '<a href="' + escape(item.source_url) + '" target="_blank" rel="noreferrer">' + escape(item.title) + '</a>').join(' · ');
+      $('gameBusinessMeta').textContent = research.company_name + ' · ' + research.as_of_date;
+      const focus = research.research_focus?.length ? '<li class="item"><div class="item-title">研究重点</div><div class="tags">' + research.research_focus.map(item => '<span class="tag">' + escape(item) + '</span>').join('') + '</div></li>' : '';
+      const entities = research.entities.map(item => '<li class="item"><div class="item-title">' + escape(item.name) + '</div><div class="item-meta">' + escape(zh(item.role)) + ' · 已知日期 ' + escape(item.known_as_of) + '</div><div class="item-summary">' + escape(item.relationship) + '</div><div class="item-meta">' + sourceLinks(item.evidence_ids) + '</div></li>').join('');
       $('gameBusiness').innerHTML = focus + entities;
-      $('gameProductsMeta').textContent = `${research.live_product_count} live - ${research.pipeline_product_count} pipeline`;
-      $('gameProducts').innerHTML = research.products.length ? research.products.map(item => `<tr><td><strong>${escape(item.name)}</strong>${item.aliases?.length ? `<div class="item-meta">${escape(item.aliases.join(' / '))}</div>` : ''}</td><td><span class="board-status">${escape(item.status)}</span></td><td>${escape(item.genres.join(', ') || 'N/A')}</td><td>${escape(item.platforms.join(', ') || 'N/A')}</td><td>${escape(item.markets.join(', ') || 'N/A')}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No tracked game products.</td></tr>';
-      $('gameCatalystsMeta').textContent = `${research.catalysts.length} tracked`;
-      $('gameCatalysts').innerHTML = research.catalysts.length ? research.catalysts.map(view => { const item = view.catalyst; return `<li class="item"><div class="item-title">${escape(item.title)}</div><div class="item-meta">${escape(view.status)} | ${escape(item.category)}${item.event_date ? ` | ${escape(item.event_date)}` : ''}</div><div class="item-meta">${sourceLinks(item.evidence_ids)}</div></li>`; }).join('') : '<li class="empty">No tracked game catalysts.</li>';
+      $('gameProductsMeta').textContent = research.live_product_count + ' 在营 · ' + research.pipeline_product_count + ' 储备';
+      $('gameProducts').innerHTML = research.products.length ? research.products.map(item => '<tr><td><strong>' + escape(item.name) + '</strong>' + (item.aliases?.length ? '<div class="item-meta">' + escape(item.aliases.join(' / ')) + '</div>' : '') + '</td><td><span class="board-status">' + escape(zh(item.status)) + '</span></td><td>' + escape(item.genres.join(', ') || 'N/A') + '</td><td>' + escape(item.platforms.join(', ') || 'N/A') + '</td><td>' + escape(item.markets.join(', ') || 'N/A') + '</td></tr>').join('') : '<tr><td colspan="5" class="empty">暂无跟踪产品。</td></tr>';
+      $('gameCatalystsMeta').textContent = research.catalysts.length + ' 项';
+      $('gameCatalysts').innerHTML = research.catalysts.length ? research.catalysts.map(view => { const item = view.catalyst; return '<li class="item"><div class="item-title">' + escape(item.title) + '</div><div class="item-meta">' + escape(zh(view.status)) + ' · ' + escape(item.category) + (item.event_date ? ' · ' + escape(item.event_date) : '') + '</div><div class="item-meta">' + sourceLinks(item.evidence_ids) + '</div></li>'; }).join('') : '<li class="empty">暂无产品催化。</li>';
     }
     function renderGameOpportunity(opportunity) {
       if (!opportunity || !opportunity.available) {
-        $('gameOpportunityMeta').textContent = 'insufficient data';
-        $('gameOpportunity').innerHTML = '<li class="empty">No game-opportunity profile is available.</li>';
+        $('gameOpportunityMeta').textContent = '数据不足';
+        $('gameOpportunity').innerHTML = '<li class="empty">暂无游戏机会雷达。</li>';
         return;
       }
-      $('gameOpportunityMeta').textContent = `${opportunity.level} - ${opportunity.score}/${opportunity.max_score}`;
-      $('gameOpportunity').innerHTML = opportunity.factors.map(factor => `<li class="item"><div class="item-title">${escape(factor.label)} <span class="board-status ${escape(factor.status)}">${escape(factor.score)}/${escape(factor.max_score)}</span></div><div class="item-meta">${escape(factor.status)}${factor.observed_as_of ? ` | ${escape(factor.observed_as_of)}` : ''}</div><div class="item-summary">${escape(factor.detail)}</div></li>`).join('') + `<li class="empty">${escape(opportunity.disclaimer)}</li>`;
+      $('gameOpportunityMeta').textContent = zh(opportunity.level) + ' · ' + opportunity.score + '/' + opportunity.max_score;
+      $('gameOpportunity').innerHTML = opportunity.factors.map(factor => '<li class="item"><div class="item-title">' + escape(zh(factor.label)) + ' <span class="board-status ' + escape(factor.status) + '">' + escape(factor.score) + '/' + escape(factor.max_score) + '</span></div><div class="item-meta">' + escape(zh(factor.status)) + (factor.observed_as_of ? ' · ' + escape(factor.observed_as_of) : '') + '</div><div class="item-summary">' + escape(opportunityDetail(factor)) + '</div></li>').join('') + '<li class="empty">关注分数仅用于研究排序，不构成买卖或估值建议。</li>';
     }
     function renderGameOpportunityHistory(history) {
       const snapshots = history?.snapshots || [], events = history?.latest_events || [];
-      $('gameOpportunityHistoryMeta').textContent = snapshots.length ? `${snapshots.length} daily snapshot${snapshots.length === 1 ? '' : 's'}` : '';
-      const eventRows = events.map(event => `<li class="item"><div class="item-title">${escape(event.title)}</div><div class="item-meta">${escape(event.severity)} | ${escape(event.as_of_date)}</div><div class="item-summary">${escape(event.detail)}</div></li>`).join('');
-      const historyRows = snapshots.slice(0, 8).map(item => `<li class="item"><div class="item-title">${escape(item.as_of_date)} <span class="board-status">${escape(item.level)}</span></div><div class="item-meta">Score ${escape(item.score)}/${escape(item.max_score)}</div></li>`).join('');
-      $('gameOpportunityHistory').innerHTML = eventRows + historyRows || '<li class="empty">Run the opportunity tracking CLI to create the first daily snapshot.</li>';
+      $('gameOpportunityHistoryMeta').textContent = snapshots.length ? snapshots.length + ' 个日度快照' : '';
+      const eventTitles = {baseline_created:'建立机会基线', level_changed:'关注等级变化', score_changed:'机会分数变化', factor_changed:'因子得分变化', new_approval:'新增关联版号'};
+      const eventRows = events.map(event => '<li class="item"><div class="item-title">' + escape(eventTitles[event.event_type] || event.title) + '</div><div class="item-meta">' + escape(event.severity === 'notable' ? '重要' : '信息') + ' · ' + escape(event.as_of_date) + '</div><div class="item-summary">' + escape(event.detail) + '</div></li>').join('');
+      const historyRows = snapshots.slice(0, 8).map(item => '<li class="item"><div class="item-title">' + escape(item.as_of_date) + ' <span class="board-status">' + escape(zh(item.level)) + '</span></div><div class="item-meta">分数 ' + escape(item.score) + '/' + escape(item.max_score) + '</div></li>').join('');
+      $('gameOpportunityHistory').innerHTML = eventRows + historyRows || '<li class="empty">运行机会跟踪后会生成首个日度快照。</li>';
     }
     function renderGameApprovals(digest) {
       const approvals = digest?.approvals || [];
-      $('gameApprovalsMeta').textContent = approvals.length ? `${approvals.length} exact matches through ${digest.latest_approval_date}` : '';
-      $('gameApprovals').innerHTML = approvals.length ? approvals.map(item => { const approval = item.approval; return `<tr><td>${escape(approval.approval_date)}</td><td><a href="${escape(approval.source_url)}" target="_blank" rel="noreferrer">${escape(approval.game_name)}</a></td><td>${escape(approval.kind)}</td><td>${escape(approval.operating_entity)}</td><td>${escape(approval.approval_number)}</td></tr>`; }).join('') : '<tr><td colspan="5" class="empty">No exact company-matched approvals in the local cache.</td></tr>';
+      $('gameApprovalsMeta').textContent = approvals.length ? approvals.length + ' 个精确匹配 · 最近 ' + digest.latest_approval_date : '';
+      $('gameApprovals').innerHTML = approvals.length ? approvals.map(item => { const approval = item.approval; return '<tr><td>' + escape(approval.approval_date) + '</td><td><a href="' + escape(approval.source_url) + '" target="_blank" rel="noreferrer">' + escape(approval.game_name) + '</a></td><td>' + escape(zh(approval.kind)) + '</td><td>' + escape(approval.operating_entity) + '</td><td>' + escape(approval.approval_number) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">本地缓存中暂无精确关联版号。</td></tr>';
     }
     function renderFundamentals(fundamentals) {
-      if (!fundamentals) { $('fundamentals').innerHTML = '<div class="empty">No cached fundamentals available.</div>'; $('fundamentalsMeta').textContent = ''; return; }
-      const entries = Object.entries(fundamentals.metrics || {}).slice(0, 12);
-      $('fundamentals').innerHTML = entries.length ? entries.map(([key, value]) => `<div><span class="label">${escape(key.replaceAll('_', ' '))}</span><span class="value">${escape(typeof value === 'number' ? Number(value).toLocaleString(undefined, {maximumFractionDigits: 4}) : text(value))}</span></div>`).join('') : '<div class="empty">Latest snapshot has no metrics.</div>';
-      $('fundamentalsMeta').textContent = `As of ${fundamentals.provenance.as_of_date}`;
+      if (!fundamentals) { $('fundamentals').innerHTML = '<div class="empty">暂无估值数据。</div>'; $('fundamentalsMeta').textContent = ''; return; }
+      const excluded = new Set(['company_name','company_area','company_industry','company_market','company_exchange','company_list_date']);
+      const entries = Object.entries(fundamentals.metrics || {}).filter(([key]) => !excluded.has(key)).slice(0, 12);
+      $('fundamentals').innerHTML = entries.length ? entries.map(([key, value]) => '<div><span class="label">' + escape(metricLabel(key)) + '</span><span class="value">' + escape(metricValue(key, value)) + '</span></div>').join('') : '<div class="empty">最新快照没有估值指标。</div>';
+      $('fundamentalsMeta').textContent = '数据日期 ' + fundamentals.provenance.as_of_date;
     }
     function renderValuationContext(context) {
       const target = $('valuationContext');
       if (!context || !context.available) {
-        target.innerHTML = '<tr><td colspan="7" class="empty">Fewer than 20 valid cached daily valuation observations are available.</td></tr>';
+        target.innerHTML = '<tr><td colspan="7" class="empty">有效估值样本少于20个交易日。</td></tr>';
         $('valuationContextMeta').textContent = '';
         return;
       }
       const rows = context.metrics.filter(item => item.available);
-      target.innerHTML = rows.map(item => `<tr><td>${escape(item.label)}</td><td>${escape(text(item.latest))}</td><td>${escape(Number(item.percentile).toFixed(1))}%</td><td>${escape(text(item.low))}</td><td>${escape(text(item.median))}</td><td>${escape(text(item.high))}</td><td>${escape(text(item.observations))}</td></tr>`).join('');
-      $('valuationContextMeta').textContent = `${context.daily_snapshot_count} cached days through ${context.as_of_date}`;
+      target.innerHTML = rows.map(item => '<tr><td>' + escape(zh(item.label)) + '</td><td>' + escape(conciseNumber(item.latest)) + '</td><td>' + escape(Number(item.percentile).toFixed(1)) + '%</td><td>' + escape(conciseNumber(item.low)) + '</td><td>' + escape(conciseNumber(item.median)) + '</td><td>' + escape(conciseNumber(item.high)) + '</td><td>' + escape(item.observations) + '</td></tr>').join('');
+      $('valuationContextMeta').textContent = context.daily_snapshot_count + ' 个交易日 · 截至 ' + context.as_of_date;
     }
     function renderFinancialQuality(snapshot) {
-      if (!snapshot) { $('financialQuality').innerHTML = '<div class="empty">No disclosed financial quality snapshot available.</div>'; $('financialQualityMeta').textContent = ''; return; }
-      const entries = Object.entries(snapshot.metrics || {}).slice(0, 12);
-      $('financialQuality').innerHTML = entries.length ? entries.map(([key, value]) => `<div><span class="label">${escape(key.replaceAll('_', ' '))}</span><span class="value">${escape(typeof value === 'number' ? Number(value).toLocaleString(undefined, {maximumFractionDigits: 4}) : text(value))}</span></div>`).join('') : '<div class="empty">Financial quality snapshot has no metrics.</div>';
-      $('financialQualityMeta').textContent = `Report period ${snapshot.period_end}`;
+      if (!snapshot) { $('financialQuality').innerHTML = '<div class="empty">暂无财务质量数据。</div>'; $('financialQualityMeta').textContent = ''; return; }
+      const preferred = ['reported_total_revenue','reported_net_income','reported_operating_cashflow','reported_free_cashflow','return_on_equity_pct','gross_profit_margin_pct','debt_to_assets_pct','current_ratio'];
+      const entries = preferred.filter(key => snapshot.metrics?.[key] != null).map(key => [key, snapshot.metrics[key]]);
+      $('financialQuality').innerHTML = entries.length ? entries.map(([key, value]) => '<div><span class="label">' + escape(metricLabel(key)) + '</span><span class="value">' + escape(metricValue(key, value)) + '</span></div>').join('') : '<div class="empty">财务快照没有可展示指标。</div>';
+      $('financialQualityMeta').textContent = '报告期 ' + snapshot.period_end;
     }
     function renderFinancialHealth(assessment) {
-      $('financialHealthMeta').textContent = `${assessment.status} - ${assessment.score}/4 checks`;
-      $('financialHealth').innerHTML = assessment.checks.map(check => `<li class="item"><div class="item-title">${escape(check.name.replaceAll('_', ' '))}</div><div class="item-meta">${escape(check.status)} | ${escape(text(check.observed))} / ${escape(text(check.threshold))}</div><div class="item-summary">${escape(check.message)}</div></li>`).join('');
+      $('financialHealthMeta').textContent = zh(assessment.status) + ' · ' + assessment.score + '/4';
+      $('financialHealth').innerHTML = assessment.checks.map(check => '<li class="item"><div class="item-title">' + escape(zh(check.name)) + '</div><div class="item-meta">' + escape(zh(check.status)) + ' · 当前 ' + escape(conciseNumber(check.observed)) + ' / 参考 ' + escape(conciseNumber(check.threshold)) + '</div><div class="item-summary">' + escape(check.message) + '</div></li>').join('');
     }
     function renderFinancialTrend(items) {
-      $('financialTrendMeta').textContent = `${items.length} disclosed periods`;
+      $('financialTrendMeta').textContent = items.length + ' 个报告期';
       $('financialTrend').innerHTML = items.length ? items.map(item => {
         const metrics = item.metrics || {};
-        const format = value => typeof value === 'number' ? Number(value).toLocaleString(undefined, {maximumFractionDigits: 4}) : text(value);
-        return `<tr><td>${escape(item.period_end)}</td><td>${escape(format(metrics.reported_total_revenue))}</td><td>${escape(format(metrics.reported_net_income))}</td><td>${escape(format(metrics.reported_operating_cashflow))}</td><td>${escape(format(metrics.return_on_equity_pct))}</td></tr>`;
-      }).join('') : '<tr><td colspan="5" class="empty">Fewer than two disclosed periods are available.</td></tr>';
+        return '<tr><td>' + escape(item.period_end) + '</td><td>' + escape(compactAmount(metrics.reported_total_revenue)) + '</td><td>' + escape(compactAmount(metrics.reported_net_income)) + '</td><td>' + escape(compactAmount(metrics.reported_operating_cashflow)) + '</td><td>' + escape(metrics.return_on_equity_pct == null ? 'N/A' : conciseNumber(metrics.return_on_equity_pct) + '%') + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" class="empty">财务报告期不足。</td></tr>';
     }
     function renderAgents(outputs) {
-      $('agentsMeta').textContent = `${outputs.length} available`;
-      $('agents').innerHTML = outputs.length ? outputs.map(output => `<li class="item"><div class="item-title">${escape(output.headline)}</div><div class="item-meta">${escape(output.agent_role)} - ${escape(output.output_type)} - ${escape(output.as_of_date)}</div><div class="item-summary">${escape(output.summary)}</div>${output.risks && output.risks.length ? `<div class="tags">${output.risks.slice(0,3).map(risk => `<span class="tag">Risk: ${escape(risk)}</span>`).join('')}</div>` : ''}</li>`).join('') : '<li class="empty">No structured agent outputs available.</li>';
+      $('agentsMeta').textContent = outputs.length + ' 条';
+      $('agents').innerHTML = outputs.length ? outputs.map(output => '<li class="item"><div class="item-title">' + escape(output.headline) + '</div><div class="item-meta">' + escape(output.agent_role) + ' · ' + escape(output.output_type) + ' · ' + escape(output.as_of_date) + '</div><div class="item-summary">' + escape(output.summary) + '</div>' + (output.risks && output.risks.length ? '<div class="tags">' + output.risks.slice(0,3).map(risk => '<span class="tag">风险：' + escape(risk) + '</span>').join('') + '</div>' : '') + '</li>').join('') : '<li class="empty">暂无结构化研究。</li>';
     }
     function renderNews(items) {
-      $('newsMeta').textContent = `${items.length} latest`;
-      $('news').innerHTML = items.length ? items.map(item => `<li class="item"><div class="item-title">${item.url ? `<a href="${escape(item.url)}" target="_blank" rel="noreferrer">${escape(item.title)}</a>` : escape(item.title)}</div><div class="item-meta">${escape(item.provider)} - ${escape(item.published_at.slice(0,10))}</div>${item.summary ? `<div class="item-summary">${escape(item.summary)}</div>` : ''}</li>`).join('') : '<li class="empty">No cached news available.</li>';
+      $('newsMeta').textContent = items.length + ' 条最近事件';
+      $('news').innerHTML = items.length ? items.map(item => '<li class="item"><div class="item-title">' + (item.url ? '<a href="' + escape(item.url) + '" target="_blank" rel="noreferrer">' + escape(item.title) + '</a>' : escape(item.title)) + '</div><div class="item-meta">' + escape(item.provider) + ' · ' + escape(item.published_at.slice(0,10)) + '</div>' + (item.summary ? '<div class="item-summary">' + escape(item.summary) + '</div>' : '') + '</li>').join('') : '<li class="empty">暂无公司事件。</li>';
     }
     function renderDecision(run) {
-      if (!run || !run.signal) { $('decision').innerHTML = '<div class="empty">No archived trade decision available.</div>'; $('decisionMeta').textContent = ''; return; }
+      if (!run || !run.signal) { $('decision').innerHTML = '<div class="empty">当前研究记录尚未形成手工决策。</div>'; $('decisionMeta').textContent = ''; return; }
       const signal = run.signal, review = run.risk_review;
       const rows = [
-        ['Signal', signal.direction], ['Horizon', signal.horizon], ['Confidence', pct(signal.confidence)], ['Proposed Position', pct(signal.proposed_position_pct)],
-        ['Risk Decision', review ? review.decision : 'Not reviewed'], ['Approved Position', review ? pct(review.approved_position_pct) : 'N/A'],
-        ['Risk Breaches', review ? review.breaches.length : 'N/A'], ['Run As Of', run.as_of_date.slice(0, 10)]
+        ['方向', zh(signal.direction)], ['周期', zh(signal.horizon)], ['信心', pct(signal.confidence)], ['拟议仓位', pct(signal.proposed_position_pct)],
+        ['风控结论', review ? zh(review.decision) : '尚未复核'], ['批准仓位', review ? pct(review.approved_position_pct) : 'N/A'],
+        ['风险项', review ? review.breaches.length : 'N/A'], ['研究日期', run.as_of_date.slice(0, 10)]
       ];
-      $('decision').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
-      $('decisionMeta').textContent = `Generated ${run.generated_at.slice(0,16).replace('T', ' ')}`;
+      $('decision').innerHTML = rows.map(([label, value]) => '<div><span class="label">' + escape(label) + '</span><span class="value">' + escape(value) + '</span></div>').join('');
+      $('decisionMeta').textContent = '生成时间 ' + run.generated_at.slice(0,16).replace('T', ' ');
     }
     function renderDecisionJournal(views, run) {
       const items = views || [];
       const canJournal = Boolean(run?.run_id && run?.signal);
       $('addJournalEntry').disabled = !canJournal;
+      $('addJournalEntry').title = canJournal ? '' : '请选择包含手工决策的研究记录';
       $('decisionJournalEmpty').hidden = items.length > 0;
       if (!items.length) { $('decisionJournal').innerHTML = ''; return; }
       $('decisionJournal').innerHTML = items.map(view => {
@@ -848,31 +1065,41 @@ _APP_HTML = r"""<!doctype html>
       $('openReport').removeAttribute('href'); $('openReport').setAttribute('aria-disabled', 'true');
       $('exportReport').removeAttribute('href'); $('exportReport').setAttribute('aria-disabled', 'true');
       $('reportCoverage').className = 'empty'; $('reportCoverage').textContent = message;
-      $('reportPreview').textContent = 'No archived report available.';
+      $('reportPreview').removeAttribute('data-report-url');
+      $('reportPreview').textContent = '暂无研究报告。';
     }
     async function renderReportWorkspace(snapshot) {
       const run = snapshot.latest_run, workspace = snapshot.report_workspace;
-      if (!run || !workspace?.available) { clearReportWorkspace('Select an archived research run to view coverage.'); return; }
-      const baseUrl = `/api/reports/${encodeURIComponent(snapshot.symbol)}/${encodeURIComponent(run.run_id)}.md`;
+      if (!run || !workspace?.available) { clearReportWorkspace('请选择一条研究记录。'); return; }
+      const baseUrl = '/api/reports/' + encodeURIComponent(snapshot.symbol) + '/' + encodeURIComponent(run.run_id) + '.md';
       $('openReport').href = baseUrl; $('openReport').setAttribute('aria-disabled', 'false');
-      $('exportReport').href = `${baseUrl}?download=1`; $('exportReport').setAttribute('aria-disabled', 'false');
-      $('exportReport').setAttribute('download', `${snapshot.symbol}_${run.run_id}.md`);
+      $('exportReport').href = baseUrl + '?download=1'; $('exportReport').setAttribute('aria-disabled', 'false');
+      $('exportReport').setAttribute('download', snapshot.symbol + '_' + run.run_id + '.md');
       $('reportCoverage').className = '';
-      $('reportCoverage').innerHTML = `<div class="coverage-summary">Core data coverage: ${workspace.core_available}/${workspace.core_total}</div><ul class="coverage-list">${workspace.items.map(item => `<li class="coverage-item"><div><div class="coverage-label">${escape(item.label)}</div><div class="coverage-detail">${escape(item.detail)}</div></div><span class="coverage-status ${item.available ? '' : 'missing'}">${item.available ? 'Available' : item.optional ? 'Not used' : 'Missing'}</span></li>`).join('')}</ul>`;
+      $('reportCoverage').innerHTML = '<div class="coverage-summary">核心数据覆盖：' + workspace.core_available + '/' + workspace.core_total + '</div><ul class="coverage-list">' + workspace.items.map(item => '<li class="coverage-item"><div><div class="coverage-label">' + escape(zh(item.label)) + '</div><div class="coverage-detail">' + escape(item.detail) + '</div></div><span class="coverage-status ' + (item.available ? '' : 'missing') + '">' + (item.available ? '可用' : item.optional ? '未使用' : '缺失') + '</span></li>').join('') + '</ul>';
+      $('reportPreview').dataset.reportUrl = baseUrl;
+      $('reportPreview').textContent = '展开后加载报告全文。';
+      if ($('reportDisclosure').open) await loadReportPreview();
+    }
+    async function loadReportPreview() {
+      const target = $('reportPreview');
+      const url = target.dataset.reportUrl;
+      if (!url || target.dataset.loadedUrl === url) return;
+      target.textContent = '正在加载报告...';
       try {
-        const report = await fetch(baseUrl).then(response => response.ok ? response.text() : Promise.reject(response));
-        $('reportPreview').textContent = report;
-      } catch (error) { $('reportPreview').textContent = 'Unable to load the archived report.'; }
+        target.textContent = await fetch(url).then(response => response.ok ? response.text() : Promise.reject(response));
+        target.dataset.loadedUrl = url;
+      } catch (error) { target.textContent = '报告加载失败。'; }
     }
     function renderBacktest(run) {
-      if (!run || !run.backtest) { $('backtest').innerHTML = '<div class="empty">No archived backtest available.</div>'; $('backtestMeta').textContent = ''; return; }
+      if (!run || !run.backtest) { $('backtest').innerHTML = '<div class="empty">当前研究记录暂无回测。</div>'; $('backtestMeta').textContent = ''; return; }
       const backtest = run.backtest, metrics = backtest.metrics;
       const rows = [
-        ['Total Return', pct(metrics.total_return_pct)], ['Max Drawdown', pct(metrics.max_drawdown_pct)], ['Sharpe', text(metrics.sharpe == null ? null : Number(metrics.sharpe).toFixed(2))], ['Win Rate', pct(metrics.win_rate_pct)],
-        ['Profit Factor', text(metrics.profit_factor == null ? null : Number(metrics.profit_factor).toFixed(2))], ['Trades', backtest.trade_count], ['Closed Round Trips', backtest.round_trip_count], ['Warnings', backtest.warning_count]
+        ['总收益', pct(metrics.total_return_pct)], ['最大回撤', pct(metrics.max_drawdown_pct)], ['夏普比率', text(metrics.sharpe == null ? null : Number(metrics.sharpe).toFixed(2))], ['胜率', pct(metrics.win_rate_pct)],
+        ['盈亏比', text(metrics.profit_factor == null ? null : Number(metrics.profit_factor).toFixed(2))], ['交易次数', backtest.trade_count], ['完整交易', backtest.round_trip_count], ['警告', backtest.warning_count]
       ];
-      $('backtest').innerHTML = rows.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join('');
-      $('backtestMeta').textContent = 'Latest archived run';
+      $('backtest').innerHTML = rows.map(([label, value]) => '<div><span class="label">' + escape(label) + '</span><span class="value">' + escape(value) + '</span></div>').join('');
+      $('backtestMeta').textContent = '当前研究记录';
     }
     let activeSnapshot = null;
     let activeRunId = null;
@@ -882,23 +1109,23 @@ _APP_HTML = r"""<!doctype html>
     function renderRunHistory(runs, selectedRunId) {
       const selector = $('runHistory');
       if (!runs.length) {
-        selector.innerHTML = '<option value="">No archived runs</option>';
+        selector.innerHTML = '<option value="">暂无研究记录</option>';
         selector.disabled = true;
-        $('runHistoryDetail').textContent = 'No archived research runs available.';
+        $('runHistoryDetail').textContent = '运行当前股票研究后会生成记录。';
         return;
       }
       selector.disabled = false;
-      selector.innerHTML = '<option value="">Latest archived run</option>' + runs.map(run => `<option value="${escape(run.run_id)}">${escape(run.as_of_date.slice(0,10))} - ${escape(run.generated_at.slice(0,16).replace('T', ' '))}</option>`).join('');
+      selector.innerHTML = '<option value="">最近一条研究记录</option>' + runs.map(run => '<option value="' + escape(run.run_id) + '">' + escape(run.as_of_date.slice(0,10)) + ' · ' + escape(run.generated_at.slice(0,16).replace('T', ' ')) + '</option>').join('');
       selector.value = selectedRunId || '';
       const selected = runs.find(run => run.run_id === selectedRunId) || runs[0];
-      const scopes = [selected.has_signal ? 'signal' : null, selected.has_risk_review ? 'risk' : null, selected.has_backtest ? 'backtest' : null].filter(Boolean);
-      $('runHistoryDetail').textContent = `${runs.length} archived run${runs.length === 1 ? '' : 's'} - ${scopes.join(', ') || 'data snapshot'}`;
+      const scopes = [selected.has_signal ? '决策' : null, selected.has_risk_review ? '风控' : null, selected.has_backtest ? '回测' : null].filter(Boolean);
+      $('runHistoryDetail').textContent = runs.length + ' 条研究记录 · ' + (scopes.join('、') || '数据快照');
     }
     function setResearchButton(isRunning) {
       $('runResearch').disabled = isRunning || !$('symbol').value;
-      $('runResearch').textContent = isRunning ? 'Research Running' : 'Run Research';
+      $('runResearch').textContent = isRunning ? '研究进行中' : '研究当前股票';
       $('refreshWatchlistResearch').disabled = isRunning;
-      $('refreshWatchlistResearch').textContent = isRunning && activeBatchJobIds.length ? 'Refreshing Watchlist' : 'Refresh Watchlist';
+      $('refreshWatchlistResearch').textContent = isRunning && activeBatchJobIds.length ? '正在更新自选股' : '更新全部自选股';
     }
     async function pollWatchlistRefresh() {
       if (!activeBatchJobIds.length) return;
@@ -918,7 +1145,7 @@ _APP_HTML = r"""<!doctype html>
       } catch (error) {
         activeBatchJobIds = [];
         setResearchButton(false);
-        $('status').textContent = 'Unable to refresh the watchlist.';
+        $('status').textContent = '自选股更新失败。';
       }
     }
     async function startWatchlistRefresh() {
@@ -927,12 +1154,12 @@ _APP_HTML = r"""<!doctype html>
       try {
         const payload = await fetch('/api/watchlist-refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeBatchJobIds = payload.jobs.map(job => job.job_id);
-        if (!activeBatchJobIds.length) { setResearchButton(false); $('status').textContent = 'Watchlist is empty.'; return; }
+        if (!activeBatchJobIds.length) { setResearchButton(false); $('status').textContent = '自选股为空。'; return; }
         await pollWatchlistRefresh();
       } catch (error) {
         activeBatchJobIds = [];
         setResearchButton(false);
-        $('status').textContent = 'Unable to start the watchlist refresh.';
+        $('status').textContent = '无法启动自选股更新。';
       }
     }
     async function pollResearchJob() {
@@ -960,10 +1187,10 @@ _APP_HTML = r"""<!doctype html>
       const confidence = Number($('decisionConfidence').value) / 100;
       const position = Number($('decisionPosition').value) / 100;
       if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1 || !Number.isFinite(position) || position < 0 || position > 1) {
-        throw new Error('Decision percentages must be between 0 and 100.');
+        throw new Error('信心和仓位必须在0到100之间。');
       }
       const rationale = $('decisionRationale').value.trim();
-      if (!rationale) throw new Error('A decision rationale is required.');
+      if (!rationale) throw new Error('请填写判断依据。');
       return {
         direction,
         horizon: $('decisionHorizon').value,
@@ -971,7 +1198,8 @@ _APP_HTML = r"""<!doctype html>
         proposed_position_pct: position,
         rationale
       };
-    }    async function startResearch() {
+    }
+    async function startResearch() {
       const symbol = $('symbol').value;
       if (!symbol || activeJobId) return;
       setResearchButton(true);
@@ -982,14 +1210,14 @@ _APP_HTML = r"""<!doctype html>
       } catch (error) {
         activeJobId = null;
         setResearchButton(false);
-        $('status').textContent = 'Unable to start local research.';
+        $('status').textContent = '无法启动当前股票研究。';
       }
     }
     async function addJournalEntry() {
       const run = activeSnapshot?.latest_run;
       const reviewDueDate = $('journalReviewDue').value;
       if (!run?.run_id || !run?.signal || !reviewDueDate) {
-        $('status').textContent = 'Select an archived manual decision and a review due date.';
+        $('status').textContent = '请选择包含手工决策的研究记录并设置复盘日期。';
         return;
       }
       $('addJournalEntry').disabled = true;
@@ -1004,7 +1232,7 @@ _APP_HTML = r"""<!doctype html>
     }
     async function recordJournalReview(entryId) {
       const reviewedOn = $('journalReviewedOn').value;
-      if (!reviewedOn) { $('status').textContent = 'Choose a review date before recording a review.'; return; }
+      if (!reviewedOn) { $('status').textContent = '请先选择实际复盘日期。'; return; }
       try {
         const payload = await fetch(`/api/decision-journal/${encodeURIComponent(entryId)}/review`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reviewed_on: reviewedOn, note: $('journalReviewNote').value.trim()})}).then(response => response.ok ? response.json() : response.json().then(body => Promise.reject(new Error(body.error || 'Unable to record review'))));
         $('journalReviewNote').value = '';
@@ -1014,9 +1242,10 @@ _APP_HTML = r"""<!doctype html>
     }
     async function refreshSymbols(preferredSymbol) {
       const payload = await fetch('/api/symbols').then(response => response.json());
-      const current = preferredSymbol || $('symbol').value;
+      const current = preferredSymbol || $('symbol').value || requestedSymbol;
       $('symbol').innerHTML = payload.symbols.length ? payload.symbols.map(symbol => `<option value="${escape(symbol)}">${escape(symbol)}</option>`).join('') : '<option value="">No symbols</option>';
       if (payload.symbols.includes(current)) $('symbol').value = current;
+      syncLocation();
     }
     async function refreshWatchlistBoard() {
       const payload = await fetch('/api/watchlist-board').then(response => response.json());
@@ -1029,18 +1258,36 @@ _APP_HTML = r"""<!doctype html>
     }
     async function loadSnapshot() {
       const symbol = $('symbol').value;
-      if (!symbol) { $('status').textContent = 'No watched or cached ticker is available.'; renderMetrics({artifact_counts:{}}); renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderGameResearch(null); renderFundamentals(null); renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:"unknown",score:0,checks:[]}); renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderDecisionJournal([], null); renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('Select an archived research run to view coverage.'); await refreshWatchlistBoard(); return; }
-      $('status').textContent = `Loading ${symbol} from local research storage...`;
+      if (!symbol) {
+        $('status').textContent = '暂无可用股票，请先添加自选股。';
+        $('headerAsOf').textContent = '数据日期：--';
+        renderMetrics({artifact_counts:{}});
+        renderDataHealth(null); renderReadiness(null); renderChart(null); renderCompanyProfile(null); renderGameResearch(null);
+        renderGameOpportunity(null); renderGameOpportunityHistory(null); renderGameApprovals(null); renderFundamentals(null);
+        renderValuationContext(null); renderFinancialQuality(null); renderFinancialHealth({status:'missing',score:0,checks:[]});
+        renderFinancialTrend([]); renderAgents([]); renderNews([]); renderDecision(null); renderDecisionJournal([], null);
+        renderBacktest(null); renderRunHistory([], null); clearReportWorkspace('请选择一条研究记录。');
+        await refreshWatchlistBoard();
+        return;
+      }
+      $('status').textContent = '正在读取 ' + symbol + ' 的本地研究数据...';
       try {
-        const runQuery = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : '';
-        const snapshot = await fetch(`/api/snapshot?symbol=${encodeURIComponent(symbol)}${runQuery}`).then(response => response.ok ? response.json() : Promise.reject(response));
-        $('title').textContent = `${snapshot.symbol} Research Cockpit`;
-        $('status').textContent = snapshot.has_data ? `Local artifacts loaded for ${snapshot.symbol}. No external data request was made.` : `No artifacts found for ${snapshot.symbol}.`;
+        const runQuery = activeRunId ? '&run_id=' + encodeURIComponent(activeRunId) : '';
+        const snapshot = await fetch('/api/snapshot?symbol=' + encodeURIComponent(symbol) + runQuery).then(response => response.ok ? response.json() : Promise.reject(response));
+        const companyName = snapshot.company_profile?.name || snapshot.game_research?.company_name || snapshot.symbol;
+        $('title').textContent = companyName + ' · ' + snapshot.symbol;
+        document.title = companyName + ' · 个人股票投研';
+        $('headerAsOf').textContent = '数据日期：' + (snapshot.market?.last_date || snapshot.game_opportunity?.as_of_date || '--');
+        $('overviewMeta').textContent = zh(snapshot.game_opportunity?.level || 'insufficient_data') + ' · ' + (snapshot.game_opportunity?.score || 0) + '/' + (snapshot.game_opportunity?.max_score || 12) + ' · 准备度 ' + (snapshot.research_readiness?.required_ready || 0) + '/' + (snapshot.research_readiness?.required_total || 0);
+        $('status').textContent = snapshot.has_data ? '已读取 ' + snapshot.symbol + ' 的本地研究数据。' : '未找到 ' + snapshot.symbol + ' 的研究数据。';
         renderMetrics(snapshot); renderDataHealth(snapshot.data_health); renderReadiness(snapshot.research_readiness); renderChart(snapshot.market); renderCompanyProfile(snapshot.company_profile); renderGameResearch(snapshot.game_research); renderGameOpportunity(snapshot.game_opportunity); renderGameOpportunityHistory(snapshot.game_opportunity_history); renderGameApprovals(snapshot.game_approvals); renderFundamentals(snapshot.fundamentals); renderValuationContext(snapshot.valuation_context); renderFinancialQuality(snapshot.financial_quality); renderFinancialHealth(snapshot.financial_health); renderFinancialTrend(snapshot.financial_quality_history); renderAgents(snapshot.agent_outputs); renderNews(snapshot.news); activeSnapshot = snapshot; renderDecision(snapshot.latest_run); renderDecisionJournal(snapshot.decision_journal, snapshot.latest_run); renderBacktest(snapshot.latest_run); renderRunHistory(snapshot.runs, activeRunId); await renderReportWorkspace(snapshot);
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));
-      } catch (error) { $('status').textContent = 'Unable to load local research storage.'; }
+        syncLocation();
+      } catch (error) {
+        $('status').textContent = '本地研究数据读取失败。';
+      }
     }
     async function addToWatchlist() {
       const symbol = $('watchSymbol').value.trim();
@@ -1053,8 +1300,8 @@ _APP_HTML = r"""<!doctype html>
     }
     async function removeFromWatchlist() {
       const symbol = $('symbol').value;
-      if (!symbol) return;
-      await fetch(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, {method:'DELETE'});
+      if (!symbol || !window.confirm('从自选股移除 ' + symbol + '？')) return;
+      await fetch('/api/watchlist?symbol=' + encodeURIComponent(symbol), {method:'DELETE'});
       activeRunId = null;
       await refreshSymbols();
       await loadSnapshot();
@@ -1073,19 +1320,23 @@ _APP_HTML = r"""<!doctype html>
         await refreshWatchlist();
         await refreshWatchlistBoard();
         setResearchButton(Boolean(activeJobId));
-      } catch (error) { $('symbol').innerHTML = '<option value="">Storage unavailable</option>'; }
+      } catch (error) { $('symbol').innerHTML = '<option value="">本地存储不可用</option>'; }
       await loadSnapshot();
     }
     $('addJournalEntry').addEventListener('click', addJournalEntry);
     $('decisionJournal').addEventListener('click', async event => { const button = event.target.closest('[data-journal-review]'); if (!button) return; await recordJournalReview(button.dataset.journalReview); });
     $('runResearch').addEventListener('click', startResearch);
-    $('refresh').addEventListener('click', loadSnapshot);
-    $('symbol').addEventListener('change', async () => { activeRunId = null; await loadSnapshot(); });
+    $('refresh').addEventListener('click', async () => { closeWatchMenu(); await loadSnapshot(); });
+    $('symbol').addEventListener('change', async () => { activeRunId = null; syncLocation(); await loadSnapshot(); });
     $('runHistory').addEventListener('change', async () => { activeRunId = $('runHistory').value || null; await loadSnapshot(); });
-    $('addSymbol').addEventListener('click', addToWatchlist);
-    $('removeSymbol').addEventListener('click', removeFromWatchlist);
-    $('watchlistBoard').addEventListener('click', async event => { const button = event.target.closest('[data-watch-symbol]'); if (!button) return; activeRunId = null; await refreshSymbols(button.dataset.watchSymbol); await loadSnapshot(); });
+    $('addSymbol').addEventListener('click', async () => { await addToWatchlist(); closeWatchMenu(); });
+    $('removeSymbol').addEventListener('click', async () => { await removeFromWatchlist(); closeWatchMenu(); });
+    $('watchlistBoard').addEventListener('click', async event => { const button = event.target.closest('[data-watch-symbol]'); if (!button) return; activeRunId = null; await refreshSymbols(button.dataset.watchSymbol); syncLocation(); await loadSnapshot(); });
     $('watchSymbol').addEventListener('keydown', async event => { if (event.key === 'Enter') await addToWatchlist(); });
+    $('refreshWatchlistResearch').addEventListener('click', startWatchlistRefresh);
+    $('reportDisclosure').addEventListener('toggle', async () => { if ($('reportDisclosure').open) await loadReportPreview(); });
+    document.querySelectorAll('[data-view-target]').forEach(tab => tab.addEventListener('click', () => setActiveView(tab.dataset.viewTarget)));
+    setActiveView(activeView, false);
     initializeJournalDates();
     start();
   </script>

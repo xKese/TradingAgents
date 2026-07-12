@@ -36,6 +36,16 @@ from .data_contracts import (
     PriceBar,
 )
 from .data_health import build_cache_data_health
+from .game_approvals import (
+    GameApprovalDigest,
+    GameApprovalKind,
+    GameApprovalMatch,
+    GameApprovalRecord,
+    GameCompanyMatchStatus,
+    JsonGameApprovalStore,
+    make_approval_id,
+    match_game_approval,
+)
 from .game_universe import (
     GameBusinessEntity,
     GameCatalyst,
@@ -60,6 +70,7 @@ from .narrative_provider import (
     ResearchNarrativeContext,
     ResearchNarrativeProvider,
 )
+from .nppa_provider import NppaApprovalProvider, NppaProviderError
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import (
     LocalResearchJobRunner,
@@ -120,6 +131,11 @@ __all__ = [
     "build_cache_data_health",
     "build_company_profile",
     "build_game_research_snapshot",
+    "GameApprovalDigest",
+    "GameApprovalKind",
+    "GameApprovalMatch",
+    "GameApprovalRecord",
+    "GameCompanyMatchStatus",
     "GameBusinessEntity",
     "GameCatalyst",
     "GameCatalystCategory",
@@ -133,6 +149,8 @@ __all__ = [
     "GameProductStatus",
     "GameResearchSnapshot",
     "list_game_universe_symbols",
+    "make_approval_id",
+    "match_game_approval",
     "build_report_workspace",
     "build_research_readiness",
     "build_watchlist_board",
@@ -148,6 +166,7 @@ __all__ = [
     "FundamentalSnapshot",
     "InstrumentIdentity",
     "InvestmentThesis",
+    "JsonGameApprovalStore",
     "JsonResearchRunArchive",
     "JsonWatchlistStore",
     "LocalResearchJobRunner",
@@ -156,6 +175,8 @@ __all__ = [
     "NarrativeProviderError",
     "NarrativeProviderUnavailableError",
     "NewsItem",
+    "NppaApprovalProvider",
+    "NppaProviderError",
     "OpenAIResearchNarrativeProvider",
     "PriceBar",
     "ResearchDataProvider",

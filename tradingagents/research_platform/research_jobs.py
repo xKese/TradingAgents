@@ -194,6 +194,9 @@ class LocalResearchJobRunner:
             if job.request.narrative_mode in {NarrativeMode.OPENAI_NARRATIVE, NarrativeMode.MULTI_AGENT_RESEARCH}:
                 self._update(job_id, phase="configuring_llm_research")
                 narrative_provider = self.narrative_provider_factory(job.request)
+                progress_setter = getattr(narrative_provider, "set_progress_callback", None)
+                if callable(progress_setter):
+                    progress_setter(lambda phase: self._update(job_id, phase=phase))
             self._update(job_id, phase="running_research_workflow")
             signal = _build_manual_signal(job.request)
             result = run_ticker_research(

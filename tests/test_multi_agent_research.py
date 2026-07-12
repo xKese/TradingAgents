@@ -107,3 +107,18 @@ def test_configuration_requires_explicit_model(monkeypatch):
     monkeypatch.delenv("TRADINGAGENTS_RESEARCH_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("TRADINGAGENTS_RESEARCH_LLM_MODEL", raising=False)
     assert multi_agent_configuration_status()["ready"] is False
+
+
+def test_progress_callback_reports_each_bounded_stage():
+    phases = []
+    provider = MultiAgentResearchProvider(
+        config=LLMResearchConfig(provider="deepseek", model="configured-model"),
+        llm=FakeLLM(),
+    )
+    provider.set_progress_callback(phases.append)
+    provider.generate(context())
+    assert phases == [
+        "multi_agent:fundamentals", "multi_agent:market", "multi_agent:game_news",
+        "multi_agent:valuation", "multi_agent:bull", "multi_agent:bear",
+        "multi_agent:manager", "multi_agent:complete",
+    ]

@@ -1216,7 +1216,15 @@ _APP_HTML = r"""<!doctype html>
       const payload = await fetch('/api/research-jobs/' + encodeURIComponent(activeJobId)).then(response => response.ok ? response.json() : Promise.reject(response));
       const job = payload.job;
       if (job.status === 'queued' || job.status === 'running') {
-        setStatus('正在研究 ' + job.request.symbol + ' · ' + (job.status === 'queued' ? '排队中' : '运行中'), 'busy');
+        const phases = {
+          queued: '排队中', collecting_normalized_evidence: '收集标准化证据',
+          configuring_llm_research: '检查模型配置', running_research_workflow: '运行确定性研究',
+          'multi_agent:fundamentals': '基本面分析师', 'multi_agent:market': '技术与市场分析师',
+          'multi_agent:game_news': '新闻、游戏产品与版号分析师', 'multi_agent:valuation': '估值分析师',
+          'multi_agent:bull': 'Bull 研究员', 'multi_agent:bear': 'Bear 研究员',
+          'multi_agent:manager': 'Research Manager 综合', 'multi_agent:complete': '整理多智能体结果'
+        };
+        setStatus('正在研究 ' + job.request.symbol + ' · ' + (phases[job.phase] || '运行中'), 'busy');
         window.setTimeout(pollResearchJob, 800);
         return;
       }

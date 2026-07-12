@@ -7,6 +7,7 @@ trade signals and therefore cannot bypass the deterministic risk layer.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
@@ -97,9 +98,13 @@ def multi_agent_configuration_status() -> dict[str, Any]:
 class MultiAgentResearchProvider:
     """Run four specialists, a bounded bull/bear debate, and a manager synthesis."""
 
-    def __init__(self, *, config: LLMResearchConfig, llm: Any):
+    def __init__(self, *, config: LLMResearchConfig, llm: Any, progress_callback: Callable[[str], None] | None = None):
         self.config = config
         self.llm = llm
+        self.progress_callback = progress_callback
+
+    def set_progress_callback(self, callback: Callable[[str], None]) -> None:
+        self.progress_callback = callback
 
     @classmethod
     def from_environment(cls) -> MultiAgentResearchProvider:
@@ -116,17 +121,21 @@ class MultiAgentResearchProvider:
         outputs: list[AgentOutputEnvelope] = []
         notes: list[AgentOutputEnvelope] = []
         for role_id, role_name in ANALYST_ROLES:
+            self._progress(f"multi_agent:{role_id}")
             result = self._note_call(context, role_id, role_name, _context_prompt(context))
             outputs.append(result)
             if result.payload is not None:
                 notes.append(result)
 
         debate_context = _outputs_prompt(notes)
+        self._progress("multi_agent:bull")
         bull = self._note_call(context, "bull", "Bull 研究员", debate_context)
         outputs.append(bull)
+        self._progress("multi_agent:bear")
         bear = self._note_call(context, "bear", "Bear 研究员", debate_context + "\nBull观点:\n" + bull.summary)
         outputs.append(bear)
 
+        self._progress("multi_agent:manager")
         manager_prompt = debate_context + "\nBull观点:\n" + bull.summary + "\nBear观点:\n" + bear.summary
         try:
             thesis, audit = self._invoke(StructuredThesis, _system("Research Manager", context) + manager_prompt)
@@ -147,7 +156,12 @@ class MultiAgentResearchProvider:
             ))
         except Exception as error:
             outputs.append(self._failure(context, "manager", "Research Manager", error))
+        self._progress("multi_agent:complete")
         return outputs
+
+    def _progress(self, phase: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(phase)
 
     def _note_call(self, context: ResearchNarrativeContext, role_id: str, role_name: str, material: str) -> AgentOutputEnvelope:
         try:

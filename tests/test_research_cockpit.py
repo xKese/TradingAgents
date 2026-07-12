@@ -495,3 +495,46 @@ def test_cockpit_exposes_seed_game_universe_without_cached_artifacts(tmp_path):
         "异环",
         "诛仙世界",
     }
+
+
+def test_cockpit_agent_outputs_follow_selected_archived_run(tmp_path):
+    archive = JsonResearchRunArchive(tmp_path)
+    older_output = agent_output_from_analyst_note(
+        AnalystNote(
+            symbol="NVDA",
+            analyst_role="Older Selected Analyst",
+            as_of_date=date(2026, 1, 4),
+            summary="Only the selected archived run should be shown.",
+        )
+    )
+    older = archive.save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 4, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+            agent_outputs=[older_output],
+        )
+    )
+    archive.save_bundle(
+        ResearchReportBundle(
+            symbol="NVDA",
+            as_of_date=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            generated_at=datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
+            agent_outputs=[
+                agent_output_from_analyst_note(
+                    AnalystNote(
+                        symbol="NVDA",
+                        analyst_role="Newer Analyst",
+                        as_of_date=date(2026, 1, 5),
+                        summary="This belongs to another run.",
+                    )
+                )
+            ],
+        )
+    )
+
+    snapshot = build_cockpit_snapshot(JsonArtifactStore(tmp_path), "NVDA", run_id=older.run_id)
+
+    assert [item["agent_role"] for item in snapshot["agent_outputs"]] == [
+        "Older Selected Analyst"
+    ]

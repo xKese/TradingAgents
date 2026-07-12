@@ -136,6 +136,7 @@ def build_cockpit_snapshot(
     )
     if selected_run_id is not None and latest_run is None:
         raise ValueError("run_id was not found for this symbol")
+    displayed_agent_outputs = latest_run.agent_outputs if latest_run is not None else agent_outputs
     data_health = build_cache_data_health(
         price_bars=bars,
         fundamentals=fundamentals,
@@ -183,7 +184,9 @@ def build_cockpit_snapshot(
             item.model_dump(mode="json") for item in financial_quality_history
         ],
         "news": [item.model_dump(mode="json") for item in news[:12]],
-        "agent_outputs": [item.model_dump(mode="json") for item in agent_outputs[:12]],
+        "agent_outputs": [
+            item.model_dump(mode="json") for item in displayed_agent_outputs
+        ],
         "latest_run": _run_summary(latest_run, run_id=selected_run_id),
         "report_workspace": build_report_workspace(latest_run),
         "data_health": data_health,

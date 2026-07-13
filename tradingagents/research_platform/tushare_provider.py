@@ -27,8 +27,9 @@ class TushareDataUnavailableError(RuntimeError):
 class TushareProProvider:
     """Normalize Tushare Pro A-share and Hong Kong daily data.
 
-    A-share bars come from Tushare's unadjusted ``daily`` endpoint. Hong Kong
-    bars use ``hk_daily_adj`` when the caller has that endpoint's permission.
+    A-share bars merge Tushare's ``daily`` and ``adj_factor`` endpoints and
+    expose forward-adjusted closes. Hong Kong bars use ``hk_daily_adj`` when
+    the caller has that endpoint's permission.
     A-share company disclosures are normalized as date-granular research
     evidence; Hong Kong company-event coverage is intentionally not inferred.
     """
@@ -76,12 +77,8 @@ class TushareProProvider:
                 f"no Tushare rows available by {availability_date.isoformat()} for {identity.symbol}"
             )
 
-        factors = [
-            factor
-            for _, row in parsed_rows
-            if (factor := _optional_float(row, "adj_factor")) is not None
-        ]
-        latest_factor = max(factors) if factors else None
+        latest_row = max(parsed_rows, key=lambda item: item[0])[1]
+        latest_factor = _optional_float(latest_row, "adj_factor")
         bars: list[PriceBar] = []
         for trade_date, row in parsed_rows:
             close = _required_float(row, "close")
@@ -100,6 +97,12 @@ class TushareProProvider:
                     low=_required_float(row, "low"),
                     close=close,
                     adjusted_close=adjusted_close,
+                    adjustment_factor=factor,
+                    adjustment_method=(
+                        "forward_adjusted"
+                        if factor is not None and latest_factor not in (None, 0)
+                        else None
+                    ),
                     volume=_optional_int(row, "vol"),
                     currency=identity.currency or _currency_for(ts_code),
                     provenance=_provenance(
@@ -107,7 +110,11 @@ class TushareProProvider:
                         source=(
                             "tushare.pro.hk_daily_adj"
                             if ts_code.endswith(".HK")
-                            else "tushare.pro.daily"
+                            else (
+                                "tushare.pro.daily+adj_factor"
+                                if latest_factor is not None
+                                else "tushare.pro.daily"
+                            )
                         ),
                         vendor_symbol=ts_code,
                     ),
@@ -238,12 +245,24 @@ class TushareProProvider:
         try:
             if ts_code.endswith(".HK"):
                 return self._pro.hk_daily_adj(**params)
-            return self._pro.daily(**params)
+            daily_rows = _records(self._pro.daily(**params))
+            try:
+                factor_rows = _records(self._pro.adj_factor(**params))
+            except Exception:
+                factor_rows = []
+            factors_by_date = {
+                str(row.get("trade_date")): _optional_float(row, "adj_factor")
+                for row in factor_rows
+                if row.get("trade_date") is not None
+            }
+            return [
+                {**row, "adj_factor": factors_by_date.get(str(row.get("trade_date")))}
+                for row in daily_rows
+            ]
         except Exception as error:
             raise TushareDataUnavailableError(
                 f"Tushare price data unavailable for {ts_code}: {error}"
             ) from error
-
 
     def _fetch_a_share_company_profile(self, ts_code: str) -> dict[str, str]:
         params = {
@@ -269,6 +288,7 @@ class TushareProProvider:
             for source, target in mapping.items()
             if isinstance((value := rows[0].get(source)), str) and value.strip()
         }
+
     def _fetch_fundamental_rows(
         self,
         endpoint: str,
@@ -453,7 +473,6 @@ def _records(frame: Any) -> list[Mapping[str, Any]]:
     raise TushareDataUnavailableError("Tushare returned an unsupported response type")
 
 
-
 def _daily_fundamental_snapshots(
     *,
     identity: InstrumentIdentity,
@@ -462,9 +481,7 @@ def _daily_fundamental_snapshots(
     currency: str,
     source: str,
     ts_code: str,
-    metric_builder: Callable[
-        [list[Mapping[str, Any]], date], dict[str, float | int | str | None]
-    ],
+    metric_builder: Callable[[list[Mapping[str, Any]], date], dict[str, float | int | str | None]],
 ) -> list[FundamentalSnapshot]:
     eligible = [
         row
@@ -494,7 +511,10 @@ def _daily_fundamental_snapshots(
         )
     return snapshots
 
-def _a_share_metrics(rows: list[Mapping[str, Any]], as_of_date: date) -> dict[str, float | int | str | None]:
+
+def _a_share_metrics(
+    rows: list[Mapping[str, Any]], as_of_date: date
+) -> dict[str, float | int | str | None]:
     row = _latest_row(rows, as_of_date)
     if row is None:
         return {}
@@ -514,7 +534,9 @@ def _a_share_metrics(rows: list[Mapping[str, Any]], as_of_date: date) -> dict[st
     )
 
 
-def _hk_metrics(rows: list[Mapping[str, Any]], as_of_date: date) -> dict[str, float | int | str | None]:
+def _hk_metrics(
+    rows: list[Mapping[str, Any]], as_of_date: date
+) -> dict[str, float | int | str | None]:
     row = _latest_row(rows, as_of_date)
     if row is None:
         return {}
@@ -531,7 +553,11 @@ def _hk_metrics(rows: list[Mapping[str, Any]], as_of_date: date) -> dict[str, fl
 
 
 def _latest_row(rows: list[Mapping[str, Any]], as_of_date: date) -> Mapping[str, Any] | None:
-    eligible = [row for row in rows if _has_trade_date(row) and _required_date(row, "trade_date") <= as_of_date]
+    eligible = [
+        row
+        for row in rows
+        if _has_trade_date(row) and _required_date(row, "trade_date") <= as_of_date
+    ]
     return max(eligible, key=lambda row: _required_date(row, "trade_date"), default=None)
 
 

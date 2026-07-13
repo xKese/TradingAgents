@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,11 +48,14 @@ from .narrative_provider import (
 )
 from .research_report import (
     ResearchReportBundle,
+    ResearchRunAudit,
     render_research_report,
     write_research_report,
 )
 from .risk_contracts import RiskPolicy, RiskReview, evaluate_basic_risk
 from .run_archive import ResearchRunArchive, ResearchRunSummary
+
+TECHNICAL_FEATURE_VERSION = "technical-snapshot-v2-adjusted"
 
 
 class ResearchWorkflowConfig(BaseModel):
@@ -60,6 +67,7 @@ class ResearchWorkflowConfig(BaseModel):
     as_of_date: date
     lookback_days: int = Field(default=90, ge=1)
     currency: str | None = None
+    narrative_mode: str = Field(default="deterministic", min_length=1)
     initial_cash: float = Field(default=100_000.0, gt=0)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     current_position_pct: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -135,9 +143,7 @@ def run_ticker_research(
         signal=signal,
     )
     if narrative_provider is not None:
-        game_research = build_game_research_snapshot(
-            config.symbol, as_of_date=config.as_of_date
-        )
+        game_research = build_game_research_snapshot(config.symbol, as_of_date=config.as_of_date)
         game_approvals = None
         game_opportunity = None
         if isinstance(store, JsonArtifactStore):
@@ -148,9 +154,7 @@ def run_ticker_research(
                 store, config.symbol, as_of_date=config.as_of_date
             )
         deterministic_outputs = [
-            output
-            for output in agent_outputs
-            if output.output_type != AgentOutputType.TRADE_SIGNAL
+            output for output in agent_outputs if output.output_type != AgentOutputType.TRADE_SIGNAL
         ]
         deterministic_report_markdown = render_research_report(
             ResearchReportBundle(
@@ -221,10 +225,20 @@ def run_ticker_research(
             signals=[backtest_signal],
         )
 
+    run_audit = build_run_audit(
+        config=config,
+        provider=provider,
+        narrative_provider=narrative_provider,
+        price_bars=price_bars,
+        fundamentals=fundamentals,
+        news=news,
+        agent_outputs=agent_outputs,
+    )
     bundle = ResearchReportBundle(
         symbol=config.symbol,
         as_of_date=datetime.combine(config.as_of_date, time.min, tzinfo=timezone.utc),
         price_bars=price_bars,
+        run_audit=run_audit,
         fundamentals=fundamentals,
         news=news,
         agent_outputs=agent_outputs,
@@ -245,6 +259,148 @@ def run_ticker_research(
     )
 
 
+def build_run_audit(
+    *,
+    config: ResearchWorkflowConfig,
+    provider: DataProvider,
+    narrative_provider: ResearchNarrativeProvider | None,
+    price_bars: Sequence[PriceBar],
+    fundamentals: Sequence[FundamentalSnapshot],
+    news: Sequence[NewsItem],
+    agent_outputs: Sequence[AgentOutputEnvelope],
+) -> ResearchRunAudit:
+    model_outputs = [
+        output for output in agent_outputs if isinstance(output.metadata.get("provider"), str)
+    ]
+    metadata = model_outputs[0].metadata if model_outputs else {}
+    llm_provider = metadata.get("provider")
+    llm_model = metadata.get("model")
+    prompt_versions = sorted(
+        {
+            str(version)
+            for output in model_outputs
+            if (version := output.metadata.get("prompt_version"))
+        }
+    )
+    adjusted_count = sum(bar.adjusted_close is not None for bar in price_bars)
+    price_basis = (
+        "forward_adjusted"
+        if price_bars and adjusted_count == len(price_bars)
+        else "mixed"
+        if adjusted_count
+        else "raw_unadjusted"
+    )
+    usage: dict[str, int | float] = {}
+    for output in model_outputs:
+        for key, value in output.metadata.items():
+            if (
+                key.startswith("usage_")
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                usage[key.removeprefix("usage_")] = usage.get(key.removeprefix("usage_"), 0) + value
+
+    return ResearchRunAudit(
+        narrative_mode=config.narrative_mode,
+        data_provider=getattr(provider, "name", provider.__class__.__name__),
+        llm_provider=str(llm_provider) if llm_provider else None,
+        llm_model=str(llm_model) if llm_model else None,
+        llm_endpoint=_llm_endpoint_identifier(narrative_provider, llm_provider),
+        prompt_versions=prompt_versions,
+        technical_feature_version=TECHNICAL_FEATURE_VERSION,
+        context_fingerprint=_context_fingerprint(
+            config=config,
+            price_bars=price_bars,
+            fundamentals=fundamentals,
+            news=news,
+        ),
+        price_basis=price_basis,
+        price_bar_count=len(price_bars),
+        adjusted_price_bar_count=adjusted_count,
+        successful_model_stages=sum(
+            not bool(output.metadata.get("failed")) for output in model_outputs
+        ),
+        degraded_model_stages=sum(bool(output.metadata.get("failed")) for output in model_outputs),
+        total_model_latency_ms=sum(
+            int(output.metadata.get("latency_ms") or 0) for output in model_outputs
+        ),
+        usage=usage,
+    )
+
+
+def _llm_endpoint_identifier(
+    narrative_provider: ResearchNarrativeProvider | None,
+    provider_name: Any,
+) -> str | None:
+    if not provider_name:
+        return None
+    provider_config = getattr(narrative_provider, "config", None)
+    base_url = getattr(provider_config, "base_url", None)
+    if not base_url:
+        return f"{provider_name}:provider-default"
+    parsed = urlparse(str(base_url))
+    if not parsed.hostname:
+        return f"{provider_name}:custom-endpoint"
+    host = parsed.hostname
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme or 'https'}://{host}{path}"
+
+
+def _context_fingerprint(
+    *,
+    config: ResearchWorkflowConfig,
+    price_bars: Sequence[PriceBar],
+    fundamentals: Sequence[FundamentalSnapshot],
+    news: Sequence[NewsItem],
+) -> str:
+    payload = {
+        "symbol": config.symbol,
+        "as_of_date": config.as_of_date.isoformat(),
+        "lookback_days": config.lookback_days,
+        "prices": [
+            {
+                "date": bar.date.isoformat(),
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "adjusted_close": bar.adjusted_close,
+                "volume": bar.volume,
+                "source": bar.provenance.source,
+            }
+            for bar in sorted(price_bars, key=lambda item: item.date)
+        ],
+        "fundamentals": [
+            {
+                "period_end": item.period_end.isoformat(),
+                "fiscal_period": item.fiscal_period,
+                "metrics": item.metrics,
+                "as_of_date": item.provenance.as_of_date.isoformat(),
+                "source": item.provenance.source,
+            }
+            for item in fundamentals
+        ],
+        "news": [
+            {
+                "source_id": item.source_id,
+                "published_at": item.published_at.isoformat(),
+                "title": item.title,
+            }
+            for item in news
+        ],
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"sha256:{sha256(serialized.encode('utf-8')).hexdigest()}"
+
+
 def build_agent_outputs(
     *,
     analyst_notes: Sequence[AnalystNote],
@@ -259,6 +415,7 @@ def build_agent_outputs(
     if signal is not None:
         outputs.append(agent_output_from_trade_signal(signal))
     return outputs
+
 
 def build_deterministic_notes(
     *,

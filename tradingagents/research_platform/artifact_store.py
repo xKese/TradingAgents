@@ -92,12 +92,13 @@ class JsonArtifactStore:
         as_of_date: date | None = None,
     ) -> list[PriceBar]:
         records = self._load("prices", symbol, PriceBar)
-        return [
+        eligible = [
             record
             for record in records
             if start <= record.date <= end
             and (as_of_date is None or record.provenance.as_of_date <= as_of_date)
         ]
+        return _latest_price_versions(eligible)
 
     def save_fundamentals(self, records: Sequence[FundamentalSnapshot]) -> None:
         self._save_grouped(records, "fundamentals", lambda r: r.symbol, _fundamental_key)
@@ -145,7 +146,9 @@ class JsonArtifactStore:
         as_of_date: date | None = None,
     ) -> list[AgentOutputEnvelope]:
         records = self._load("agent_outputs", symbol, AgentOutputEnvelope)
-        return [record for record in records if as_of_date is None or record.as_of_date <= as_of_date]
+        return [
+            record for record in records if as_of_date is None or record.as_of_date <= as_of_date
+        ]
 
     def _save_grouped(
         self,
@@ -172,6 +175,7 @@ class JsonArtifactStore:
         if not path.exists():
             return []
         records: list[RecordT] = []
+
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 records.append(model.model_validate_json(line))
@@ -191,37 +195,68 @@ class JsonArtifactStore:
         return self.root / kind / f"{safe_symbol}.jsonl"
 
 
+def _latest_price_versions(records: Sequence[PriceBar]) -> list[PriceBar]:
+    selected: dict[date, PriceBar] = {}
+    for record in records:
+        current = selected.get(record.date)
+        candidate_rank = (
+            record.adjusted_close is not None,
+            record.provenance.as_of_date,
+            record.provenance.retrieved_at,
+        )
+        current_rank = (
+            (
+                current.adjusted_close is not None,
+                current.provenance.as_of_date,
+                current.provenance.retrieved_at,
+            )
+            if current is not None
+            else None
+        )
+        if current_rank is None or candidate_rank > current_rank:
+            selected[record.date] = record
+    return [selected[day] for day in sorted(selected)]
+
+
 def _price_key(record: PriceBar) -> str:
-    return "|".join([
-        record.date.isoformat(),
-        record.provenance.as_of_date.isoformat(),
-        record.provenance.provider,
-    ])
+    return "|".join(
+        [
+            record.date.isoformat(),
+            record.provenance.as_of_date.isoformat(),
+            record.provenance.provider,
+        ]
+    )
 
 
 def _fundamental_key(record: FundamentalSnapshot) -> str:
-    return "|".join([
-        record.period_end.isoformat(),
-        record.fiscal_period or "",
-        record.provenance.as_of_date.isoformat(),
-        record.provenance.provider,
-    ])
+    return "|".join(
+        [
+            record.period_end.isoformat(),
+            record.fiscal_period or "",
+            record.provenance.as_of_date.isoformat(),
+            record.provenance.provider,
+        ]
+    )
 
 
 def _news_key(record: NewsItem) -> str:
     if record.source_id:
         return record.source_id
-    return "|".join([
-        record.published_at.isoformat(),
-        record.provider,
-        record.title,
-        record.url or "",
-    ])
+    return "|".join(
+        [
+            record.published_at.isoformat(),
+            record.provider,
+            record.title,
+            record.url or "",
+        ]
+    )
 
 
 def _agent_output_key(record: AgentOutputEnvelope) -> str:
-    return "|".join([
-        record.as_of_date.isoformat(),
-        record.agent_id,
-        record.output_type.value,
-    ])
+    return "|".join(
+        [
+            record.as_of_date.isoformat(),
+            record.agent_id,
+            record.output_type.value,
+        ]
+    )

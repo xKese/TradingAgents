@@ -73,6 +73,9 @@ def build_report_workspace(bundle: ResearchReportBundle | None) -> dict[str, Any
         "core_total": 3,
         "as_of_date": bundle.as_of_date.isoformat(),
         "generated_at": bundle.generated_at.isoformat(),
+        "run_audit": (
+            bundle.run_audit.model_dump(mode="json") if bundle.run_audit is not None else None
+        ),
         "items": items,
     }
 

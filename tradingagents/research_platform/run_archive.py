@@ -27,6 +27,9 @@ class ResearchRunSummary(BaseModel):
     has_signal: bool
     has_risk_review: bool
     has_backtest: bool
+    narrative_mode: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
 
 
 class ResearchRunArchive(Protocol):
@@ -109,4 +112,7 @@ def _summary(run_id: str, bundle: ResearchReportBundle) -> ResearchRunSummary:
         has_signal=bundle.signal is not None,
         has_risk_review=bundle.risk_review is not None,
         has_backtest=bundle.backtest_result is not None,
+        narrative_mode=(bundle.run_audit.narrative_mode if bundle.run_audit is not None else None),
+        llm_provider=(bundle.run_audit.llm_provider if bundle.run_audit is not None else None),
+        llm_model=(bundle.run_audit.llm_model if bundle.run_audit is not None else None),
     )

@@ -17,8 +17,29 @@ class FakeProClient:
     def daily(self, **kwargs):
         self.calls.append(("daily", kwargs))
         return [
-            {"trade_date": "20260105", "open": 100, "high": 105, "low": 99, "close": 103, "vol": 1000},
-            {"trade_date": "20260102", "open": 98, "high": 101, "low": 97, "close": 100, "vol": 900},
+            {
+                "trade_date": "20260105",
+                "open": 100,
+                "high": 105,
+                "low": 99,
+                "close": 103,
+                "vol": 1000,
+            },
+            {
+                "trade_date": "20260102",
+                "open": 98,
+                "high": 101,
+                "low": 97,
+                "close": 100,
+                "vol": 900,
+            },
+        ]
+
+    def adj_factor(self, **kwargs):
+        self.calls.append(("adj_factor", kwargs))
+        return [
+            {"trade_date": "20260105", "adj_factor": 1.0},
+            {"trade_date": "20260102", "adj_factor": 1.0},
         ]
 
     def daily_basic(self, **kwargs):
@@ -40,6 +61,7 @@ class FakeProClient:
                 "list_date": "20010827",
             }
         ]
+
     def income(self, **kwargs):
         self.calls.append(("income", kwargs))
         return [
@@ -153,6 +175,7 @@ class FakeProClient:
                 "audit_agency": "Fixture audit firm",
             }
         ]
+
     def hk_daily_adj(self, **kwargs):
         self.calls.append(("hk_daily_adj", kwargs))
         return [
@@ -180,16 +203,23 @@ def test_tushare_provider_normalizes_a_share_daily_and_basic_snapshot():
 
     assert [bar.date for bar in bars] == [date(2026, 1, 2), date(2026, 1, 5)]
     assert bars[-1].currency == "CNY"
-    assert bars[-1].adjusted_close is None
+    assert bars[-1].adjusted_close == 103
+    assert bars[-1].adjustment_factor == 1.0
+    assert bars[-1].adjustment_method == "forward_adjusted"
+    assert bars[-1].provenance.source == "tushare.pro.daily+adj_factor"
     assert client.calls[0] == (
         "daily",
         {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"},
     )
     assert client.calls[1] == (
+        "adj_factor",
+        {"ts_code": "600519.SH", "start_date": "20260101", "end_date": "20260105"},
+    )
+    assert client.calls[2] == (
         "daily_basic",
         {"ts_code": "600519.SH", "start_date": "20241201", "end_date": "20260105"},
     )
-    assert client.calls[2] == (
+    assert client.calls[3] == (
         "stock_basic",
         {
             "ts_code": "600519.SH",
@@ -215,6 +245,60 @@ def test_tushare_provider_normalizes_a_share_daily_and_basic_snapshot():
             {"ts_code": "600519.SH", "start_date": "20240106", "end_date": "20260105"},
         ),
     ]
+
+
+def test_tushare_provider_forward_adjusts_across_a_corporate_action():
+    class CorporateActionClient(FakeProClient):
+        def daily(self, **kwargs):
+            self.calls.append(("daily", kwargs))
+            return [
+                {
+                    "trade_date": "20260105",
+                    "open": 50,
+                    "high": 52,
+                    "low": 49,
+                    "close": 50,
+                    "vol": 1000,
+                },
+                {
+                    "trade_date": "20260102",
+                    "open": 99,
+                    "high": 101,
+                    "low": 98,
+                    "close": 100,
+                    "vol": 900,
+                },
+            ]
+
+        def adj_factor(self, **kwargs):
+            self.calls.append(("adj_factor", kwargs))
+            return [
+                {"trade_date": "20260105", "adj_factor": 2.0},
+                {"trade_date": "20260102", "adj_factor": 1.0},
+            ]
+
+    bars = TushareProProvider(pro_client=CorporateActionClient()).get_price_bars(
+        InstrumentIdentity(symbol="600519"),
+        date(2026, 1, 1),
+        date(2026, 1, 5),
+    )
+
+    assert [bar.close for bar in bars] == [100, 50]
+    assert [bar.adjusted_close for bar in bars] == [50, 50]
+    assert all(bar.adjustment_method == "forward_adjusted" for bar in bars)
+
+
+def test_tushare_provider_keeps_raw_prices_when_adjustment_endpoint_is_unavailable():
+    class NoAdjustmentClient(FakeProClient):
+        def adj_factor(self, **kwargs):
+            raise RuntimeError("permission denied")
+
+    bars = TushareProProvider(pro_client=NoAdjustmentClient()).get_price_bars(
+        InstrumentIdentity(symbol="600519"), date(2026, 1, 1), date(2026, 1, 5)
+    )
+    assert all(bar.adjusted_close is None for bar in bars)
+    assert all(bar.adjustment_method is None for bar in bars)
+    assert all(bar.provenance.source == "tushare.pro.daily" for bar in bars)
 
 
 def test_tushare_provider_uses_hk_adjusted_endpoint_and_hkd_currency():

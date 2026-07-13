@@ -190,9 +190,15 @@ def test_run_ticker_research_handles_empty_provider():
     assert result.bundle.thesis is None
     assert "No normalized price bars available." in result.markdown
 
+
 class FixtureNarrativeProvider:
     def __init__(self):
         self.last_context = None
+        self.config = type(
+            "Config",
+            (),
+            {"base_url": "https://user:secret@example.com/v1?api_key=hidden"},
+        )()
 
     def generate(self, context):
         self.last_context = context
@@ -213,7 +219,14 @@ class FixtureNarrativeProvider:
                 summary="Validated fixture commentary.",
                 evidence=context.evidence,
                 confidence=ConfidenceLevel.MEDIUM,
-                metadata={"provider": "fixture"},
+                metadata={
+                    "provider": "fixture",
+                    "model": "fixture-model",
+                    "prompt_version": "fixture-prompt-v1",
+                    "latency_ms": 25,
+                    "usage_input_tokens": 10,
+                    "usage_output_tokens": 5,
+                },
             )
         ]
 
@@ -226,6 +239,7 @@ def test_run_ticker_research_persists_optional_narrative_output(tmp_path):
             symbol="NVDA",
             as_of_date=date(2026, 1, 5),
             lookback_days=4,
+            narrative_mode="multi_agent_research",
         ),
         provider=FakeProvider(),
         archive=archive,
@@ -238,9 +252,28 @@ def test_run_ticker_research_persists_optional_narrative_output(tmp_path):
     assert narrative.evidence
     assert narrative_provider.last_context is not None
     assert len(narrative_provider.last_context.deterministic_outputs) == 4
-    assert "# Personal Research Report: NVDA" in narrative_provider.last_context.deterministic_report_markdown
+    assert (
+        "# Personal Research Report: NVDA"
+        in narrative_provider.last_context.deterministic_report_markdown
+    )
     assert "Investment Thesis" in narrative_provider.last_context.deterministic_report_markdown
     assert archive.load_latest_bundle("NVDA") == result.bundle
+    audit = result.bundle.run_audit
+    assert audit is not None
+    assert audit.narrative_mode == "multi_agent_research"
+    assert audit.data_provider == "fixture"
+    assert audit.llm_provider == "fixture"
+    assert audit.llm_model == "fixture-model"
+    assert audit.llm_endpoint == "https://example.com/v1"
+    assert "secret" not in result.bundle.model_dump_json()
+    assert "hidden" not in result.bundle.model_dump_json()
+    assert audit.prompt_versions == ["fixture-prompt-v1"]
+    assert audit.price_basis == "forward_adjusted"
+    assert audit.adjusted_price_bar_count == 4
+    assert audit.successful_model_stages == 1
+    assert audit.degraded_model_stages == 0
+    assert audit.total_model_latency_ms == 25
+    assert audit.usage == {"input_tokens": 10, "output_tokens": 5}
 
 
 def test_workflow_passes_point_in_time_game_context_to_narrative_provider(tmp_path):
@@ -261,7 +294,8 @@ def test_workflow_passes_point_in_time_game_context_to_narrative_provider(tmp_pa
     assert context.game_research is not None
     assert context.game_research.available is True
     assert {item.name for item in context.game_research.products} >= {
-        "Whiteout Survival", "Kingshot"
+        "Whiteout Survival",
+        "Kingshot",
     }
     assert context.game_approvals is not None
     assert context.game_opportunity is not None

@@ -184,14 +184,22 @@ class LocalResearchJobRunner:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
     def _execute(self, job_id: str) -> None:
-        self._update(job_id, status=ResearchJobStatus.RUNNING, started_at=_utc_now(), phase="collecting_normalized_evidence")
+        self._update(
+            job_id,
+            status=ResearchJobStatus.RUNNING,
+            started_at=_utc_now(),
+            phase="collecting_normalized_evidence",
+        )
         job = self.get(job_id)
         if job is None:
             return
         try:
             provider = self.provider_factory(job.request)
             narrative_provider = None
-            if job.request.narrative_mode in {NarrativeMode.OPENAI_NARRATIVE, NarrativeMode.MULTI_AGENT_RESEARCH}:
+            if job.request.narrative_mode in {
+                NarrativeMode.OPENAI_NARRATIVE,
+                NarrativeMode.MULTI_AGENT_RESEARCH,
+            }:
                 self._update(job_id, phase="configuring_llm_research")
                 narrative_provider = self.narrative_provider_factory(job.request)
                 progress_setter = getattr(narrative_provider, "set_progress_callback", None)
@@ -205,6 +213,7 @@ class LocalResearchJobRunner:
                     as_of_date=job.request.as_of_date,
                     lookback_days=job.request.lookback_days,
                     currency=job.request.currency,
+                    narrative_mode=job.request.narrative_mode.value,
                 ),
                 provider=provider,
                 store=JsonArtifactStore(self.data_dir),

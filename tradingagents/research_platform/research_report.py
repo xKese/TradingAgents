@@ -37,6 +37,28 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class ResearchRunAudit(BaseModel):
+    """Safe, reproducible configuration and execution summary for one run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    narrative_mode: str = Field(min_length=1)
+    data_provider: str = Field(min_length=1)
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_endpoint: str | None = None
+    prompt_versions: list[str] = Field(default_factory=list)
+    technical_feature_version: str = Field(min_length=1)
+    context_fingerprint: str = Field(min_length=16)
+    price_basis: str = Field(min_length=1)
+    price_bar_count: int = Field(ge=0)
+    adjusted_price_bar_count: int = Field(ge=0)
+    successful_model_stages: int = Field(default=0, ge=0)
+    degraded_model_stages: int = Field(default=0, ge=0)
+    total_model_latency_ms: int = Field(default=0, ge=0)
+    usage: dict[str, int | float] = Field(default_factory=dict)
+
+
 class ResearchReportBundle(BaseModel):
     """All artifacts needed to render one personal ticker research report."""
 
@@ -45,6 +67,7 @@ class ResearchReportBundle(BaseModel):
     symbol: str = Field(min_length=1)
     as_of_date: datetime
     generated_at: datetime = Field(default_factory=_utc_now)
+    run_audit: ResearchRunAudit | None = None
     price_bars: list[PriceBar] = Field(default_factory=list)
     fundamentals: list[FundamentalSnapshot] = Field(default_factory=list)
     news: list[NewsItem] = Field(default_factory=list)
@@ -61,6 +84,7 @@ def render_research_report(bundle: ResearchReportBundle) -> str:
 
     sections = [
         _render_header(bundle),
+        _render_run_audit(bundle.run_audit),
         _render_market_snapshot(bundle.price_bars),
         _render_company_profile(bundle),
         _render_research_readiness(bundle),
@@ -106,6 +130,42 @@ def _render_header(bundle: ResearchReportBundle) -> str:
     )
 
 
+def _render_run_audit(audit: ResearchRunAudit | None) -> str:
+    if audit is None:
+        return ""
+
+    model = (
+        f"{audit.llm_provider} / {audit.llm_model}"
+        if audit.llm_provider and audit.llm_model
+        else "Not used"
+    )
+    adjustment_coverage = (
+        audit.adjusted_price_bar_count / audit.price_bar_count if audit.price_bar_count else 0.0
+    )
+    usage = (
+        ", ".join(f"{key}={value}" for key, value in sorted(audit.usage.items())) or "Unavailable"
+    )
+    return "\n".join(
+        [
+            "## Run Audit",
+            "",
+            "| Mode | Data Provider | Model | Prompt | Technical Version |",
+            "| --- | --- | --- | --- | --- |",
+            f"| {audit.narrative_mode} | {audit.data_provider} | {model} | "
+            f"{', '.join(audit.prompt_versions) or 'Deterministic'} | "
+            f"{audit.technical_feature_version} |",
+            "",
+            f"- **LLM endpoint:** {audit.llm_endpoint or 'Not used'}",
+            f"- **Context fingerprint:** {audit.context_fingerprint}",
+            f"- **Price basis:** {audit.price_basis}; adjusted coverage "
+            f"{adjustment_coverage:.1%} ({audit.adjusted_price_bar_count}/{audit.price_bar_count})",
+            f"- **Model stages:** {audit.successful_model_stages} succeeded; "
+            f"{audit.degraded_model_stages} degraded; {audit.total_model_latency_ms} ms recorded latency",
+            f"- **Usage:** {usage}",
+        ]
+    )
+
+
 def _render_market_snapshot(price_bars: list[PriceBar]) -> str:
     if not price_bars:
         return "## Market Snapshot\n\nNo normalized price bars available."
@@ -113,28 +173,39 @@ def _render_market_snapshot(price_bars: list[PriceBar]) -> str:
     ordered = sorted(price_bars, key=lambda bar: bar.date)
     first = ordered[0]
     last = ordered[-1]
-    change = last.close / first.close - 1.0 if first.close else 0.0
+    first_value = first.adjusted_close if first.adjusted_close is not None else first.close
+    last_value = last.adjusted_close if last.adjusted_close is not None else last.close
+    change = last_value / first_value - 1.0 if first_value else 0.0
+    adjusted_count = sum(bar.adjusted_close is not None for bar in ordered)
+    price_basis = (
+        "forward-adjusted"
+        if adjusted_count == len(ordered)
+        else "mixed"
+        if adjusted_count
+        else "raw"
+    )
+    adjustment_coverage = adjusted_count / len(ordered)
     return "\n".join(
         [
             "## Market Snapshot",
             "",
-            "| Start | End | Last Close | Range Change | Bars |",
-            "| --- | --- | ---: | ---: | ---: |",
+            "| Start | End | Analysis Close | Range Change | Bars | Price Basis | Adjusted Coverage |",
+            "| --- | --- | ---: | ---: | ---: | --- | ---: |",
             "| "
             + " | ".join(
                 [
                     first.date.isoformat(),
                     last.date.isoformat(),
-                    _money(last.close, last.currency),
+                    _money(last_value, last.currency),
                     _pct(change),
                     str(len(ordered)),
+                    price_basis,
+                    _pct(adjustment_coverage),
                 ]
             )
             + " |",
         ]
     )
-
-
 
 
 def _render_company_profile(bundle: ResearchReportBundle) -> str:
@@ -164,6 +235,8 @@ def _render_company_profile(bundle: ResearchReportBundle) -> str:
             *rows,
         ]
     )
+
+
 def _render_research_readiness(bundle: ResearchReportBundle) -> str:
     financial_snapshots = [
         item
@@ -205,6 +278,8 @@ def _render_research_readiness(bundle: ResearchReportBundle) -> str:
             *rows,
         ]
     )
+
+
 def _render_fundamentals(fundamentals: list[FundamentalSnapshot]) -> str:
     if not fundamentals:
         return "## Fundamentals\n\nNo normalized fundamentals available."
@@ -227,7 +302,6 @@ def _render_fundamentals(fundamentals: list[FundamentalSnapshot]) -> str:
             *rows,
         ]
     )
-
 
 
 def _render_valuation_context(fundamentals: list[FundamentalSnapshot]) -> str:
@@ -266,6 +340,8 @@ def _render_valuation_context(fundamentals: list[FundamentalSnapshot]) -> str:
             *rows,
         ]
     )
+
+
 def _render_financial_quality(fundamentals: list[FundamentalSnapshot]) -> str:
     snapshots = [
         item
@@ -334,6 +410,7 @@ def _render_financial_health(fundamentals: list[FundamentalSnapshot]) -> str:
         ]
     )
 
+
 def _render_financial_trend(fundamentals: list[FundamentalSnapshot]) -> str:
     snapshots = [
         item
@@ -343,7 +420,9 @@ def _render_financial_trend(fundamentals: list[FundamentalSnapshot]) -> str:
     by_period = {item.period_end: item for item in snapshots}
     history = [item for _, item in sorted(by_period.items(), reverse=True)[:8]]
     if len(history) < 2:
-        return "## Financial Trend\n\nFewer than two disclosed financial report periods are available."
+        return (
+            "## Financial Trend\n\nFewer than two disclosed financial report periods are available."
+        )
 
     rows = []
     for item in history:
@@ -400,26 +479,26 @@ def _render_agent_outputs(outputs: list[AgentOutputEnvelope]) -> str:
     manager = [item for item in outputs if item.metadata.get("stage") == "manager"]
     failed = [item for item in outputs if item.metadata.get("failed") is True]
     debate = [
-        item for item in outputs
+        item
+        for item in outputs
         if item.metadata.get("stage") in {"bull", "bear"} and item not in failed
     ]
     specialists = [
-        item for item in outputs
+        item
+        for item in outputs
         if item.metadata.get("provider")
         and item not in manager
         and item not in debate
         and item not in failed
     ]
     baseline = [
-        item for item in outputs
-        if not item.metadata.get("provider") and item not in failed
+        item for item in outputs if not item.metadata.get("provider") and item not in failed
     ]
 
     parts = [
         "## Agent Outputs",
         "",
-        "> 阅读顺序：先看研究经理综合，再核对多空辩论和专家意见；"
-        "降级阶段不应作为有效结论。",
+        "> 阅读顺序：先看研究经理综合，再核对多空辩论和专家意见；降级阶段不应作为有效结论。",
     ]
     for title, items in (
         ("研究经理综合", manager),
@@ -447,7 +526,9 @@ def _render_readable_agent_output(output: AgentOutputEnvelope) -> str:
         output = output.model_copy(
             update={
                 "sections": [
-                    AgentOutputSection(title="基础情景", summary=thesis.base_case, evidence=thesis.evidence),
+                    AgentOutputSection(
+                        title="基础情景", summary=thesis.base_case, evidence=thesis.evidence
+                    ),
                     AgentOutputSection(title="乐观情景", summary=thesis.bull_case),
                     AgentOutputSection(title="悲观情景", summary=thesis.bear_case),
                     AgentOutputSection(title="潜在催化剂", bullets=thesis.catalysts),
@@ -458,6 +539,7 @@ def _render_readable_agent_output(output: AgentOutputEnvelope) -> str:
             }
         )
     return render_agent_output(output)
+
 
 def _render_analyst_notes(notes: list[AnalystNote]) -> str:
     if not notes:
@@ -557,7 +639,9 @@ def _render_backtest(result: BacktestResult | None) -> str:
 def _render_provenance(bundle: ResearchReportBundle) -> str:
     rows = []
     for bar in bundle.price_bars:
-        rows.append(_provenance_row("price", bar.symbol, bar.provenance.provider, bar.provenance.as_of_date))
+        rows.append(
+            _provenance_row("price", bar.symbol, bar.provenance.provider, bar.provenance.as_of_date)
+        )
     for snapshot in bundle.fundamentals:
         rows.append(
             _provenance_row(
@@ -568,7 +652,9 @@ def _render_provenance(bundle: ResearchReportBundle) -> str:
             )
         )
     for item in bundle.news:
-        rows.append(_provenance_row("news", item.symbol or bundle.symbol, item.provider, item.as_of_date))
+        rows.append(
+            _provenance_row("news", item.symbol or bundle.symbol, item.provider, item.as_of_date)
+        )
 
     if not rows:
         return "## Provenance\n\nNo data provenance available."

@@ -184,9 +184,7 @@ def build_cockpit_snapshot(
             item.model_dump(mode="json") for item in financial_quality_history
         ],
         "news": [item.model_dump(mode="json") for item in news[:12]],
-        "agent_outputs": [
-            item.model_dump(mode="json") for item in displayed_agent_outputs
-        ],
+        "agent_outputs": [item.model_dump(mode="json") for item in displayed_agent_outputs],
         "latest_run": _run_summary(latest_run, run_id=selected_run_id),
         "report_workspace": build_report_workspace(latest_run),
         "data_health": data_health,
@@ -205,17 +203,34 @@ def _market_summary(bars: list[Any]) -> dict[str, Any] | None:
     if not bars:
         return None
     first, last = bars[0], bars[-1]
-    period_return = last.close / first.close - 1.0 if first.close else None
+    first_value = first.adjusted_close if first.adjusted_close is not None else first.close
+    last_value = last.adjusted_close if last.adjusted_close is not None else last.close
+    period_return = last_value / first_value - 1.0 if first_value else None
+    adjusted_count = sum(bar.adjusted_close is not None for bar in bars)
+    price_basis = (
+        "forward_adjusted"
+        if adjusted_count == len(bars)
+        else "mixed"
+        if adjusted_count
+        else "raw_unadjusted"
+    )
     return {
         "first_date": first.date.isoformat(),
         "last_date": last.date.isoformat(),
-        "last_close": last.close,
+        "last_close": last_value,
+        "price_basis": price_basis,
+        "adjusted_bar_count": adjusted_count,
+        "adjustment_coverage_pct": adjusted_count / len(bars),
         "currency": last.currency,
         "period_return_pct": period_return,
         "latest_volume": last.volume,
         "bar_count": len(bars),
         "series": [
-            {"date": bar.date.isoformat(), "close": bar.close, "volume": bar.volume}
+            {
+                "date": bar.date.isoformat(),
+                "close": bar.adjusted_close if bar.adjusted_close is not None else bar.close,
+                "volume": bar.volume,
+            }
             for bar in bars[-90:]
         ],
     }
@@ -237,6 +252,9 @@ def _run_summary(
         "signal": bundle.signal.model_dump(mode="json") if bundle.signal is not None else None,
         "risk_review": (
             bundle.risk_review.model_dump(mode="json") if bundle.risk_review is not None else None
+        ),
+        "run_audit": (
+            bundle.run_audit.model_dump(mode="json") if bundle.run_audit is not None else None
         ),
         "backtest": (
             {
@@ -436,14 +454,20 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.CREATED, {"entry": entry.model_dump(mode="json")})
             return
         if parsed.path.startswith("/api/decision-journal/") and parsed.path.endswith("/review"):
-            entry_id = parsed.path.removeprefix("/api/decision-journal/").removesuffix("/review").strip("/")
+            entry_id = (
+                parsed.path.removeprefix("/api/decision-journal/")
+                .removesuffix("/review")
+                .strip("/")
+            )
             try:
                 payload = self._read_json_body()
                 reviewed_on = date.fromisoformat(str(payload.get("reviewed_on", "")))
                 journal = JsonDecisionJournal(self.store.root)
                 entry = journal.get_entry(entry_id)
                 if entry is None:
-                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "decision journal entry was not found"})
+                    self._send_json(
+                        HTTPStatus.NOT_FOUND, {"error": "decision journal entry was not found"}
+                    )
                     return
                 reviewed = review_journal_entry(
                     entry,
@@ -1178,8 +1202,12 @@ _APP_HTML = r"""<!doctype html>
       $('openReport').href = baseUrl; $('openReport').setAttribute('aria-disabled', 'false');
       $('exportReport').href = baseUrl + '?download=1'; $('exportReport').setAttribute('aria-disabled', 'false');
       $('exportReport').setAttribute('download', snapshot.symbol + '_' + run.run_id + '.md');
+      const audit = workspace.run_audit;
+      const adjustedCoverage = audit?.price_bar_count ? (audit.adjusted_price_bar_count / audit.price_bar_count * 100).toFixed(0) + '%' : 'N/A';
+      const auditHtml = audit ? '<div class="coverage-summary">\u8fd0\u884c\u5ba1\u8ba1\uff1a' + escape(audit.narrative_mode) + ' ? ' + escape((audit.llm_provider && audit.llm_model) ? audit.llm_provider + '/' + audit.llm_model : '\u786e\u5b9a\u6027') + ' ? ' + escape(audit.price_basis) + ' ' + adjustedCoverage + ' ? ' + audit.successful_model_stages + '\u6210\u529f/' + audit.degraded_model_stages + '\u964d\u7ea7</div>' : '';
       $('reportCoverage').className = '';
       $('reportCoverage').innerHTML = '<div class="coverage-summary">核心数据覆盖：' + workspace.core_available + '/' + workspace.core_total + '</div><ul class="coverage-list">' + workspace.items.map(item => '<li class="coverage-item"><div><div class="coverage-label">' + escape(zh(item.label)) + '</div><div class="coverage-detail">' + escape(item.detail) + '</div></div><span class="coverage-status ' + (item.available ? '' : 'missing') + '">' + (item.available ? '可用' : item.optional ? '未使用' : '缺失') + '</span></li>').join('') + '</ul>';
+      $('reportCoverage').innerHTML = auditHtml + $('reportCoverage').innerHTML;
       $('reportPreview').dataset.reportUrl = baseUrl;
       $('reportPreview').textContent = '展开后加载报告全文。';
       if ($('reportDisclosure').open) await loadReportPreview();

@@ -1,10 +1,15 @@
 from datetime import date, datetime, timezone
+from time import sleep
 
 from tradingagents.research_platform.data_contracts import (
     DataProvenance,
     FundamentalSnapshot,
     NewsItem,
     PriceBar,
+)
+from tradingagents.research_platform.multi_agent_research import (
+    LLMResearchConfig,
+    MultiAgentResearchProvider,
 )
 from tradingagents.research_platform.research_jobs import (
     LocalResearchJobRunner,
@@ -120,6 +125,7 @@ def test_local_job_runner_routes_manual_signal_through_risk_and_backtest(tmp_pat
     assert bundle.backtest_result is not None
     runner.shutdown()
 
+
 class FixtureNarrativeProvider:
     def generate(self, context):
         from tradingagents.research_platform.agent_contracts import (
@@ -188,8 +194,12 @@ def test_local_job_runner_reports_missing_openai_configuration(tmp_path, monkeyp
 
 
 def test_research_job_auto_selects_tushare_only_for_supported_china_hong_kong_symbols():
-    assert resolve_data_provider(ResearchJobRequest(symbol="600519")) == ResearchDataProvider.TUSHARE
-    assert resolve_data_provider(ResearchJobRequest(symbol="700.HK")) == ResearchDataProvider.TUSHARE
+    assert (
+        resolve_data_provider(ResearchJobRequest(symbol="600519")) == ResearchDataProvider.TUSHARE
+    )
+    assert (
+        resolve_data_provider(ResearchJobRequest(symbol="700.HK")) == ResearchDataProvider.TUSHARE
+    )
     assert resolve_data_provider(ResearchJobRequest(symbol="NVDA")) == ResearchDataProvider.YFINANCE
     assert (
         resolve_data_provider(
@@ -206,10 +216,13 @@ def test_local_job_runner_persists_multi_agent_mode_with_fake_provider(tmp_path)
         narrative_provider_factory=lambda request: FixtureNarrativeProvider(),
     )
     completed = runner.wait(
-        runner.submit(ResearchJobRequest(
-            symbol="002624", as_of_date=date(2026, 1, 2),
-            narrative_mode="multi_agent_research",
-        )).job_id,
+        runner.submit(
+            ResearchJobRequest(
+                symbol="002624",
+                as_of_date=date(2026, 1, 2),
+                narrative_mode="multi_agent_research",
+            )
+        ).job_id,
         timeout=2,
     )
     assert completed.status == ResearchJobStatus.SUCCEEDED
@@ -217,4 +230,60 @@ def test_local_job_runner_persists_multi_agent_mode_with_fake_provider(tmp_path)
     bundle = JsonResearchRunArchive(tmp_path).load_latest_bundle("002624")
     assert bundle is not None
     assert any(output.agent_id == "fixture-narrative" for output in bundle.agent_outputs)
+    runner.shutdown()
+
+
+class HangingResearchLLM:
+    def __init__(self):
+        self.calls = 0
+
+    def with_structured_output(self, schema, **kwargs):
+        owner = self
+
+        class Runner:
+            def invoke(self, prompt):
+                owner.calls += 1
+                sleep(0.25)
+                raise AssertionError("late fixture result")
+
+        return Runner()
+
+
+def test_timed_out_multi_agent_job_releases_single_worker_for_next_job(tmp_path):
+    llm = HangingResearchLLM()
+    narrative = MultiAgentResearchProvider(
+        config=LLMResearchConfig(
+            provider="deepseek",
+            model="fixture-model",
+            call_timeout_seconds=0.02,
+            max_retries=0,
+            total_timeout_seconds=1,
+        ),
+        llm=llm,
+    )
+    runner = LocalResearchJobRunner(
+        tmp_path,
+        provider_factory=lambda request: FixtureProvider(),
+        narrative_provider_factory=lambda request: narrative,
+    )
+
+    first = runner.submit(
+        ResearchJobRequest(
+            symbol="002624",
+            as_of_date=date(2026, 1, 2),
+            narrative_mode="multi_agent_research",
+        )
+    )
+    second = runner.submit(ResearchJobRequest(symbol="002602", as_of_date=date(2026, 1, 2)))
+
+    first_result = runner.wait(first.job_id, timeout=1)
+    second_result = runner.wait(second.job_id, timeout=1)
+
+    assert first_result.status == ResearchJobStatus.SUCCEEDED
+    assert second_result.status == ResearchJobStatus.SUCCEEDED
+    assert llm.calls == 1
+    first_bundle = JsonResearchRunArchive(tmp_path).load_latest_bundle("002624")
+    assert first_bundle is not None
+    assert first_bundle.run_audit is not None
+    assert first_bundle.run_audit.degraded_model_stages == 7
     runner.shutdown()

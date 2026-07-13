@@ -88,6 +88,39 @@ def test_json_artifact_store_merges_duplicate_price_keys(tmp_path):
     assert bars[0].close == 105
 
 
+
+def test_json_artifact_store_collapses_point_in_time_price_versions_by_trade_date(tmp_path):
+    store = JsonArtifactStore(tmp_path)
+    adjusted = PriceBar(
+        symbol="NVDA",
+        date=date(2026, 1, 2),
+        open=100,
+        high=105,
+        low=99,
+        close=104,
+        adjusted_close=102,
+        adjustment_factor=1.5,
+        adjustment_method="forward_adjusted",
+        provenance=_provenance(date(2026, 1, 2)),
+    )
+    later_raw = PriceBar(
+        symbol="NVDA",
+        date=date(2026, 1, 2),
+        open=100,
+        high=106,
+        low=99,
+        close=105,
+        provenance=_provenance(date(2026, 1, 3)),
+    )
+
+    store.save_price_bars([adjusted, later_raw])
+
+    bars = store.load_price_bars("NVDA", date(2026, 1, 1), date(2026, 1, 3))
+    assert len(bars) == 1
+    assert bars[0].adjusted_close == 102
+    assert bars[0].adjustment_method == "forward_adjusted"
+
+
 def test_json_artifact_store_round_trips_fundamentals(tmp_path):
     store = JsonArtifactStore(tmp_path)
     store.save_fundamentals(

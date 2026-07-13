@@ -7,9 +7,10 @@ or expanded without changing agent, backtest, risk, or report consumers.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -70,6 +71,8 @@ class PriceBar(BaseModel):
     low: float = Field(ge=0)
     close: float = Field(ge=0)
     adjusted_close: float | None = Field(default=None, ge=0)
+    adjustment_factor: float | None = Field(default=None, gt=0)
+    adjustment_method: str | None = None
     volume: int | None = Field(default=None, ge=0)
     currency: str | None = None
     provenance: DataProvenance

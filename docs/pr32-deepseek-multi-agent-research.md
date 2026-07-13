@@ -49,3 +49,20 @@ Prompt v4 overrides structured output to `json_mode` inside the research adapter
 ## Game-company research context
 
 Prompt v5 adds point-in-time game-company records to the normalized research context: curated live and pipeline products, dated/ongoing catalysts, exact legal-entity NPPA approval matches, and the explainable game opportunity radar. Every curated source and exact approval is converted to the standard evidence whitelist. Review-required brand matches and facts unavailable by the run's as-of date are excluded. The opportunity score is labeled as screening context only and cannot become a trade signal.
+
+## P0 production safeguards
+
+Prompt v6 uses forward-adjusted A-share closes for all deterministic technical features. The Tushare adapter merges `daily` with `adj_factor` by trade date and normalizes each close to the latest available factor. If the adjustment endpoint is unavailable, raw bars remain usable but are explicitly labeled `raw_unadjusted`; reports and the cockpit show adjustment coverage instead of silently treating raw prices as adjusted.
+
+Every model call is bounded and the research worker is released even if an SDK call never returns. Configure the server-side budgets when needed:
+
+```powershell
+$env:TRADINGAGENTS_RESEARCH_LLM_CALL_TIMEOUT = "90"
+$env:TRADINGAGENTS_RESEARCH_LLM_MAX_RETRIES = "1"
+$env:TRADINGAGENTS_RESEARCH_LLM_RETRY_BACKOFF = "0.5"
+$env:TRADINGAGENTS_RESEARCH_LLM_TOTAL_TIMEOUT = "480"
+```
+
+Only transient connection, rate-limit, and gateway errors are retried. A hard call timeout opens a circuit for the remaining stages in that run, producing explicit degraded envelopes without issuing duplicate calls. API keys are never included in error details or audit records.
+
+Archived bundles now include a run-level audit with the selected mode, data provider, provider/model, sanitized endpoint identifier, prompt and technical-feature versions, normalized-input SHA-256 fingerprint, price-adjustment coverage, successful/degraded stage counts, latency, and usage totals when supplied by the provider.

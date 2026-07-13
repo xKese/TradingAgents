@@ -1,0 +1,21 @@
+{
+  "dataset": null,
+  "output_dir": "evaluation-results/smoke",
+  "variants": [
+    {
+      "name": "existing_analysts",
+      "include_operational": false,
+      "citation_validation_enabled": false
+    },
+    {
+      "name": "with_operational_validation_disabled",
+      "include_operational": true,
+      "citation_validation_enabled": false
+    },
+    {
+      "name": "with_operational_validation_enabled",
+      "include_operational": true,
+      "citation_validation_enabled": true
+    }
+  ]
+}

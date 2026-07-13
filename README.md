@@ -37,6 +37,42 @@
 - [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
 - [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
 
+## Fork Extensions
+
+This repository is a backward-compatible extension of the upstream
+[`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents)
+project. The original framework, authorship, Apache-2.0 license, attribution,
+and Git history are preserved. See [PORTFOLIO.md](PORTFOLIO.md) and the
+[pre-implementation audit](docs/extension-audit.md) for a precise separation of
+upstream-derived components and fork-specific work.
+
+Fork-specific additions are opt-in where they affect the graph:
+
+- **Operational Signals Analyst** (`operational`) for backlog, demand,
+  capacity/capex, concentration, and supply-chain disclosures;
+- **claim-level evidence and citations** with stable IDs, deterministic
+  temporal/URL/unit/ticker validation, conflict labels, and Sources sections;
+- **offline evaluation harness** with committed synthetic fixtures and JSON,
+  CSV, and Markdown outputs;
+- **optional observability** through a no-op default, redacted local JSONL, or
+  LangSmith via the `observability` extra.
+
+Run the credential-free, network-free extension demo:
+
+```bash
+python -m evaluations.run \
+  --config evaluations/configs/smoke.yaml \
+  --case synthetic_backlog
+```
+
+For a live stock analysis, select **Operational Signals Analyst** in the CLI and
+set a descriptive `TRADINGAGENTS_SEC_USER_AGENT`. Existing CLI and Python usage
+remain unchanged when the new analyst is not selected.
+
+These extensions evaluate research quality and traceability, not investment
+profitability. TradingAgents remains a research framework and does not provide
+financial, investment, or trading advice.
+
 <div align="center">
 <a href="https://www.star-history.com/#TauricResearch/TradingAgents&Date">
  <picture>

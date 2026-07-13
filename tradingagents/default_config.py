@@ -19,6 +19,19 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
+    "TRADINGAGENTS_CITATION_VALIDATION_ENABLED": "citation_validation_enabled",
+    "TRADINGAGENTS_STRICT_TEMPORAL_GROUNDING": "strict_temporal_grounding",
+    "TRADINGAGENTS_OFFLINE_MODE":         "offline_mode",
+    "TRADINGAGENTS_OPERATIONAL_FIXTURE_PATH": "operational_fixture_path",
+    "TRADINGAGENTS_OPERATIONAL_MAX_FILINGS": "operational_max_filings",
+    "TRADINGAGENTS_SEC_USER_AGENT":       "sec_user_agent",
+    "TRADINGAGENTS_LOCAL_TRACING_ENABLED": "local_tracing_enabled",
+    "TRADINGAGENTS_EXTERNAL_TRACING_ENABLED": "external_tracing_enabled",
+    "TRADINGAGENTS_EXTERNAL_TRACING_PROVIDER": "external_tracing_provider",
+    "TRADINGAGENTS_EXTERNAL_TRACING_PROJECT": "external_tracing_project",
+    "TRADINGAGENTS_TRACE_OUTPUT_PATH":    "trace_output_path",
+    "TRADINGAGENTS_TRACE_CAPTURE_CONTENT": "trace_capture_content",
+    "TRADINGAGENTS_TRACE_MAX_BYTES":      "trace_max_bytes",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -103,6 +116,25 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
+    # Evidence/citation extensions. They only affect evidence-aware analysts;
+    # the upstream-derived four-analyst default graph remains unchanged.
+    "citation_validation_enabled": True,
+    "strict_temporal_grounding": True,
+    "offline_mode": False,
+    "operational_fixture_path": None,
+    "operational_max_filings": 4,
+    "sec_user_agent": None,
+    # Tracing is opt-in. Local mode has no external dependency; external mode
+    # follows LangSmith's standard environment configuration.
+    "local_tracing_enabled": False,
+    "external_tracing_enabled": False,
+    "external_tracing_provider": "langsmith",
+    "external_tracing_project": None,
+    "trace_output_path": os.path.join(_TRADINGAGENTS_HOME, "logs", "traces.jsonl"),
+    "trace_capture_content": False,
+    "trace_max_bytes": 10_000_000,
+    # Cost is estimated only when a caller explicitly supplies per-model rates.
+    "observability_pricing": {},
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
@@ -137,6 +169,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "news_data": "yfinance",             # Options: alpha_vantage, yfinance
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
+        "operational_data": "sec",           # Options: sec, fixture
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

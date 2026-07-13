@@ -23,6 +23,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from tradingagents.evidence import (
+    CitationValidationResult,
+    ClaimRecord,
+    EvidenceRecord,
+    OperationalFinding,
+)
+
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
 # call validates instead of erroring (#1058). Pydantic still parses real numeric
@@ -339,3 +346,54 @@ def render_sentiment_report(report: SentimentReport) -> str:
         "",
         report.narrative,
     ])
+
+
+# ---------------------------------------------------------------------------
+# Operational Signals Analyst
+# ---------------------------------------------------------------------------
+
+
+class OperationalAssessment(BaseModel):
+    """LLM-produced assessment grounded only in prevalidated evidence IDs."""
+
+    overall_operational_signal: str = Field(
+        description="Concise synthesis of the company's operational direction.",
+    )
+    signal_rating: PortfolioRating = Field(
+        description="Use the project's Buy/Overweight/Hold/Underweight/Sell scale.",
+    )
+    confidence_level: Literal["low", "medium", "high"]
+    positive_operating_indicators: list[OperationalFinding] = Field(default_factory=list)
+    negative_operating_indicators: list[OperationalFinding] = Field(default_factory=list)
+    backlog_and_demand_findings: list[OperationalFinding] = Field(default_factory=list)
+    capacity_and_capital_spending_findings: list[OperationalFinding] = Field(
+        default_factory=list
+    )
+    concentration_risk_findings: list[OperationalFinding] = Field(default_factory=list)
+    supply_chain_findings: list[OperationalFinding] = Field(default_factory=list)
+    missing_or_unavailable_information: list[str] = Field(default_factory=list)
+    analyst_conclusion: str
+    limitations: list[str] = Field(default_factory=list)
+
+    def all_findings(self) -> list[OperationalFinding]:
+        """Return findings in report order."""
+        return [
+            *self.positive_operating_indicators,
+            *self.negative_operating_indicators,
+            *self.backlog_and_demand_findings,
+            *self.capacity_and_capital_spending_findings,
+            *self.concentration_risk_findings,
+            *self.supply_chain_findings,
+        ]
+
+
+class OperationalSignalsOutput(BaseModel):
+    """Complete machine-readable operational output stored in graph state."""
+
+    company_name: str
+    ticker: str
+    analysis_date: str
+    assessment: OperationalAssessment
+    evidence_records: list[EvidenceRecord] = Field(default_factory=list)
+    claims: list[ClaimRecord] = Field(default_factory=list)
+    citation_validation: CitationValidationResult

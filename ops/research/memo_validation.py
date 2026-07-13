@@ -26,6 +26,34 @@ def is_machine_checkable(falsifier) -> bool:
     )
 
 
+_DRAWDOWN_METRIC = "drawdown_from_cost_pct"
+
+
+def drawdown_convention_problem(falsifier) -> str | None:
+    """Canonical drawdown falsifier form: positive percent below cost, with
+    > or >=. The pre-check corpus mixed ratios (> 0.25), signed returns
+    (< -25), and percents (> 25); the evaluator speaks only
+    positive-percent-down, so any other form silently never trips — or
+    trips on gains (the 2026-07-13 CRC false escalation). Shared by
+    validate_memo (brain path) and the vetting keep-filter."""
+    if falsifier.metric != _DRAWDOWN_METRIC or not is_machine_checkable(falsifier):
+        return None
+    if falsifier.operator not in (">", ">="):
+        return (
+            "drawdown_from_cost_pct falsifier must use > or >= with a "
+            "positive percent below cost (e.g. '> 25' = down 25%), got "
+            f"operator {falsifier.operator!r}"
+        )
+    if not 1 <= falsifier.threshold <= 100:
+        return (
+            "drawdown_from_cost_pct threshold must be a percent in [1, 100] "
+            f"(25 means down 25% from cost), got {falsifier.threshold} — "
+            "ratio-form thresholds like 0.25 are indistinguishable from "
+            "sub-1% noise and are rejected outright"
+        )
+    return None
+
+
 def resolve_evidence(
     items: list[EvidenceItem], allowed_refs: set[str],
 ) -> tuple[list[EvidenceItem], list[str]]:
@@ -65,6 +93,10 @@ def validate_memo(
             "no machine-checkable falsifier (need metric+operator+threshold "
             "on at least one)"
         )
+    for f in memo.falsifiers:
+        problem = drawdown_convention_problem(f)
+        if problem:
+            errors.append(problem)
     for item in memo.evidence:
         if item.source_type == "filing" and item.source_ref not in allowed_refs:
             errors.append(f"evidence cites unread section {item.source_ref!r}")

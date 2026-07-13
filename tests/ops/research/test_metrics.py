@@ -62,8 +62,8 @@ def _falsifier(**overrides):
         "description": "drawdown",
         "check_type": "price",
         "metric": "drawdown_from_cost_pct",
-        "operator": "<",
-        "threshold": -25.0,
+        "operator": ">",
+        "threshold": 25.0,
         "consecutive_periods": 1,
     }
     kwargs.update(overrides)
@@ -72,9 +72,10 @@ def _falsifier(**overrides):
 
 def test_drawdown_observations_most_recent_first_in_entry_era():
     obs = observations("drawdown_from_cost_pct", _ctx())
-    # closes 6.5, 7, 8 (most recent first) against entry 10 -> -35%, -30%, -20%
-    assert obs == pytest.approx([-35.0, -30.0, -20.0])
-    assert drawdown_pct(_ctx()) == pytest.approx(-35.0)
+    # Canonical convention: POSITIVE percent below cost. Closes 6.5, 7, 8
+    # (most recent first) against entry 10 -> down 35%, 30%, 20%.
+    assert obs == pytest.approx([35.0, 30.0, 20.0])
+    assert drawdown_pct(_ctx()) == pytest.approx(35.0)
 
 
 def test_drawdown_undoes_splits_after_entry_era():
@@ -83,7 +84,8 @@ def test_drawdown_undoes_splits_after_entry_era():
         closes={date(2026, 7, 7): Decimal("6.5")},
         splits={date(2026, 6, 1): Decimal("2")},
     ))
-    assert drawdown_pct(ctx) == pytest.approx(30.0)  # (13 - 10) / 10
+    # Price ABOVE cost in entry-era shares -> negative drawdown.
+    assert drawdown_pct(ctx) == pytest.approx(-30.0)  # (10 - 13) / 10
 
 
 def test_gross_margin_pct_sorted_descending_and_scaled():
@@ -123,16 +125,30 @@ def test_unknown_metric_and_missing_inputs_return_none():
 
 
 def test_evaluate_falsifier_trips_on_threshold():
-    check = evaluate_falsifier(_falsifier(threshold=-30.0), _ctx())
+    check = evaluate_falsifier(_falsifier(threshold=30.0), _ctx())
     assert check.status == "tripped"
-    assert check.observed == pytest.approx(-35.0)
+    assert check.observed == pytest.approx(35.0)
+
+
+def test_gain_never_trips_drawdown_falsifier():
+    # Regression (CRC 2026-07-13): entry 52.63, close 53.34 — the stock is
+    # UP. Under the old signed-return convention this read +1.35 and
+    # tripped "> 0.25"-style thresholds; canonically it is a negative
+    # drawdown and must never trip a positive threshold.
+    ctx = _ctx(
+        entry_price_ref=52.63,
+        price_ctx=PriceContext(closes={date(2026, 7, 7): Decimal("53.34")}),
+    )
+    assert drawdown_pct(ctx) < 0
+    check = evaluate_falsifier(_falsifier(threshold=25.0), ctx)
+    assert check.status == "ok"
 
 
 def test_evaluate_falsifier_consecutive_periods():
-    # -35, -30, -20: two most recent both < -25 -> trips at periods=2 ...
+    # 35, 30, 20: two most recent both > 25 -> trips at periods=2 ...
     check = evaluate_falsifier(_falsifier(consecutive_periods=2), _ctx())
     assert check.status == "tripped"
-    # ... but not at periods=3 (the -20 observation breaks the streak).
+    # ... but not at periods=3 (the 20 observation breaks the streak).
     check = evaluate_falsifier(_falsifier(consecutive_periods=3), _ctx())
     assert check.status == "ok"
 

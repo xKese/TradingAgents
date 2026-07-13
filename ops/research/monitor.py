@@ -22,7 +22,8 @@ from datetime import date, datetime, timedelta, timezone
 from ops import events
 from ops.research.metrics import MetricContext, drawdown_pct, evaluate_falsifier
 
-DRAWDOWN_ESCALATION_PCT = -30.0
+# Positive percent below cost (metrics.py canonical drawdown convention).
+DRAWDOWN_ESCALATION_PCT = 30.0
 RENOTIFY_DAYS = 7
 
 
@@ -126,8 +127,8 @@ def _check_memo(memo, ctx, *, journal, screen_store, today, now, outcome) -> Non
             )
 
     dd = drawdown_pct(ctx)
-    if dd is not None and dd <= DRAWDOWN_ESCALATION_PCT:
-        escalation_reasons.append(f"drawdown {dd:.1f}% <= {DRAWDOWN_ESCALATION_PCT}%")
+    if dd is not None and dd >= DRAWDOWN_ESCALATION_PCT:
+        escalation_reasons.append(f"drawdown {dd:.1f}% >= {DRAWDOWN_ESCALATION_PCT}%")
 
     if escalation_reasons:
         reason = "; ".join(escalation_reasons)

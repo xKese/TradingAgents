@@ -136,8 +136,9 @@ Rules:
 memo, why_cheap MUST answer the bear case below with a specific named reason.
 - falsifiers: at least one MUST be machine-checkable — metric, operator, \
 AND threshold all set (metric examples: gross_margin_pct, revenue_yoy_pct, \
-net_debt_to_ebitda, drawdown_from_cost_pct). Pre-commit now; these are the \
-sell rules.
+net_debt_to_ebitda, drawdown_from_cost_pct). drawdown_from_cost_pct is a \
+POSITIVE percent below cost: use > or >= with e.g. threshold 25 (= down \
+25% from entry). Pre-commit now; these are the sell rules.
 - must_be_true: the load-bearing assumptions, one sentence each.
 - precedent_memo_ids: ONLY ids from the past-memos list; empty if none \
 apply — "none found" is an explicit, acceptable finding. Never invent ids.

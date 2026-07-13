@@ -42,7 +42,7 @@ def _memo(ticker="WIDG", *, thesis_type="value", entry=10.0, falsifiers=None,
         "must_be_true": ["volume replaced"],
         "falsifiers": falsifiers or [Falsifier(
             description="drawdown breach", check_type="price",
-            metric="drawdown_from_cost_pct", operator="<", threshold=-25.0,
+            metric="drawdown_from_cost_pct", operator=">", threshold=25.0,
         )],
         "catalysts": catalysts or [],
     }
@@ -101,7 +101,7 @@ def test_quiet_memo_produces_only_run_summary(stores):
 def test_falsifier_trip_notifies_and_escalates(stores):
     memo_store, screen_store, journal = stores
     memo_store.save(_memo())
-    outcome = _run(stores, close=7.0)  # -30% < -25 threshold
+    outcome = _run(stores, close=7.0)  # down 30% > 25 threshold
     assert outcome.tripped == 1
     assert outcome.escalations == 1
     tripped = _events_of(journal, events.KIND_FALSIFIER_TRIPPED)
@@ -134,7 +134,7 @@ def test_drawdown_escalates_without_any_falsifier_trip(stores):
         description="margin", check_type="fundamental",
         metric="gross_margin_pct", operator="<", threshold=30.0,
     )]))
-    # No facts fetchable -> fundamental falsifier unevaluable; close 6.5 = -35%.
+    # No facts fetchable -> fundamental falsifier unevaluable; close 6.5 = down 35%.
     outcome = _run(
         stores, close=6.5,
         facts_fetcher=lambda t: (_ for _ in ()).throw(RuntimeError("EDGAR down")),
@@ -142,7 +142,7 @@ def test_drawdown_escalates_without_any_falsifier_trip(stores):
     assert outcome.tripped == 0
     assert outcome.unevaluable == 1
     assert outcome.escalations == 1
-    assert DRAWDOWN_ESCALATION_PCT == -30.0
+    assert DRAWDOWN_ESCALATION_PCT == 30.0
     esc = _events_of(journal, events.KIND_RESEARCH_ESCALATION)[0]
     assert "drawdown" in esc["payload"]["reason"]
     # The facts failure was recorded, not fatal.

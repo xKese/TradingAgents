@@ -9,6 +9,7 @@ from dateutil.relativedelta import relativedelta
 from .config import get_config
 from .stockstats_utils import yf_retry
 from .symbol_utils import normalize_symbol
+from .utils import in_news_window
 
 
 def _extract_article_data(article: dict) -> dict:
@@ -57,20 +58,6 @@ def _extract_article_data(article: dict) -> dict:
         }
 
 
-def _in_news_window(pub_date, start_dt, end_dt) -> bool:
-    """Whether an article belongs in the [start_dt, end_dt] window.
-
-    Dated articles are kept only if they fall in the window. An undated article
-    is kept only when the window reaches the present (live run) — in a
-    historical/backtest window it's excluded, since we can't prove it isn't
-    future news (look-ahead safety, #992/#1007).
-    """
-    if pub_date is not None:
-        naive = pub_date.replace(tzinfo=None) if hasattr(pub_date, "replace") else pub_date
-        return start_dt <= naive <= end_dt + relativedelta(days=1)
-    return end_dt >= datetime.now() - relativedelta(days=1)
-
-
 def get_news_yfinance(
     ticker: str,
     start_date: str,
@@ -111,7 +98,7 @@ def get_news_yfinance(
             data = _extract_article_data(article)
 
             # Keep only articles within the requested window (look-ahead safe).
-            if not _in_news_window(data["pub_date"], start_dt, end_dt):
+            if not in_news_window(data["pub_date"], start_dt, end_dt):
                 continue
 
             news_str += f"### {data['title']} (source: {data['publisher']})\n"
@@ -198,7 +185,7 @@ def get_global_news_yfinance(
             # Extract uniformly (flat + nested) and apply the same look-ahead-safe
             # window filter, so flat articles can't leak future news (#1007).
             data = _extract_article_data(article)
-            if not _in_news_window(data["pub_date"], start_dt, curr_dt):
+            if not in_news_window(data["pub_date"], start_dt, curr_dt):
                 continue
             news_str += f"### {data['title']} (source: {data['publisher']})\n"
             if data["summary"]:

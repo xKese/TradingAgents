@@ -3,8 +3,24 @@ from datetime import date, datetime, timedelta
 from typing import Annotated
 
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 SavePathType = Annotated[str, "File path to save data. If None, data is not saved."]
+
+
+def in_news_window(pub_date, start_dt, end_dt) -> bool:
+    """Whether an article belongs in the [start_dt, end_dt] window.
+
+    Shared by every news vendor (yfinance, Indian RSS, ...) so look-ahead
+    safety is enforced identically regardless of source: dated articles are
+    kept only if they fall in the window; an undated article is kept only
+    when the window reaches the present (live run), since a historical/backtest
+    window can't prove it isn't future news (#992/#1007).
+    """
+    if pub_date is not None:
+        naive = pub_date.replace(tzinfo=None) if hasattr(pub_date, "replace") else pub_date
+        return start_dt <= naive <= end_dt + relativedelta(days=1)
+    return end_dt >= datetime.now() - relativedelta(days=1)
 
 # Tickers can contain letters, digits, dot, dash, underscore, caret
 # (index symbols like ^GSPC), equals (futures like GC=F), and plus

@@ -10,6 +10,7 @@ from datetime import datetime
 import pytest
 
 import tradingagents.dataflows.yfinance_news as ynews
+from tradingagents.dataflows.utils import in_news_window
 
 
 def _epoch(date_str):
@@ -32,9 +33,9 @@ def test_window_excludes_future_and_undated_in_backtest():
     end = datetime(2025, 5, 9)  # historical window (well in the past)
     inside = datetime(2025, 5, 5)
     future = datetime(2025, 6, 1)
-    assert ynews._in_news_window(inside, start, end) is True
-    assert ynews._in_news_window(future, start, end) is False     # look-ahead blocked
-    assert ynews._in_news_window(None, start, end) is False        # undated -> excluded in backtest
+    assert in_news_window(inside, start, end) is True
+    assert in_news_window(future, start, end) is False     # look-ahead blocked
+    assert in_news_window(None, start, end) is False        # undated -> excluded in backtest
 
 
 @pytest.mark.unit
@@ -42,7 +43,7 @@ def test_window_keeps_undated_in_live_window():
     # Live window (reaches today): undated articles can't be "future", so keep them.
     start = datetime.now()
     end = datetime.now()
-    assert ynews._in_news_window(None, start, end) is True
+    assert in_news_window(None, start, end) is True
 
 
 @pytest.mark.unit

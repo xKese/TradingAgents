@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -228,7 +229,62 @@ def _sleeves_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
 
 
 def _funnel_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
-    raise NotImplementedError("Task 5")
+    # Query memo/screen columns directly (mode=ro): instantiating
+    # MemoStore/ScreenStore would run CREATE TABLE writes, and deserializing
+    # memo payloads through Pydantic would let a schema bump break the
+    # dashboard. contextlib.closing because a sqlite3.Connection used as a
+    # context manager commits/rolls back but does NOT close.
+    with closing(ro_conn(config.memo_store_path)) as mconn:
+        by_status = {
+            r["status"]: r["n"]
+            for r in mconn.execute(
+                "SELECT status, COUNT(*) AS n FROM memos GROUP BY status")
+        }
+        open_memos = [
+            dict(r) for r in mconn.execute(
+                "SELECT memo_id, ticker, thesis_type, conviction_tier,"
+                " created_at, status FROM memos WHERE status = 'open'"
+                " ORDER BY created_at DESC LIMIT 50")
+        ]
+
+    with closing(ro_conn(config.screen_store_path)) as sconn:
+        run_row = sconn.execute(
+            "SELECT run_id, asof, created_at, universe_size, passed_count"
+            " FROM screen_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+        hits_by_status = {
+            r["status"]: r["n"]
+            for r in sconn.execute(
+                "SELECT status, COUNT(*) AS n FROM screen_hits GROUP BY status")
+        }
+
+    week_ago = now - timedelta(days=7)
+    with Journal(config.research_journal_path, readonly=True) as rj:
+        overnight = {
+            "last_vetting_run": _event_view(
+                rj.last_event(events.KIND_RESEARCH_VETTING_RUN), now),
+            "last_drain_run": _event_view(
+                rj.last_event(events.KIND_RESEARCH_DRAIN_RUN), now),
+            "paused": os.path.exists(config.research_pause_flag_path),
+        }
+        signals = {
+            kind: rj.count_events(getattr(events, const), since=week_ago)
+            for kind, const in (
+                ("falsifier_tripped", "KIND_FALSIFIER_TRIPPED"),
+                ("research_escalation", "KIND_RESEARCH_ESCALATION"),
+                ("resolution_due", "KIND_RESOLUTION_DUE"),
+                ("catalyst_due", "KIND_CATALYST_DUE"),
+            )
+        }
+
+    return {
+        "screener": {
+            "last_run": dict(run_row) if run_row is not None else None,
+            "hits_by_status": hits_by_status,
+        },
+        "memos": {"by_status": by_status, "open": open_memos},
+        "overnight": overnight,
+        "signals_7d": signals,
+    }
 
 
 # Recent-anomaly kinds over the momentum journal (mirrors ops/status.py:31-37).

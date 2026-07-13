@@ -9,6 +9,30 @@ from ops.main import _build_broker, _emit_halt_events, _wire
 from ops.reconcile import PositionDiff, ReconcileResult
 
 
+@pytest.fixture(autouse=True)
+def _isolate_new_sleeve_state(monkeypatch, tmp_path_factory):
+    """The overnight tick now also services the short and insider sleeves.
+    Every test in this module predates them, so isolate their state paths
+    to tmp (never the operator's real XDG state) and seed a fresh short
+    screen run so 'quiet night' tests keep their exact semantics — the
+    short screen is otherwise due-by-default on an empty store, which
+    would defeat the skip-the-backend early return."""
+    from datetime import date
+
+    from ops.research.store import ScreenStore
+
+    base = tmp_path_factory.mktemp("sleeves")
+    monkeypatch.setenv("OPS_SHORT_JOURNAL_PATH", str(base / "short_journal.sqlite"))
+    monkeypatch.setenv("OPS_SHORT_MEMO_STORE_PATH", str(base / "short_memos.sqlite"))
+    monkeypatch.setenv("OPS_SHORT_SCREEN_STORE_PATH", str(base / "short_screen.sqlite"))
+    monkeypatch.setenv("OPS_INSIDER_JOURNAL_PATH", str(base / "insider_journal.sqlite"))
+    monkeypatch.setenv("OPS_INSIDER_MEMO_STORE_PATH", str(base / "insider_memos.sqlite"))
+    monkeypatch.setenv("OPS_INSIDER_SIGNAL_STORE_PATH", str(base / "insider_signals.sqlite"))
+    ScreenStore(str(base / "short_screen.sqlite")).record_run(
+        asof=date.today(), universe_size=0, results=[],
+    )
+
+
 @pytest.fixture
 def preset_shutdown():
     """Pre-set the module-level shutdown event so run() falls straight

@@ -12,6 +12,9 @@ memos feed the calibration report.
 | research_trade | ops daemon (APScheduler) | 16:25 ET mon-fri | entries by tier; exits on memo resolution, falsifier trip, or price target |
 | short_trade | ops daemon (APScheduler) | 16:27 ET mon-fri | short-sleeve exits/entries on the short ledger — see docs/short_sleeve.md |
 | short overnight pass | ops daemon (inside the 00:00 overnight tick) | after research stages | short screen/vet/drain against the short stores — see docs/short_sleeve.md |
+| insider_scan | ops daemon (APScheduler) | 00:15 daily | EDGAR daily-index Form 4 scan — see docs/insider_sleeve.md |
+| insider_trade | ops daemon (APScheduler) | 16:29 ET mon-fri | insider-sleeve mechanical exits/entries — see docs/insider_sleeve.md |
+| insider memo pass | ops daemon (inside the 00:00 overnight tick) | last, after short stage | memo-lite authoring for insider entries — see docs/insider_sleeve.md |
 | research_monitor | ops daemon (APScheduler) | 16:20 ET mon-fri | falsifiers, drawdown, catalysts, resolution-due (happens before trading) |
 | daily_overview | ops daemon (APScheduler) | 16:35 ET mon-fri, Sat 18:00 ET | cross-sleeve "everything that happened today" incl. research trades/memos/monitor — see docs/daily_overview.md |
 | ops research resolve | manual | — | record resolution outcome and exit price for a closed position |

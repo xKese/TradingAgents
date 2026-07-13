@@ -514,6 +514,73 @@ def _short_trade_tick(journal: Journal, config) -> None:
         )
 
 
+def _insider_scan_tick(journal: Journal, config) -> None:
+    """Nightly Form 4 daily-index scan (00:15). No LLM, no ds4 — pure
+    EDGAR I/O into the signal store. Gate + error discipline as always."""
+    try:
+        if journal.has_event_today(events.KIND_INSIDER_SCAN_RUN):
+            return
+        from ops.insider.scan import run_insider_scan
+        from ops.insider.store import SignalStore
+
+        summaries = run_insider_scan(store=SignalStore(config.insider_signal_store_path))
+        journal.record_event(
+            events.KIND_INSIDER_SCAN_RUN,
+            events.insider_scan_run_payload(
+                days=len(summaries),
+                form4_seen=sum(s.form4_seen for s in summaries),
+                universe_matches=sum(s.universe_matches for s in summaries),
+                transactions_recorded=sum(s.transactions_recorded for s in summaries),
+                errors=sum(len(s.errors) for s in summaries),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, scheduler-safe
+        journal.record_event(
+            events.KIND_INSIDER_SCAN_ERROR,
+            events.insider_scan_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _insider_trade_tick(journal: Journal, config) -> None:
+    """Scheduler-safe wrapper around the insider-sleeve trade step (16:29).
+    Mechanical — no LLM. The exit-time memo resolver points at the INSIDER
+    memo store; its failures are isolated inside the trade step."""
+    try:
+        if journal.has_event_today(events.KIND_INSIDER_TRADE_RUN):
+            return
+        from ops.insider.memo_lite import resolve_on_exit
+        from ops.insider.store import SignalStore
+        from ops.insider.trading import trade_insider_sleeve
+        from ops.quotes import make_yfinance_quote_source
+        from tradingagents.memos.store import MemoStore
+
+        memo_store = MemoStore(config.insider_memo_store_path)
+
+        def resolver(**kwargs):
+            resolve_on_exit(memo_store=memo_store, **kwargs)
+
+        with Journal(config.insider_journal_path) as insider_journal:
+            trade_insider_sleeve(
+                signal_store=SignalStore(config.insider_signal_store_path),
+                insider_journal=insider_journal,
+                main_journal=journal,
+                quote_source=make_yfinance_quote_source(),
+                starting_cash=config.insider_starting_cash,
+                deny_list=config.deny_list,
+                asof=date.today(),
+                resolver=resolver,
+            )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, scheduler-safe
+        journal.record_event(
+            events.KIND_INSIDER_TRADE_ERROR,
+            events.insider_trade_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
 def _days_since_iso(iso: str) -> float:
     """Whole-plus-fractional days between an ISO-8601 UTC timestamp and now."""
     then = datetime.fromisoformat(iso)
@@ -615,7 +682,8 @@ def _research_overnight_tick(
                         researched=0, failed=0, still_pending=0, hit_deadline=False,
                     ),
                 )
-            if not _short_overnight_work_pending(config):
+            if (not _short_overnight_work_pending(config)
+                    and not _insider_memo_work_pending(config)):
                 # Nothing anywhere — skip waking the 86 GB ds4 model
                 # entirely. This is the common case (~2 of 3 nights).
                 return
@@ -716,6 +784,10 @@ def _research_overnight_tick(
                 journal, config, backend=backend, deadline=deadline,
                 should_stop=stop, tick_now=tick_now,
                 adapter_factory=vet_adapter_factory,
+            )
+            _insider_memo_pass(
+                journal, config, backend=backend, deadline=deadline,
+                should_stop=stop, tick_now=tick_now,
             )
         finally:
             backend.shutdown()
@@ -864,6 +936,49 @@ def _short_overnight_pass(
         journal.record_event(
             events.KIND_SHORT_DRAIN_ERROR,
             events.short_drain_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _insider_memo_work_pending(config) -> bool:
+    """True when insider-sleeve entries are awaiting their memo-lite pass."""
+    from ops.insider.store import SignalStore
+
+    return bool(SignalStore(config.insider_signal_store_path).entries_without_memo())
+
+
+def _insider_memo_pass(
+    journal: Journal, config, *, backend, deadline, should_stop, tick_now,
+) -> None:
+    """Overnight memo-lite authoring for insider entries — one cheap
+    structured call per entry, LAST in the window (after research and short
+    stages). Builds the LLM and touches ds4 only when the queue is
+    non-empty; failures record insider_memo_error and never raise."""
+    try:
+        from ops.insider.store import SignalStore
+
+        signal_store = SignalStore(config.insider_signal_store_path)
+        if not signal_store.entries_without_memo():
+            return
+        if should_stop() or tick_now() >= deadline:
+            return
+        from ops.insider.memo_lite import author_pending_memos
+        from ops.research.models import build_stage_llm
+        from tradingagents.memos.store import MemoStore
+
+        backend.ensure_up()
+        author_pending_memos(
+            signal_store=signal_store,
+            memo_store=MemoStore(config.insider_memo_store_path),
+            thesis_llm=build_stage_llm(config.research_thesis_model),
+            thesis_model_spec=config.research_thesis_model,
+            deadline=deadline, should_stop=should_stop, now=tick_now,
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, scheduler-safe
+        journal.record_event(
+            events.KIND_INSIDER_MEMO_ERROR,
+            events.insider_memo_error_payload(
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
@@ -1055,6 +1170,18 @@ def _start_full_scheduler(
             lambda: _short_trade_tick(journal, config),
             CronTrigger(hour=16, minute=27, day_of_week="mon-fri"),
             id="short_trade", max_instances=1, misfire_grace_time=300,
+        )
+        sched.add_job(
+            lambda: _insider_trade_tick(journal, config),
+            CronTrigger(hour=16, minute=29, day_of_week="mon-fri"),
+            id="insider_trade", max_instances=1, misfire_grace_time=300,
+        )
+        # 00:15 daily (weekends included: Friday's index lands Saturday
+        # 00:15; a holiday's missing index is an empty day, not an error).
+        sched.add_job(
+            lambda: _insider_scan_tick(journal, config),
+            CronTrigger(hour=0, minute=15),
+            id="insider_scan", max_instances=1, misfire_grace_time=600,
         )
         # Half-hourly, not once-nightly: fires while paused (`ops research
         # pause`) or outside the overnight window return instantly, and a

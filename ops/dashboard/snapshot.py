@@ -172,12 +172,19 @@ def _refuse_quotes(symbol: str) -> Decimal:
 
 
 def _one_sleeve(path: str, now: datetime) -> dict[str, Any]:
-    """One ledger's P&L / positions / fills, from journal replay alone.
+    """One ledger's P&L / positions / fills.
 
     Opened readonly (missing file → sqlite3.OperationalError, which the
-    caller turns into a per-sleeve {"error": ...}). Positions/cash come
-    from PaperBroker.from_journal with a refuse-quotes guard, exactly like
-    ops.status; equity/day P&L come from the equity-snapshot table.
+    caller turns into a per-sleeve {"error": ...}). POSITIONS come from
+    PaperBroker.from_journal replay with a refuse-quotes guard, exactly like
+    ops.status. CASH and equity/day P&L come from the equity-snapshot table.
+
+    Cash is deliberately NOT taken from replay: baseline and research
+    services seed their cash from config in memory and never journal a seed
+    cash-adjustment, so replaying from 0 drives their cash negative (a BUY
+    fill with no offsetting seed). Replay-from-0 cash is a momentum-only
+    convention; the equity snapshot carries the correct cash for all sleeves,
+    so it is the single source of truth here.
     """
     from ops.broker.paper import PaperBroker
     from ops.trading_time import trading_day_start
@@ -193,17 +200,20 @@ def _one_sleeve(path: str, now: datetime) -> dict[str, Any]:
              "entry": p.avg_entry_price, "stop": p.stop_loss_price}
             for p in replay.get_positions()
         ]
-        cash = replay.get_cash()
 
     latest = snaps[-1] if snaps else None
+    # day_pnl needs a snapshot taken TODAY (latest["at"] >= day_start): a
+    # prior-day snapshot with nothing yet today would otherwise compare a
+    # value to itself and report a false 0.00% pre-open and on weekends.
     before_today = [s for s in snaps if s["at"] < day_start]
     day_pnl: Decimal | None = None
-    if latest is not None and before_today and before_today[-1]["equity"] != 0:
+    if (latest is not None and latest["at"] >= day_start
+            and before_today and before_today[-1]["equity"] != 0):
         prev = before_today[-1]["equity"]
         day_pnl = (latest["equity"] - prev) / prev
     return {
         "equity": latest["equity"] if latest else None,
-        "cash": cash,
+        "cash": latest["cash"] if latest else None,
         "equity_at": latest["at"] if latest else None,
         "equity_kind": latest["kind"] if latest else None,
         "day_pnl_pct": day_pnl,

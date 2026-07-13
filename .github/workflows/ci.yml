@@ -28,6 +28,11 @@ jobs:
           pip install -e ".[dev]"
       - name: Run test suite
         run: pytest -q
+      - name: Offline evaluation smoke
+        run: >-
+          python -m evaluations.run
+          --config evaluations/configs/smoke.yaml
+          --output-dir /tmp/tradingagents-evaluation-smoke
 
   smoke-install:
     name: clean-install smoke

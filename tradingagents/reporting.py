@@ -9,6 +9,27 @@ run produces the same on-disk report tree a CLI run does.
 from datetime import datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from tradingagents.evidence import EvidenceRecord, render_sources
+
+
+def _state_evidence(final_state: dict) -> list[EvidenceRecord]:
+    """Parse optional evidence state without breaking legacy report dictionaries."""
+    records = []
+    for raw in final_state.get("operational_evidence") or []:
+        try:
+            records.append(EvidenceRecord.model_validate(raw))
+        except (TypeError, ValidationError):
+            continue
+    return records
+
+
+def _without_embedded_sources(report: str) -> str:
+    """Remove a trailing Sources section before complete-report consolidation."""
+    marker = "\n\n## Sources\n"
+    return report.partition(marker)[0].rstrip()
+
 
 def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
     """Save a completed run's reports to ``save_path``; return the complete-report path."""
@@ -35,6 +56,18 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "fundamentals.md").write_text(final_state["fundamentals_report"], encoding="utf-8")
         analyst_parts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+    if final_state.get("operational_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "operational.md").write_text(
+            final_state["operational_report"],
+            encoding="utf-8",
+        )
+        analyst_parts.append(
+            (
+                "Operational Signals Analyst",
+                _without_embedded_sources(final_state["operational_report"]),
+            )
+        )
     if analyst_parts:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
         sections.append(f"## I. Analyst Team Reports\n\n{content}")
@@ -97,5 +130,11 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
+    sources = render_sources(_state_evidence(final_state))
+    if sources:
+        sections.append(sources)
+    (save_path / "complete_report.md").write_text(
+        header + "\n\n".join(sections),
+        encoding="utf-8",
+    )
     return save_path / "complete_report.md"

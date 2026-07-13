@@ -22,6 +22,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_macro_indicators,
     get_news,
+    get_operational_evidence,
     get_prediction_markets,
     get_stock_data,
     get_verified_market_snapshot,
@@ -32,6 +33,7 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.observability import collect_evidence_ids, create_tracer
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -82,7 +84,10 @@ class TradingAgentsGraph:
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
-        self.callbacks = callbacks or []
+        self.callbacks = list(callbacks or [])
+        self.tracer = create_tracer(self.config)
+        if self.tracer.callback is not None:
+            self.callbacks.append(self.tracer.callback)
 
         # Update the interface's config
         set_config(self.config)
@@ -225,6 +230,7 @@ class TradingAgentsGraph:
                     get_income_statement,
                 ]
             ),
+            "operational": ToolNode([get_operational_evidence]),
         }
 
     def _resolve_benchmark(self, ticker: str) -> str:
@@ -375,6 +381,7 @@ class TradingAgentsGraph:
         self._resolve_pending_entries(company_name)
 
         # Recompile with a checkpointer if the user opted in.
+        checkpoint_resumed = False
         if self.config.get("checkpoint_enabled"):
             self._checkpointer_ctx = get_checkpointer(
                 self.config["data_cache_dir"], company_name
@@ -387,14 +394,38 @@ class TradingAgentsGraph:
                 self._run_signature(asset_type),
             )
             if step is not None:
+                checkpoint_resumed = True
                 logger.info(
                     "Resuming from step %d for %s on %s", step, company_name, trade_date
                 )
             else:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
+        self.tracer.start_run(
+            ticker=company_name,
+            analysis_date=str(trade_date),
+            checkpoint_resumed=checkpoint_resumed,
+            selected_analysts=list(self.selected_analysts),
+        )
         try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
+            result = self._run_graph(company_name, trade_date, asset_type=asset_type)
+        except Exception as exc:
+            self.tracer.end_run(
+                status="failed",
+                exception_type=type(exc).__name__,
+                error_message=str(exc)[:500],
+            )
+            raise
+        else:
+            final_state = result[0]
+            self.tracer.end_run(
+                status="completed",
+                evidence_ids=collect_evidence_ids(
+                    final_state.get("operational_evidence")
+                ),
+                citation_validation=final_state.get("citation_validation", {}),
+            )
+            return result
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
@@ -429,7 +460,7 @@ class TradingAgentsGraph:
             past_context=past_context,
             instrument_context=instrument_context,
         )
-        args = self.propagator.get_graph_args()
+        args = self.propagator.get_graph_args(callbacks=self.callbacks)
 
         # Inject thread_id so same ticker+date+graph-shape resumes; a different
         # date or graph shape starts fresh (#1089).
@@ -490,6 +521,11 @@ class TradingAgentsGraph:
             "sentiment_report": final_state["sentiment_report"],
             "news_report": final_state["news_report"],
             "fundamentals_report": final_state["fundamentals_report"],
+            "operational_report": final_state.get("operational_report", ""),
+            "operational_analysis": final_state.get("operational_analysis", {}),
+            "operational_evidence": final_state.get("operational_evidence", []),
+            "operational_claims": final_state.get("operational_claims", []),
+            "citation_validation": final_state.get("citation_validation", {}),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],

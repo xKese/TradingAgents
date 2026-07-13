@@ -1,0 +1,350 @@
+{
+  "dataset_name": "synthetic-operational-signals-v1",
+  "license_note": "All companies, excerpts, values, and source URLs in this file are synthetic test fixtures.",
+  "cases": [
+    {
+      "case_id": "synthetic_backlog",
+      "ticker": "SBLG",
+      "company_name": "Synthetic Backlog Systems",
+      "analysis_date": "2024-03-31",
+      "evidence_records": [
+        {
+          "claim_category": "backlog_and_demand",
+          "source_type": "synthetic_sec_filing",
+          "source_title": "Synthetic Backlog Systems FY2023 filing fixture",
+          "source_url": "https://fixtures.example.test/sblg/fy2023",
+          "publisher": "Synthetic SEC Fixture",
+          "publication_date": "2024-02-15",
+          "filing_date": "2024-02-15",
+          "reporting_period": "FY2023",
+          "ticker": "SBLG",
+          "short_excerpt": "The synthetic company reports backlog of 125 million units of test currency.",
+          "structured_value": 125,
+          "unit": "USD million",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "backlog_primary",
+            "company_name": "Synthetic Backlog Systems",
+            "synthetic": true
+          }
+        }
+      ],
+      "claims": [
+        {
+          "text": "Reported synthetic backlog was 125 million in test currency for FY2023.",
+          "claim_category": "backlog_and_demand",
+          "materiality": "high",
+          "citation_refs": ["backlog_primary"],
+          "numerical_value": 125,
+          "unit": "USD million",
+          "reporting_period": "FY2023",
+          "signal": "Positive",
+          "disclosure_status": "Reported"
+        }
+      ],
+      "missing_or_unavailable_information": ["Book-to-bill ratio was not disclosed in the fixture."],
+      "retrieval_failures": []
+    },
+    {
+      "case_id": "synthetic_no_backlog",
+      "ticker": "SNOB",
+      "company_name": "Synthetic No Backlog Services",
+      "analysis_date": "2024-03-31",
+      "evidence_records": [],
+      "claims": [],
+      "missing_or_unavailable_information": [
+        "Backlog is not disclosed and is not assumed to apply to this synthetic services company."
+      ],
+      "retrieval_failures": []
+    },
+    {
+      "case_id": "synthetic_concentration_capacity",
+      "ticker": "SCCX",
+      "company_name": "Synthetic Concentration and Capacity Corp",
+      "analysis_date": "2024-06-30",
+      "evidence_records": [
+        {
+          "claim_category": "concentration_risk",
+          "source_type": "synthetic_sec_filing",
+          "source_title": "SCCX Q1 2024 filing fixture",
+          "source_url": "https://fixtures.example.test/sccx/q1-2024",
+          "publisher": "Synthetic SEC Fixture",
+          "publication_date": "2024-05-10",
+          "filing_date": "2024-05-10",
+          "reporting_period": "Q1 2024",
+          "ticker": "SCCX",
+          "short_excerpt": "One synthetic customer represented 40 percent of quarterly revenue.",
+          "structured_value": 40,
+          "unit": "percent of revenue",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "customer_concentration",
+            "company_name": "Synthetic Concentration and Capacity Corp",
+            "synthetic": true
+          }
+        },
+        {
+          "claim_category": "capacity_and_capex",
+          "source_type": "synthetic_investor_release",
+          "source_title": "SCCX synthetic capacity expansion release",
+          "source_url": "https://fixtures.example.test/sccx/capacity-release",
+          "publisher": "Synthetic Company IR Fixture",
+          "publication_date": "2024-06-01",
+          "reporting_period": "FY2024 plan",
+          "ticker": "SCCX",
+          "short_excerpt": "The synthetic board approved 50 million of test capex for a new facility.",
+          "structured_value": 50,
+          "unit": "USD million",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "capacity_expansion",
+            "company_name": "Synthetic Concentration and Capacity Corp",
+            "synthetic": true
+          }
+        }
+      ],
+      "claims": [
+        {
+          "text": "A single synthetic customer represented 40 percent of Q1 2024 revenue.",
+          "claim_category": "concentration_risk",
+          "materiality": "high",
+          "citation_refs": ["customer_concentration"],
+          "numerical_value": 40,
+          "unit": "percent of revenue",
+          "reporting_period": "Q1 2024",
+          "signal": "Negative",
+          "disclosure_status": "Reported"
+        },
+        {
+          "text": "The synthetic company approved 50 million of planned facility capex.",
+          "claim_category": "capacity_and_capex",
+          "materiality": "medium",
+          "citation_refs": ["capacity_expansion"],
+          "numerical_value": 50,
+          "unit": "USD million",
+          "reporting_period": "FY2024 plan",
+          "signal": "Positive",
+          "disclosure_status": "Reported"
+        }
+      ],
+      "missing_or_unavailable_information": ["Supplier concentration was not disclosed."],
+      "retrieval_failures": []
+    },
+    {
+      "case_id": "synthetic_conflicting_period",
+      "ticker": "SCON",
+      "company_name": "Synthetic Conflict Corp",
+      "analysis_date": "2024-05-31",
+      "evidence_records": [
+        {
+          "claim_category": "backlog_and_demand",
+          "source_type": "synthetic_sec_filing",
+          "source_title": "SCON Q1 filing fixture",
+          "source_url": "https://fixtures.example.test/scon/q1-filing",
+          "publisher": "Synthetic SEC Fixture",
+          "publication_date": "2024-05-01",
+          "filing_date": "2024-05-01",
+          "reporting_period": "Q1 2024",
+          "ticker": "SCON",
+          "short_excerpt": "Synthetic bookings were 100 million for the quarter.",
+          "structured_value": 100,
+          "unit": "USD million",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "bookings_primary",
+            "company_name": "Synthetic Conflict Corp",
+            "synthetic": true
+          }
+        },
+        {
+          "claim_category": "backlog_and_demand",
+          "source_type": "synthetic_secondary_summary",
+          "source_title": "SCON synthetic secondary summary",
+          "source_url": "https://fixtures.example.test/scon/secondary-q1",
+          "publisher": "Synthetic Secondary Fixture",
+          "publication_date": "2024-05-02",
+          "reporting_period": "Q1 2024",
+          "ticker": "SCON",
+          "short_excerpt": "The synthetic summary states bookings of 120 million.",
+          "structured_value": 120,
+          "unit": "USD million",
+          "confidence": "medium",
+          "is_primary_source": false,
+          "metadata": {
+            "fixture_ref": "bookings_secondary",
+            "company_name": "Synthetic Conflict Corp",
+            "synthetic": true
+          }
+        }
+      ],
+      "claims": [
+        {
+          "text": "Sources conflict on synthetic Q1 2024 bookings.",
+          "claim_category": "backlog_and_demand",
+          "materiality": "high",
+          "citation_refs": ["bookings_primary", "bookings_secondary"],
+          "unit": "USD million",
+          "reporting_period": "Q1 2024",
+          "signal": "Neutral",
+          "disclosure_status": "Reported"
+        }
+      ],
+      "missing_or_unavailable_information": [],
+      "retrieval_failures": []
+    },
+    {
+      "case_id": "synthetic_future_source",
+      "ticker": "SFUT",
+      "company_name": "Synthetic Future Leak Corp",
+      "analysis_date": "2024-03-31",
+      "evidence_records": [
+        {
+          "claim_category": "capacity_and_capex",
+          "source_type": "synthetic_investor_release",
+          "source_title": "SFUT future-dated expansion fixture",
+          "source_url": "https://fixtures.example.test/sfut/future-expansion",
+          "publisher": "Synthetic Company IR Fixture",
+          "publication_date": "2024-04-15",
+          "reporting_period": "FY2024 plan",
+          "ticker": "SFUT",
+          "short_excerpt": "A synthetic facility expansion was announced after the analysis date.",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "future_capacity",
+            "company_name": "Synthetic Future Leak Corp",
+            "synthetic": true
+          }
+        }
+      ],
+      "claims": [
+        {
+          "text": "The synthetic company announced a facility expansion.",
+          "claim_category": "capacity_and_capex",
+          "materiality": "high",
+          "citation_refs": ["future_capacity"],
+          "signal": "Positive",
+          "disclosure_status": "Reported"
+        }
+      ],
+      "missing_or_unavailable_information": [
+        "The future-dated expansion source is unusable for the requested date."
+      ],
+      "retrieval_failures": []
+    },
+    {
+      "case_id": "synthetic_wrong_company_missing_url",
+      "ticker": "SAMB",
+      "company_name": "Synthetic Ambiguous Ticker Corp",
+      "analysis_date": "2024-03-31",
+      "evidence_records": [
+        {
+          "claim_category": "concentration_risk",
+          "source_type": "synthetic_secondary_summary",
+          "source_title": "Wrong synthetic company summary",
+          "source_url": null,
+          "publisher": "Synthetic Secondary Fixture",
+          "publication_date": "2024-03-01",
+          "reporting_period": "FY2023",
+          "ticker": "WRNG",
+          "short_excerpt": "This excerpt intentionally belongs to another synthetic company.",
+          "confidence": "low",
+          "is_primary_source": false,
+          "metadata": {
+            "fixture_ref": "wrong_company",
+            "company_name": "Different Synthetic Company",
+            "synthetic": true
+          }
+        }
+      ],
+      "claims": [
+        {
+          "text": "Synthetic customer concentration was material.",
+          "claim_category": "concentration_risk",
+          "materiality": "high",
+          "citation_refs": ["wrong_company", "missing_reference"],
+          "signal": "Negative",
+          "disclosure_status": "Reported"
+        }
+      ],
+      "missing_or_unavailable_information": [
+        "The only candidate evidence belongs to another ticker and lacks a source URL."
+      ],
+      "retrieval_failures": []
+    },
+    {
+      "case_id": "synthetic_provider_failure",
+      "ticker": "SERR",
+      "company_name": "Synthetic Provider Failure Corp",
+      "analysis_date": "2024-03-31",
+      "evidence_records": [],
+      "claims": [],
+      "missing_or_unavailable_information": [
+        "Operational evidence is unavailable because the synthetic provider failed."
+      ],
+      "retrieval_failures": ["SyntheticProviderError" ]
+    },
+    {
+      "case_id": "synthetic_duplicate_evidence",
+      "ticker": "SDUP",
+      "company_name": "Synthetic Duplicate Evidence Corp",
+      "analysis_date": "2024-03-31",
+      "evidence_records": [
+        {
+          "claim_category": "supply_chain",
+          "source_type": "synthetic_sec_filing",
+          "source_title": "SDUP FY2023 filing fixture",
+          "source_url": "https://fixtures.example.test/sdup/fy2023",
+          "publisher": "Synthetic SEC Fixture",
+          "publication_date": "2024-02-20",
+          "filing_date": "2024-02-20",
+          "reporting_period": "FY2023",
+          "ticker": "SDUP",
+          "short_excerpt": "Synthetic lead times increased during the period.",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "supply_duplicate_a",
+            "company_name": "Synthetic Duplicate Evidence Corp",
+            "synthetic": true
+          }
+        },
+        {
+          "claim_category": "supply_chain",
+          "source_type": "synthetic_sec_filing",
+          "source_title": "SDUP FY2023 filing fixture",
+          "source_url": "https://fixtures.example.test/sdup/fy2023",
+          "publisher": "Synthetic SEC Fixture",
+          "publication_date": "2024-02-20",
+          "filing_date": "2024-02-20",
+          "reporting_period": "FY2023",
+          "ticker": "SDUP",
+          "short_excerpt": "The same synthetic filing also discusses a component bottleneck.",
+          "confidence": "high",
+          "is_primary_source": true,
+          "metadata": {
+            "fixture_ref": "supply_duplicate_b",
+            "company_name": "Synthetic Duplicate Evidence Corp",
+            "synthetic": true
+          }
+        }
+      ],
+      "claims": [
+        {
+          "text": "The synthetic company reported longer lead times and a component bottleneck.",
+          "claim_category": "supply_chain",
+          "materiality": "medium",
+          "citation_refs": ["supply_duplicate_a"],
+          "signal": "Negative",
+          "disclosure_status": "Qualitative commentary"
+        }
+      ],
+      "missing_or_unavailable_information": [],
+      "retrieval_failures": []
+    }
+  ]
+}

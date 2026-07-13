@@ -59,6 +59,11 @@ class AgentState(MessagesState):
         str, "Report from the News Researcher of current world affairs"
     ]
     fundamentals_report: Annotated[str, "Report from the Fundamentals Researcher"]
+    operational_report: Annotated[str, "Report from the Operational Signals Analyst"]
+    operational_analysis: Annotated[dict, "Structured operational analysis output"]
+    operational_evidence: Annotated[list[dict], "Machine-readable evidence records"]
+    operational_claims: Annotated[list[dict], "Machine-readable claim records"]
+    citation_validation: Annotated[dict, "Deterministic citation-validation result"]
 
     # researcher team discussion step
     investment_debate_state: Annotated[

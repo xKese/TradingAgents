@@ -18,7 +18,11 @@ from .errors import (
     VendorRateLimitError,
 )
 from .fred import get_macro_data as get_fred_macro_data
+from .operational_fixtures import (
+    get_fixture_operational_evidence,
+)
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
+from .sec_filings import get_sec_operational_evidence
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
     get_cashflow as get_yfinance_cashflow,
@@ -74,6 +78,12 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_prediction_markets",
         ]
+    },
+    "operational_data": {
+        "description": "Point-in-time company operational disclosures",
+        "tools": [
+            "get_operational_evidence",
+        ]
     }
 }
 
@@ -82,6 +92,8 @@ VENDOR_LIST = [
     "fred",
     "polymarket",
     "alpha_vantage",
+    "sec",
+    "fixture",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -89,7 +101,7 @@ VENDOR_LIST = [
 # sentinel instead of aborting the run (a bad LLM-supplied indicator, a missing
 # key, or a network blip should not crash an analysis over flavour data). Core
 # categories (prices, fundamentals, news) still raise so a broken primary is loud.
-OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
+OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets", "operational_data"}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -141,6 +153,11 @@ VENDOR_METHODS = {
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
     },
+    # operational_data
+    "get_operational_evidence": {
+        "sec": get_sec_operational_evidence,
+        "fixture": get_fixture_operational_evidence,
+    },
 }
 
 def get_category_for_method(method: str) -> str:
@@ -155,6 +172,9 @@ def get_vendor(category: str, method: str = None) -> str:
     Tool-level configuration takes precedence over category-level.
     """
     config = get_config()
+
+    if category == "operational_data" and config.get("offline_mode"):
+        return "fixture"
 
     # Check tool-level configuration first (if method provided)
     if method:

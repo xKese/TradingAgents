@@ -95,6 +95,7 @@ def _build_context(memo, *, today, price_fetcher, facts_fetcher, errors) -> Metr
         entry_price_ref=memo.entry_price_ref, asof=today,
         entry_era=memo.as_of_date, price_ctx=price_ctx,
         fundamentals=fundamentals, facts=facts,
+        direction=("short" if memo.thesis_type == "short" else "long"),
     )
 
 

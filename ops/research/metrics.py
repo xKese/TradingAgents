@@ -45,6 +45,10 @@ class MetricContext:
     price_ctx: PriceContext | None = None
     fundamentals: Fundamentals | None = None
     facts: dict | None = None
+    # "long" or "short" (memo.thesis_type == "short"). Price metrics keep the
+    # invariant "positive = adverse move vs cost" in BOTH directions, so
+    # memo-authored thresholds and the escalation cutoff never flip sign.
+    direction: str = "long"
 
 
 @dataclass(frozen=True)
@@ -70,8 +74,11 @@ def _drawdown_series(ctx: MetricContext) -> list[float] | None:
     # authors write thresholds like "> 25" — the original signed-return
     # form made a +1.35% GAIN trip a ">25% drawdown" falsifier (CRC,
     # 2026-07-13 false escalation).
+    # For shorts the adverse move is the price RISING, so the series negates:
+    # a 25% squeeze reads +25 in both the falsifier and the escalation check.
+    sign = 1.0 if ctx.direction == "long" else -1.0
     return [
-        (entry - float(close * factor)) / entry * 100.0
+        sign * (entry - float(close * factor)) / entry * 100.0
         for close in reversed(closes)  # most-recent-first
     ]
 

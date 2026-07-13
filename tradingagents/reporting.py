@@ -17,7 +17,7 @@ from tradingagents.evidence import EvidenceRecord, render_sources
 def _state_evidence(final_state: dict) -> list[EvidenceRecord]:
     """Parse optional evidence state without breaking legacy report dictionaries."""
     records = []
-    for raw in final_state.get("operational_evidence", []):
+    for raw in final_state.get("operational_evidence") or []:
         try:
             records.append(EvidenceRecord.model_validate(raw))
         except (TypeError, ValidationError):

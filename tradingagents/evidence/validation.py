@@ -65,14 +65,14 @@ def temporal_validity(
 
 
 def prepare_evidence(
-    records: list[EvidenceRecord | dict[str, Any]],
+    records: list[EvidenceRecord | dict[str, Any]] | None,
     analysis_date: date,
     *,
     strict_temporal: bool = True,
 ) -> list[EvidenceRecord]:
     """Normalize IDs and recompute temporal validity for provider records."""
     prepared: list[EvidenceRecord] = []
-    for raw in records:
+    for raw in records or []:
         record = raw if isinstance(raw, EvidenceRecord) else EvidenceRecord.model_validate(raw)
         record.evidence_id = stable_evidence_id(record)
         valid, reason = temporal_validity(record, analysis_date, strict=strict_temporal)

@@ -1,8 +1,9 @@
 import json
+from datetime import date
 from unittest.mock import Mock
 
 from tradingagents.dataflows.config import set_config
-from tradingagents.dataflows.sec_filings import get_sec_operational_evidence
+from tradingagents.dataflows.sec_filings import _recent_filings, get_sec_operational_evidence
 
 
 def _response(*, payload=None, text="", status=200):
@@ -44,3 +45,10 @@ def test_sec_provider_filters_future_filings_and_preserves_source_url(monkeypatc
     assert payload["evidence_records"]
     assert all(record["filing_date"] <= "2024-03-31" for record in payload["evidence_records"])
     assert all(record["source_url"].startswith("https://www.sec.gov/Archives/") for record in payload["evidence_records"])
+
+
+def test_recent_filings_handles_missing_or_null_nested_payloads():
+    analysis_date = date(2024, 3, 31)
+    assert _recent_filings({}, analysis_date, limit=4) == []
+    assert _recent_filings({"filings": None}, analysis_date, limit=4) == []
+    assert _recent_filings({"filings": {"recent": None}}, analysis_date, limit=4) == []

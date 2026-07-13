@@ -48,6 +48,10 @@ def test_stable_evidence_ids_ignore_retrieval_time():
     assert stable_evidence_id(first) == stable_evidence_id(second)
 
 
+def test_prepare_evidence_accepts_none_as_no_records():
+    assert prepare_evidence(None, date(2024, 3, 31)) == []
+
+
 def test_duplicate_sources_are_consolidated():
     records = prepare_evidence(
         [

@@ -33,7 +33,7 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
-from tradingagents.observability import create_tracer
+from tradingagents.observability import collect_evidence_ids, create_tracer
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -420,11 +420,9 @@ class TradingAgentsGraph:
             final_state = result[0]
             self.tracer.end_run(
                 status="completed",
-                evidence_ids=[
-                    item.get("evidence_id")
-                    for item in final_state.get("operational_evidence", [])
-                    if item.get("evidence_id")
-                ],
+                evidence_ids=collect_evidence_ids(
+                    final_state.get("operational_evidence")
+                ),
                 citation_validation=final_state.get("citation_validation", {}),
             )
             return result

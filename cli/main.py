@@ -48,6 +48,7 @@ from tradingagents.graph.analyst_execution import (
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.observability import collect_evidence_ids
 from tradingagents.reporting import write_report_tree
 
 console = Console()
@@ -1302,11 +1303,9 @@ def run_analysis(
             final_state.update(chunk)
         graph.tracer.end_run(
             status="completed",
-            evidence_ids=[
-                item.get("evidence_id")
-                for item in final_state.get("operational_evidence", [])
-                if item.get("evidence_id")
-            ],
+            evidence_ids=collect_evidence_ids(
+                final_state.get("operational_evidence")
+            ),
             citation_validation=final_state.get("citation_validation", {}),
         )
 

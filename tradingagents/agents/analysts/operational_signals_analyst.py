@@ -275,7 +275,7 @@ def create_operational_signals_analyst(llm):
 
         config = get_config()
         strict_temporal = bool(config.get("strict_temporal_grounding", True))
-        raw_records = payload.get("evidence_records", [])
+        raw_records = payload.get("evidence_records") or []
         try:
             records = prepare_evidence(
                 raw_records,

@@ -31,3 +31,13 @@ def test_operational_report_and_sources_are_written(tmp_path):
     assert text.rstrip().endswith(
         "secondary/structured provider; date-valid; published 2024-01-01."
     )
+
+
+def test_report_writer_accepts_explicitly_null_evidence_state(tmp_path):
+    complete = write_report_tree(
+        {"operational_evidence": None},
+        "TEST",
+        tmp_path,
+    )
+    assert complete.exists()
+    assert "## Sources" not in complete.read_text()

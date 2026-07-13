@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tradingagents.observability import LocalJSONLTracer, NoOpTracer, create_tracer
+from tradingagents.observability import (
+    LocalJSONLTracer,
+    NoOpTracer,
+    collect_evidence_ids,
+    create_tracer,
+)
 
 
 def _config(tmp_path, **overrides):
@@ -31,6 +36,14 @@ def test_disabled_tracer_is_noop(tmp_path):
     assert tracer.start_run(ticker="TEST", analysis_date="2024-01-01") is None
     tracer.record("anything", api_key="secret")
     assert not (tmp_path / "trace.jsonl").exists()
+
+
+def test_evidence_id_collection_handles_none_and_malformed_entries():
+    assert collect_evidence_ids(None) == []
+    assert collect_evidence_ids("not-a-list") == []
+    assert collect_evidence_ids(
+        [None, "bad", {"other": "value"}, {"evidence_id": "EVID-VALID"}]
+    ) == ["EVID-VALID"]
 
 
 def test_local_tracer_emits_json_and_redacts_secrets(tmp_path):

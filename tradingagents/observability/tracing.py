@@ -29,6 +29,18 @@ _SENSITIVE_VALUE = re.compile(
 )
 
 
+def collect_evidence_ids(records: Any) -> list[str]:
+    """Return valid evidence IDs from optional, potentially malformed state."""
+    if not isinstance(records, (list, tuple)):
+        return []
+    return [
+        str(evidence_id)
+        for item in records
+        if isinstance(item, dict)
+        and (evidence_id := item.get("evidence_id"))
+    ]
+
+
 def redact(value: Any) -> Any:
     """Recursively redact secrets while retaining useful trace structure."""
     if isinstance(value, dict):

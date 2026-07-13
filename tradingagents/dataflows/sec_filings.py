@@ -117,7 +117,7 @@ def _recent_filings(
     *,
     limit: int,
 ) -> list[dict[str, str]]:
-    recent = submissions.get("filings", {}).get("recent", {})
+    recent = (submissions.get("filings") or {}).get("recent") or {}
     keys = ("accessionNumber", "filingDate", "reportDate", "form", "primaryDocument")
     rows = []
     for values in zip(*(recent.get(key, []) for key in keys), strict=False):

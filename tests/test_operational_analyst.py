@@ -134,6 +134,33 @@ def test_missing_data_is_explicit_and_does_not_invoke_model():
     assert "Missing data was not estimated" in result["operational_report"]
 
 
+def test_none_evidence_records_degrade_to_explicit_missing_data():
+    llm = MagicMock()
+    structured = MagicMock()
+    llm.with_structured_output.return_value = structured
+    node = create_operational_signals_analyst(llm)
+    payload = {
+        "status": "unavailable",
+        "company_name": "Test Company",
+        "evidence_records": None,
+    }
+    result = node(
+        _state(
+            [
+                HumanMessage(content="TEST"),
+                ToolMessage(
+                    content=json.dumps(payload),
+                    tool_call_id="operational-test",
+                    name="get_operational_evidence",
+                ),
+            ]
+        )
+    )
+    structured.invoke.assert_not_called()
+    assert result["operational_evidence"] == []
+    assert "Unavailable" in result["operational_report"]
+
+
 def test_plan_state_toolnode_and_cli_registration():
     plan = build_analyst_execution_plan(["market", "operational"])
     assert plan.specs[-1].agent_node == "Operational Signals Analyst"

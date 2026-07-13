@@ -191,6 +191,10 @@ SAMPLE_BUILDER_ARGS: dict[str, dict] = {
         asof="2026-07-13", entered=["GHST"], exited=["BURN"],
         skipped=["MEH"], equity="10000.00", cash="10100.00",
     ),
+    events.KIND_INSIDER_TRADE_RUN: dict(
+        asof="2026-07-13", entered=["AAA"], exited=["BBB"],
+        skipped=[], equity="10000.00", cash="9700.00",
+    ),
 }
 
 

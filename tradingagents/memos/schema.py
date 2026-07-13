@@ -39,7 +39,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-ThesisType = Literal["value", "event"]
+ThesisType = Literal["value", "event", "short"]
 ConvictionTier = Literal["starter", "medium", "high"]
 # Lifecycle: the brain writes a buy thesis as ``pending_vetting``; the graph
 # vetting stage adjudicates it to ``open`` (tradeable) or ``rejected`` (never
@@ -188,6 +188,38 @@ class EventThesis(BaseModel):
     )
 
 
+class ShortThesis(BaseModel):
+    """Type-specific block for a short (negative-catalyst) thesis.
+
+    Price-target semantics INVERT for shorts: price_target_low is the cover
+    target (profit), price_target_high the thesis-wrong level. The short
+    trade step encodes this; the shared Memo fields are unchanged.
+    """
+
+    overvaluation_mechanism: str = Field(
+        description=(
+            "Why the market prices it too HIGH — a specific, named reason "
+            "(the mirror of ValueThesis.why_cheap)."
+        )
+    )
+    red_flags: list[str] = Field(
+        min_length=1,
+        description=(
+            "The disclosures driving the thesis; each must also appear in "
+            "evidence with an accession citation."
+        ),
+    )
+    why_now: str = Field(
+        description="The trigger. Shorts bleed carry — timing is part of the thesis."
+    )
+    squeeze_risk: str = Field(
+        description="Crowded-short / low-float assessment (prose; paper has no borrow data)."
+    )
+    downside_scenario: str = Field(
+        description="What the stock is worth if the thesis plays out."
+    )
+
+
 class Resolution(BaseModel):
     """Filled when the memo's position is closed (or its shadow window lapses)."""
 
@@ -264,6 +296,7 @@ class Memo(BaseModel):
     evidence: list[EvidenceItem] = Field(min_length=1)
     value_block: ValueThesis | None = None
     event_block: EventThesis | None = None
+    short_block: ShortThesis | None = None
 
     conviction_tier: ConvictionTier
     entry_price_ref: float = Field(description="Reference price at analysis time.")
@@ -308,7 +341,8 @@ class Memo(BaseModel):
     resolution: Resolution | None = None
 
     def block_matches_type(self) -> bool:
-        """True when the type-specific block matches ``thesis_type``."""
-        if self.thesis_type == "value":
-            return self.value_block is not None and self.event_block is None
-        return self.event_block is not None and self.value_block is None
+        """True when exactly the block matching ``thesis_type`` is set."""
+        blocks = {"value": self.value_block, "event": self.event_block,
+                  "short": self.short_block}
+        want = blocks.pop(self.thesis_type)
+        return want is not None and all(b is None for b in blocks.values())

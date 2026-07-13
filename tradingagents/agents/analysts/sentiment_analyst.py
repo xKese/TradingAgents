@@ -41,6 +41,7 @@ from tradingagents.agents.utils.structured import (
 )
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.dataflows.web_search import web_search_financial
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -70,6 +71,13 @@ def create_sentiment_analyst(llm):
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
         reddit_block = fetch_reddit_posts(ticker)
 
+        # Step 1: If primary social sources are unavailable, supplement with web search
+        _unavailable_marker = "<unavailable>"
+        if _unavailable_marker in stocktwits_block or _unavailable_marker in reddit_block:
+            web_block = web_search_financial(ticker, limit=5)
+        else:
+            web_block = ""
+
         system_message = _build_system_message(
             ticker=ticker,
             start_date=start_date,
@@ -77,16 +85,15 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            web_block=web_block,
         )
 
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    " Today's date is {current_date}; treat it as 'now' for all analysis and tool-call date ranges. {instrument_context}"
+                    "You are a sentiment analyst. Today's date is {current_date}. {instrument_context}"
+                    " All data you need is provided below — do not attempt to call external tools or search the web."
                     "\n{system_message}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
@@ -126,6 +133,7 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    web_block: str = "",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
     return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
@@ -152,6 +160,13 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 <start_of_reddit>
 {reddit_block}
 <end_of_reddit>
+
+### Web search results — supplementary context (only present when primary social sources were unavailable)
+Additional web results fetched to compensate for missing StockTwits/Reddit data.
+
+<start_of_web_search>
+{web_block if web_block else "N/A — primary social sources were available; no supplementary search performed."}
+<end_of_web_search>
 
 ## How to analyze this data (best practices)
 

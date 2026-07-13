@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from collections.abc import Callable
 from datetime import date
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,9 +41,14 @@ from .multi_agent_research import multi_agent_configuration_status
 from .report_workspace import build_report_workspace, render_archived_report
 from .research_jobs import LocalResearchJobRunner, ResearchJobRequest
 from .research_readiness import build_research_readiness
+from .research_settings import JsonResearchSettingsStore, ResearchSettings
 from .run_archive import JsonResearchRunArchive
+from .settings_page import SETTINGS_HTML
+from .universe_discovery import (
+    TushareUniverseDiscovery,
+)
 from .valuation_context import build_valuation_context
-from .watchlist import JsonWatchlistStore
+from .watchlist import JsonWatchlistStore, WatchlistEntry
 from .watchlist_board import build_watchlist_board
 from .watchlist_refresh import WatchlistRefreshRequest, submit_watchlist_refresh
 
@@ -276,6 +283,9 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
     watchlist: JsonWatchlistStore
     jobs: LocalResearchJobRunner
 
+    settings: JsonResearchSettingsStore
+    universe_factory: Callable[[], TushareUniverseDiscovery]
+
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
         if parsed.path == "/":
@@ -283,6 +293,20 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/health":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if parsed.path == "/settings":
+            self._send_text(HTTPStatus.OK, SETTINGS_HTML, "text/html; charset=utf-8")
+            return
+        if parsed.path == "/api/research-settings":
+            settings = self.settings.load()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "settings": settings.model_dump(mode="json"),
+                    "default_lookback_days": settings.default_lookback_days,
+                    "tushare_configured": bool(os.environ.get("TUSHARE_TOKEN", "").strip()),
+                },
+            )
             return
         if parsed.path == "/api/llm-research-status":
             self._send_json(HTTPStatus.OK, multi_agent_configuration_status())
@@ -350,7 +374,11 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, digest.model_dump(mode="json"))
             return
         if parsed.path == "/api/watchlist-board":
-            self._send_json(HTTPStatus.OK, build_watchlist_board(self.store, self.watchlist))
+            board = build_watchlist_board(self.store, self.watchlist)
+            names = {item.id: item.name for item in self.settings.load().sector_rules}
+            for item in board["items"]:
+                item["sector_names"] = [names.get(value, value) for value in item["sectors"]]
+            self._send_json(HTTPStatus.OK, board)
             return
         if parsed.path == "/api/watchlist":
             self._send_json(
@@ -417,6 +445,28 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
+        if parsed.path in {"/api/universe-preview", "/api/universe-sync"}:
+            try:
+                result = self.universe_factory().discover(self.settings.load())
+            except Exception as error:
+                self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                return
+            payload: dict[str, Any] = {"discovery": result.model_dump(mode="json")}
+            if parsed.path == "/api/universe-sync":
+                entries = [
+                    WatchlistEntry(
+                        symbol=item.symbol,
+                        name=item.name or None,
+                        sectors=item.sectors,
+                        source="tushare_concept",
+                    )
+                    for item in result.stocks
+                ]
+                merged = self.watchlist.add_many(entries)
+                payload["watchlist_total"] = len(merged)
+            self._send_json(HTTPStatus.OK, payload)
+            return
+
         if parsed.path == "/api/decision-journal":
             try:
                 payload = self._read_json_body()
@@ -488,7 +538,11 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/research-jobs":
             try:
-                request = ResearchJobRequest.model_validate(self._read_json_body())
+                payload = self._read_json_body()
+                settings = self.settings.load()
+                payload.setdefault("lookback_days", settings.default_lookback_days)
+                payload.setdefault("data_provider", settings.preferred_data_provider)
+                request = ResearchJobRequest.model_validate(payload)
             except (UnicodeDecodeError, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
@@ -497,7 +551,11 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             return
         if urlparse(self.path).path == "/api/watchlist-refresh":
             try:
-                request = WatchlistRefreshRequest.model_validate(self._read_json_body())
+                payload = self._read_json_body()
+                settings = self.settings.load()
+                payload.setdefault("lookback_days", settings.default_lookback_days)
+                payload.setdefault("data_provider", settings.preferred_data_provider)
+                request = WatchlistRefreshRequest.model_validate(payload)
             except (UnicodeDecodeError, ValueError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
@@ -514,6 +572,26 @@ class CockpitRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
         self._send_json(HTTPStatus.CREATED, {"entry": entry.model_dump(mode="json")})
+
+    def do_PUT(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/research-settings":
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+        try:
+            settings = ResearchSettings.model_validate(self._read_json_body())
+        except (UnicodeDecodeError, ValueError) as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        self.settings.save(settings)
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "settings": settings.model_dump(mode="json"),
+                "default_lookback_days": settings.default_lookback_days,
+                "tushare_configured": bool(os.environ.get("TUSHARE_TOKEN", "").strip()),
+            },
+        )
 
     def do_DELETE(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
@@ -570,12 +648,14 @@ def create_cockpit_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8765,
+    universe_factory: Callable[[], TushareUniverseDiscovery] | None = None,
 ) -> ThreadingHTTPServer:
     """Create a local server without starting it, suitable for tests and CLI use."""
 
     store = JsonArtifactStore(data_dir)
     watchlist = JsonWatchlistStore(data_dir)
     jobs = LocalResearchJobRunner(data_dir)
+    settings = JsonResearchSettingsStore(data_dir)
 
     class BoundCockpitRequestHandler(CockpitRequestHandler):
         pass
@@ -583,6 +663,8 @@ def create_cockpit_server(
     BoundCockpitRequestHandler.store = store
     BoundCockpitRequestHandler.watchlist = watchlist
     BoundCockpitRequestHandler.jobs = jobs
+    BoundCockpitRequestHandler.settings = settings
+    BoundCockpitRequestHandler.universe_factory = universe_factory or TushareUniverseDiscovery
     return ThreadingHTTPServer((host, port), BoundCockpitRequestHandler)
 
 
@@ -793,6 +875,7 @@ _APP_HTML = r"""<!doctype html>
         <div class="brand"><p class="eyebrow">个人股票投研</p><h1 id="title">研究驾驶舱</h1></div>
         <div class="commandbar" aria-label="研究操作">
           <select id="symbol" aria-label="选择股票"></select>
+          <a class="action-link" href="/settings">&#30740;&#31350;&#37197;&#32622;</a>
           <button id="refreshWatchlistResearch" class="secondary-action" type="button">更新全部自选股</button>
           <button id="runResearch" class="primary-action" type="button">研究当前股票</button>
           <details class="watch-menu">
@@ -865,6 +948,7 @@ _APP_HTML = r"""<!doctype html>
       <div class="section-grid equal">
         <div class="panel"><div class="panel-title"><h2>形成判断</h2><span class="panel-meta">可选手工信号</span></div><div class="grid decision-form">
           <div class="wide"><label class="label" for="dataProvider">数据源</label><select id="dataProvider"><option value="auto" selected>自动（A/H股优先 Tushare）</option><option value="tushare">Tushare Pro</option><option value="yfinance">Yahoo Finance</option></select></div>
+          <div class="wide"><label class="label" for="lookbackPeriod">&#30740;&#31350;&#25968;&#25454;&#21608;&#26399;</label><select id="lookbackPeriod"><option value="365">365 &#22825;</option></select></div>
           <div class="wide"><label class="label" for="narrativeMode">分析模式</label><select id="narrativeMode"><option value="deterministic" selected>确定性分析</option><option value="multi_agent_research">多智能体研究（研究命题，不批准仓位）</option><option value="openai_narrative">OpenAI 叙事分析</option></select><div class="item-meta" id="llmResearchStatus">正在检查服务端模型配置…</div></div>
           <div><label class="label" for="decisionDirection">方向</label><select id="decisionDirection"><option value="">暂不形成决策</option><option value="buy">买入</option><option value="hold">持有</option><option value="sell">卖出</option></select></div>
           <div class="decision-conditional" hidden><label class="label" for="decisionHorizon">周期</label><select id="decisionHorizon"><option value="short">短期</option><option value="medium" selected>中期</option><option value="long">长期</option></select></div>
@@ -1013,6 +1097,16 @@ _APP_HTML = r"""<!doctype html>
       const items = board?.items || [];
       $('watchlistMeta').textContent = board ? board.researched + '/' + board.total + ' 已完成研究' : '';
       $('watchlistBoard').innerHTML = items.length ? items.map(item => '<tr><td><button class="watch-symbol" type="button" data-watch-symbol="' + escape(item.symbol) + '">' + escape(item.symbol) + '</button></td><td>' + escape(item.last_close == null ? 'N/A' : money(item.last_close, item.currency)) + '</td><td>' + escape(item.last_price_date || 'N/A') + '</td><td><span class="board-status ' + escape(item.data_status) + '">' + escape(zh(item.data_status)) + '</span></td><td>' + escape(item.latest_research_at ? item.latest_research_at.slice(0,16).replace('T', ' ') : '暂无') + '</td><td>' + escape(zh(item.risk_decision || item.decision || '暂无')) + '</td></tr>').join('') : '<tr><td class="empty" colspan="6">自选股为空。</td></tr>';
+      const watchHeader = $('watchlistBoard').closest('table').tHead.rows[0];
+      if (watchHeader.cells.length === 6) { const th = document.createElement('th'); th.textContent = String.fromCharCode(26495,22359); watchHeader.insertBefore(th, watchHeader.cells[1]); }
+      [...$('watchlistBoard').rows].forEach((row, index) => {
+        if (!items[index]) { row.cells[0].colSpan = 7; return; }
+        const sectorCell = row.insertCell(1);
+        sectorCell.innerHTML = (items[index].sector_names || items[index].sectors || []).map(sector => '<span class="agent-role-badge">' + escape(sector) + '</span>').join(' ');
+        if (items[index].name) row.cells[0].insertAdjacentHTML('beforeend', '<div class="item-meta">' + escape(items[index].name) + '</div>');
+      });
+
+
     }
     function renderChart(market) {
       if (!market || market.series.length < 2) { $('chart').innerHTML = '<div class="empty">No cached price series available.</div>'; $('chartMeta').textContent = ''; return; }
@@ -1237,6 +1331,15 @@ _APP_HTML = r"""<!doctype html>
     let activeJobId = null;
     let activeBatchJobIds = [];
     let watchlistSymbols = new Set();
+    async function loadResearchSettings() {
+      const payload = await fetch('/api/research-settings').then(response => response.ok ? response.json() : Promise.reject(response));
+      const selector = $('lookbackPeriod');
+      selector.replaceChildren(...payload.settings.period_presets.map(item => new Option(item.name + ' (' + item.days + ')', String(item.days))));
+      selector.value = String(payload.default_lookback_days);
+      $('dataProvider').value = payload.settings.preferred_data_provider;
+    }
+
+
     function renderRunHistory(runs, selectedRunId) {
       const selector = $('runHistory');
       if (!runs.length) {
@@ -1286,7 +1389,7 @@ _APP_HTML = r"""<!doctype html>
       setResearchButton(true);
       setStatus('正在启动自选股更新...', 'busy');
       try {
-        const payload = await fetch('/api/watchlist-refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value})}).then(response => response.ok ? response.json() : Promise.reject(response));
+        const payload = await fetch('/api/watchlist-refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({lookback_days: Number($('lookbackPeriod').value), data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeBatchJobIds = payload.jobs.map(job => job.job_id);
         if (!activeBatchJobIds.length) { setResearchButton(false); setStatus('自选股为空。', 'warning'); return; }
         setResearchButton(true);
@@ -1353,7 +1456,7 @@ _APP_HTML = r"""<!doctype html>
       setResearchButton(true);
       setStatus('正在启动 ' + symbol + ' 研究...', 'busy');
       try {
-        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol, data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value, manual_signal: manualSignalPayload()})}).then(response => response.ok ? response.json() : Promise.reject(response));
+        const payload = await fetch('/api/research-jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol, lookback_days: Number($('lookbackPeriod').value), data_provider: $('dataProvider').value, narrative_mode: $('narrativeMode').value, manual_signal: manualSignalPayload()})}).then(response => response.ok ? response.json() : Promise.reject(response));
         activeJobId = payload.job.job_id;
         setResearchButton(true);
         await pollResearchJob();
@@ -1516,7 +1619,7 @@ _APP_HTML = r"""<!doctype html>
     setActiveView(activeView, false);
     updateDecisionFields();
     initializeJournalDates();
-    start();
+    loadResearchSettings().catch(() => {}).finally(start);
   </script>
 </body>
 </html>"""

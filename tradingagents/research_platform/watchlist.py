@@ -15,6 +15,9 @@ class WatchlistEntry(BaseModel):
 
     symbol: str = Field(min_length=1)
     added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    name: str | None = None
+    sectors: list[str] = Field(default_factory=list)
+    source: str = "manual"
 
     @field_validator("symbol")
     @classmethod
@@ -23,6 +26,11 @@ class WatchlistEntry(BaseModel):
         if not normalized:
             raise ValueError("symbol is required")
         return normalized
+
+    @field_validator("sectors")
+    @classmethod
+    def _normalize_sectors(cls, values: list[str]) -> list[str]:
+        return sorted({value.strip().lower() for value in values if value.strip()})
 
 
 class JsonWatchlistStore:
@@ -40,12 +48,49 @@ class JsonWatchlistStore:
             return []
         return sorted(entries, key=lambda entry: entry.symbol)
 
-    def add(self, symbol: str) -> WatchlistEntry:
-        entry = WatchlistEntry(symbol=symbol)
+    def add(
+        self,
+        symbol: str,
+        *,
+        name: str | None = None,
+        sectors: list[str] | None = None,
+        source: str = "manual",
+    ) -> WatchlistEntry:
+        entry = WatchlistEntry(symbol=symbol, name=name, sectors=sectors or [], source=source)
         entries = {item.symbol: item for item in self.list_entries()}
-        entries.setdefault(entry.symbol, entry)
+        existing = entries.get(entry.symbol)
+        if existing is None:
+            entries[entry.symbol] = entry
+        else:
+            entries[entry.symbol] = existing.model_copy(
+                update={
+                    "name": entry.name or existing.name,
+                    "sectors": sorted(set(existing.sectors) | set(entry.sectors)),
+                    "source": existing.source if existing.source == "manual" else entry.source,
+                }
+            )
         self._write(list(entries.values()))
         return entries[entry.symbol]
+
+    def add_many(self, entries: list[WatchlistEntry]) -> list[WatchlistEntry]:
+        """Merge discovery results without deleting existing followed stocks."""
+
+        merged = {item.symbol: item for item in self.list_entries()}
+        for entry in entries:
+            existing = merged.get(entry.symbol)
+            if existing is None:
+                merged[entry.symbol] = entry
+                continue
+            merged[entry.symbol] = existing.model_copy(
+                update={
+                    "name": entry.name or existing.name,
+                    "sectors": sorted(set(existing.sectors) | set(entry.sectors)),
+                    "source": existing.source if existing.source == "manual" else entry.source,
+                }
+            )
+        values = sorted(merged.values(), key=lambda item: item.symbol)
+        self._write(values)
+        return values
 
     def remove(self, symbol: str) -> bool:
         normalized = WatchlistEntry(symbol=symbol).symbol

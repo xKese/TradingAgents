@@ -20,10 +20,16 @@ def build_watchlist_board(
     """Return a compact, read-only research summary for explicit watchlist symbols."""
 
     archive = JsonResearchRunArchive(store.root)
-    items = [_build_item(store, archive, entry.symbol) for entry in watchlist.list_entries()]
+    entries = watchlist.list_entries()
+    items = [
+        _build_item(store, archive, entry.symbol)
+        | {"name": entry.name, "sectors": entry.sectors, "source": entry.source}
+        for entry in entries
+    ]
     return {
         "total": len(items),
         "researched": sum(item["latest_research_at"] is not None for item in items),
+        "sectors": sorted({sector for entry in entries for sector in entry.sectors}),
         "items": items,
     }
 
@@ -33,7 +39,9 @@ def _build_item(
     archive: JsonResearchRunArchive,
     symbol: str,
 ) -> dict[str, Any]:
-    bars = sorted(store.load_price_bars(symbol, _EARLIEST_DATE, date.max), key=lambda item: item.date)
+    bars = sorted(
+        store.load_price_bars(symbol, _EARLIEST_DATE, date.max), key=lambda item: item.date
+    )
     fundamentals = store.load_fundamentals(symbol)
     news = store.load_news(symbol, _EARLIEST_DATE, date.max)
     run_summaries = archive.list_runs(symbol)

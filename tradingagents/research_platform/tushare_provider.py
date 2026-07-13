@@ -359,12 +359,14 @@ def canonical_tushare_symbol(identity: InstrumentIdentity) -> str:
         if not code.isdigit() or len(code) > 5:
             raise ValueError(f"unsupported Hong Kong symbol: {identity.symbol}")
         return f"{code.zfill(5)}.HK"
-    if raw.endswith((".SH", ".SZ")):
+    if raw.endswith((".SH", ".SZ", ".BJ")):
         code, suffix = raw.rsplit(".", 1)
         if not code.isdigit() or len(code) != 6:
             raise ValueError(f"unsupported China A-share symbol: {identity.symbol}")
         return f"{code}.{suffix}"
     if raw.isdigit() and len(raw) == 6:
+        if raw.startswith(("4", "8")):
+            return f"{raw}.BJ"
         return f"{raw}.SH" if raw.startswith(("5", "6", "9")) else f"{raw}.SZ"
     raise ValueError(
         "Tushare Pro expects a six-digit A-share code or a Tushare-style .HK/.SH/.SZ symbol."

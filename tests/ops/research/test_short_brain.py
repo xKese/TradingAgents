@@ -57,16 +57,13 @@ def _hit():
         "asof": "2026-07-13", "status": "pending",
         "payload": {
             "symbol": "GHST", "asof": "2026-07-13", "passed": True,
-            "cheap": False, "quality": False,
-            "valuation_bars": [
+            "bars": [
                 {"name": "ev_ebit_expensive", "passed": True,
                  "detail": "EV/EBIT 34.0 vs 20"},
-            ],
-            "quality_bars": [
                 {"name": "net_debt_ebitda_high", "passed": True,
                  "detail": "net debt/EBITDA 5.1 vs 4"},
             ],
-            "triggers": [
+            "red_flags": [
                 {"kind": "red_flag_8k", "description": "4.02",
                  "date": "2026-07-01", "source": ACC_10Q},
             ],

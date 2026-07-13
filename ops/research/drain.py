@@ -46,7 +46,14 @@ def drain_pending(
     should_stop: Callable[[], bool] | None = None,
     now: Callable[[], datetime] = _utcnow,
     echo: Callable[[str], None] = lambda msg: None,
+    research_fn: Callable | None = None,
 ) -> DrainSummary:
+    """``research_fn`` selects the memo author: the default long-thesis
+    research_hit (resolved at call time, so tests patching the module
+    attribute still take effect), or short_brain.research_short_hit when
+    draining the short screen's queue (same contract, same ResearchOutcome)."""
+    if research_fn is None:
+        research_fn = research_hit
     hits = store.pending_hits()
     if max_names is not None:
         hits = hits[:max_names]
@@ -60,7 +67,7 @@ def drain_pending(
             hit_deadline = True
             break
         try:
-            outcome = research_hit(
+            outcome = research_fn(
                 hit, evidence_llm=evidence_llm, thesis_llm=thesis_llm,
                 memo_store=memo_store, thesis_model_spec=thesis_model_spec,
             )

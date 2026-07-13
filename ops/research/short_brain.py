@@ -24,7 +24,6 @@ from ops.research.brain import (
     _build_reading_plan,
     _evidence_bullets,
     _run_evidence_stage,
-    _screen_summary,
 )
 from ops.research.memo_validation import resolve_evidence, validate_memo
 from ops.research.prices import fetch_price_context
@@ -119,6 +118,20 @@ Past memos for {ticker}:
 """
 
 
+def _short_screen_summary(payload: dict) -> str:
+    """Short-screen payload (asdict(ShortScreenResult)) -> prompt text.
+    The long _screen_summary reads cheap/quality/valuation_bars keys the
+    short payload does not have."""
+    lines = [f"{payload['symbol']} short-screened {payload['asof']}: "
+             f"market_cap={payload['market_cap']} ev_ebit={payload['ev_ebit']}"]
+    for bar in payload.get("bars", []):
+        mark = "EXPENSIVE/DETERIORATING" if bar["passed"] else "ok"
+        lines.append(f"  [{mark}] {bar['name']}: {bar['detail']}")
+    for flag in payload.get("red_flags", []):
+        lines.append(f"  red flag {flag['kind']} ({flag['date']}): {flag['description']}")
+    return "\n".join(lines)
+
+
 def research_short_hit(
     hit: dict,
     *,
@@ -149,8 +162,11 @@ def research_short_hit(
         outcome.errors.append(f"no reference price for {symbol} at {today}")
         return outcome
 
+    # _build_reading_plan pulls trigger accessions from payload["triggers"];
+    # the short payload calls them red_flags — same Trigger dict shape.
+    reading_payload = {**payload, "triggers": payload.get("red_flags", [])}
     sections = _build_reading_plan(
-        symbol, payload, list_filings=list_filings, fetch_text=fetch_text,
+        symbol, reading_payload, list_filings=list_filings, fetch_text=fetch_text,
     )
     if not sections:
         outcome.errors.append("no readable filings")
@@ -175,7 +191,7 @@ def research_short_hit(
         "\n".join(summarize_memo(m) for m in past)
         if past else f"No past memos for {symbol}: none found."
     )
-    screen_summary = _screen_summary(payload)
+    screen_summary = _short_screen_summary(payload)
     evidence_bullets = _evidence_bullets(kept)
 
     bull = thesis_llm.invoke(DEFENSE_PROMPT.format(

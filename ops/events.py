@@ -126,6 +126,7 @@ KIND_SHORT_TRADE_ERROR = "short_trade_error"
 KIND_SHORT_DRAIN_RUN = "short_drain_run"
 KIND_SHORT_DRAIN_ERROR = "short_drain_error"
 KIND_SHORT_VETTING_RUN = "short_vetting_run"
+KIND_SHORT_VETTING_ERROR = "short_vetting_error"
 KIND_SHORT_POSITION_OPENED = "short_position_opened"
 KIND_SHORT_POSITION_CLOSED = "short_position_closed"
 KIND_RESEARCH_VETTING_ERROR = "research_vetting_error"
@@ -201,6 +202,7 @@ AUDIT_ONLY: frozenset[str] = frozenset({
     KIND_SHORT_DRAIN_RUN,
     KIND_SHORT_DRAIN_ERROR,
     KIND_SHORT_VETTING_RUN,
+    KIND_SHORT_VETTING_ERROR,
     KIND_SHORT_POSITION_OPENED,
     KIND_SHORT_POSITION_CLOSED,
     # Per-name momentum pipeline verdict: audit trail, not a push — the BUY
@@ -736,6 +738,7 @@ short_trade_error_payload = research_trade_error_payload
 short_drain_run_payload = research_drain_run_payload
 short_drain_error_payload = research_drain_error_payload
 short_vetting_run_payload = research_vetting_run_payload
+short_vetting_error_payload = research_vetting_error_payload
 short_position_opened_payload = research_position_opened_payload
 short_position_closed_payload = research_position_closed_payload
 
@@ -833,6 +836,7 @@ BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     KIND_SHORT_DRAIN_RUN: short_drain_run_payload,
     KIND_SHORT_DRAIN_ERROR: short_drain_error_payload,
     KIND_SHORT_VETTING_RUN: short_vetting_run_payload,
+    KIND_SHORT_VETTING_ERROR: short_vetting_error_payload,
     KIND_SHORT_POSITION_OPENED: short_position_opened_payload,
     KIND_SHORT_POSITION_CLOSED: short_position_closed_payload,
     KIND_ANALYSIS_DECISION: analysis_decision_payload,

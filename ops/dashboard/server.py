@@ -78,7 +78,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not found"}, status=404)
             else:
                 self._static(parsed.path)
-        except BrokenPipeError:
+        except (BrokenPipeError, ConnectionResetError):
+            # A tab closing mid-response drops the socket; a second write
+            # then raises. Swallow both so launchd's dashboard.err.log
+            # doesn't fill with tracebacks for ordinary client disconnects.
             pass
         except Exception as exc:  # noqa: BLE001 — a handler crash kills the tab
             self._send_json(

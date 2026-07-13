@@ -33,7 +33,10 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from ops.research.memo_brief import build_research_brief
-from ops.research.memo_validation import is_machine_checkable
+from ops.research.memo_validation import (
+    drawdown_convention_problem,
+    is_machine_checkable,
+)
 from tradingagents.agents.utils.structured import bind_structured
 from tradingagents.memos.schema import (
     ConvictionTier,
@@ -62,6 +65,9 @@ the position. Rules:
 - Each item MUST set metric, operator, AND threshold (metric examples:
   gross_margin_pct, revenue_yoy_pct, net_debt_to_ebitda,
   drawdown_from_cost_pct). Items without all three are discarded.
+- drawdown_from_cost_pct is a POSITIVE percent below cost: use > or >=
+  with a threshold like 25 (= down 25% from entry). Other forms are
+  discarded.
 - check_type: "fundamental" for quarterly financials, "price" for market
   data, "event" for filing/deal state.
 - Only conditions actually argued in the debate below — no inventions.
@@ -127,11 +133,17 @@ def extract_risk_falsifiers(
         return [], [f"falsifier extraction failed: {type(exc).__name__}: {exc}"]
     if batch is None:
         return [], ["falsifier extraction returned no structured output"]
-    kept = [f for f in batch.items if is_machine_checkable(f)]
+    kept = [
+        f for f in batch.items
+        if is_machine_checkable(f) and drawdown_convention_problem(f) is None
+    ]
     notes = []
     dropped = len(batch.items) - len(kept)
     if dropped:
-        notes.append(f"dropped {dropped} non-machine-checkable falsifier(s)")
+        notes.append(
+            f"dropped {dropped} non-machine-checkable or "
+            f"non-canonical falsifier(s)"
+        )
     return kept, notes
 
 

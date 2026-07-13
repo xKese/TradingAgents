@@ -65,8 +65,13 @@ def _drawdown_series(ctx: MetricContext) -> list[float] | None:
     # the comparison is apples-to-apples (Phase A split machinery).
     factor = ctx.price_ctx.split_factor_after(ctx.entry_era)
     entry = ctx.entry_price_ref
+    # Canonical convention: POSITIVE percent below cost (25.0 = price 25%
+    # under entry_price_ref); above-cost prices come out negative. Memo
+    # authors write thresholds like "> 25" — the original signed-return
+    # form made a +1.35% GAIN trip a ">25% drawdown" falsifier (CRC,
+    # 2026-07-13 false escalation).
     return [
-        (float(close * factor) - entry) / entry * 100.0
+        (entry - float(close * factor)) / entry * 100.0
         for close in reversed(closes)  # most-recent-first
     ]
 
@@ -118,7 +123,8 @@ def observations(metric: str, ctx: MetricContext) -> list[float] | None:
 
 
 def drawdown_pct(ctx: MetricContext) -> float | None:
-    """Latest drawdown vs entry_price_ref — the implicit escalation check."""
+    """Latest drawdown vs entry_price_ref (positive percent = below cost)
+    — the implicit escalation check."""
     series = _drawdown_series(ctx)
     return series[0] if series else None
 

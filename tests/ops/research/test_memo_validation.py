@@ -89,3 +89,33 @@ def test_resolve_evidence_strips_unknown_refs_and_non_filing():
     )
     assert [e.source_ref for e in kept] == [REF]
     assert len(dropped) == 2
+
+
+def test_drawdown_falsifier_wrong_operator_rejected():
+    # Signed-return form (< -25): under the canonical positive-percent-down
+    # convention this can never trip; must be rejected at authoring time.
+    memo = _memo(falsifiers=[Falsifier(
+        description="drawdown", check_type="price",
+        metric="drawdown_from_cost_pct", operator="<", threshold=-25.0,
+    )])
+    errors = validate_memo(memo, allowed_refs={REF}, known_precedents=set())
+    assert any("must use > or >=" in e for e in errors)
+
+
+def test_drawdown_falsifier_ratio_threshold_rejected():
+    # Ratio form (> 0.25) trips on a 0.25% dip — the CRC 2026-07-13 false
+    # escalation was this form against the old signed evaluator.
+    memo = _memo(falsifiers=[Falsifier(
+        description="drawdown", check_type="price",
+        metric="drawdown_from_cost_pct", operator=">", threshold=0.25,
+    )])
+    errors = validate_memo(memo, allowed_refs={REF}, known_precedents=set())
+    assert any("percent in [1, 100]" in e for e in errors)
+
+
+def test_drawdown_falsifier_canonical_form_accepted():
+    memo = _memo(falsifiers=[Falsifier(
+        description="drawdown", check_type="price",
+        metric="drawdown_from_cost_pct", operator=">", threshold=25.0,
+    )])
+    assert validate_memo(memo, allowed_refs={REF}, known_precedents=set()) == []

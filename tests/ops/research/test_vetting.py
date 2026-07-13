@@ -144,7 +144,7 @@ def test_vet_memo_passes_brief_and_asof_to_adapter(store):
 
 def test_extraction_keeps_only_machine_checkable():
     good = Falsifier(description="drawdown", check_type="price",
-                     metric="drawdown_from_cost_pct", operator="<", threshold=-25.0)
+                     metric="drawdown_from_cost_pct", operator=">", threshold=25.0)
     prose = Falsifier(description="vibes deteriorate", check_type="event")
     partial = Falsifier(description="margin", check_type="fundamental",
                         metric="gross_margin_pct")   # no operator/threshold
@@ -189,7 +189,7 @@ def test_confirm_appends_validated_falsifiers_with_indices(store):
     memo = _memo()
     store.save(memo)
     good = Falsifier(description="drawdown", check_type="price",
-                     metric="drawdown_from_cost_pct", operator="<", threshold=-25.0)
+                     metric="drawdown_from_cost_pct", operator=">", threshold=25.0)
     prose = Falsifier(description="vibes", check_type="event")
     adapter = StubPipelineAdapter(ratings={"ACME": "Buy"})
     outcome = vet_memo(memo, adapter=adapter,

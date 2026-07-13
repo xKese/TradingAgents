@@ -159,16 +159,120 @@ def _market_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
     }
 
 
+def _refuse_quotes(symbol: str) -> Decimal:
+    """Quote source handed to PaperBroker.from_journal: the dashboard is
+    journal-only, so any quote request during position replay is a bug that
+    would silently make the snapshot network-dependent. Mirrors
+    ops.status._refuse_quotes without importing the private name."""
+    raise RuntimeError(
+        f"dashboard snapshot is journal-only, but a quote was requested "
+        f"for {symbol!r} — position replay must not touch quote sources"
+    )
+
+
+def _one_sleeve(path: str, now: datetime) -> dict[str, Any]:
+    """One ledger's P&L / positions / fills, from journal replay alone.
+
+    Opened readonly (missing file → sqlite3.OperationalError, which the
+    caller turns into a per-sleeve {"error": ...}). Positions/cash come
+    from PaperBroker.from_journal with a refuse-quotes guard, exactly like
+    ops.status; equity/day P&L come from the equity-snapshot table.
+    """
+    from ops.broker.paper import PaperBroker
+    from ops.trading_time import trading_day_start
+
+    day_start = trading_day_start(now)
+    with Journal(path, readonly=True) as j:
+        snaps = j.read_equity_snapshots()
+        fills = j.read_fills()
+        replay = PaperBroker.from_journal(
+            journal=j, quote_source=_refuse_quotes, starting_cash=Decimal("0"))
+        positions = [
+            {"symbol": p.symbol, "quantity": p.quantity,
+             "entry": p.avg_entry_price, "stop": p.stop_loss_price}
+            for p in replay.get_positions()
+        ]
+        cash = replay.get_cash()
+
+    latest = snaps[-1] if snaps else None
+    before_today = [s for s in snaps if s["at"] < day_start]
+    day_pnl: Decimal | None = None
+    if latest is not None and before_today and before_today[-1]["equity"] != 0:
+        prev = before_today[-1]["equity"]
+        day_pnl = (latest["equity"] - prev) / prev
+    return {
+        "equity": latest["equity"] if latest else None,
+        "cash": cash,
+        "equity_at": latest["at"] if latest else None,
+        "equity_kind": latest["kind"] if latest else None,
+        "day_pnl_pct": day_pnl,
+        "series": [{"at": s["at"], "equity": s["equity"]} for s in snaps[-60:]],
+        "positions": positions,
+        "fills_today": [
+            {"symbol": f["symbol"], "side": f["side"], "quantity": f["quantity"],
+             "price": f["price"], "filled_at": f["filled_at"]}
+            for f in fills if f["filled_at"] >= day_start
+        ],
+    }
+
+
 def _sleeves_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
-    raise NotImplementedError("Task 4")
+    out: dict[str, Any] = {}
+    for name, path in (
+        ("momentum", config.journal_path),
+        ("research", config.research_journal_path),
+        ("baseline", config.baseline_journal_path),
+    ):
+        out[name] = section(lambda p=path: _one_sleeve(p, now))
+    return out
 
 
 def _funnel_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
     raise NotImplementedError("Task 5")
 
 
+# Recent-anomaly kinds over the momentum journal (mirrors ops/status.py:31-37).
+_MOMENTUM_ANOMALY_KINDS = (
+    events.KIND_GUARDIAN_CHECK_ERROR,
+    events.KIND_ORCHESTRATOR_TICK_ERROR,
+    events.KIND_STOP_FAILED,
+    events.KIND_GUARDIAN_BLIND,
+    events.KIND_INCONSISTENCY,
+)
+
+# Anomaly kinds over the research journal (own isolation: a missing research
+# journal simply omits these keys rather than zeroing them).
+_RESEARCH_ANOMALY_KINDS = (
+    events.KIND_RESEARCH_MONITOR_ERROR,
+    events.KIND_RESEARCH_TRADE_ERROR,
+    events.KIND_RESEARCH_VETTING_ERROR,
+    events.KIND_RESEARCH_DRAIN_ERROR,
+)
+
+
+def _kind_anomaly(j: Journal, kind: str, since: datetime) -> dict[str, Any]:
+    last = j.last_event(kind)
+    return {
+        "count": j.count_events(kind, since=since),
+        "last_at": last["at"] if last is not None else None,
+    }
+
+
 def _anomalies_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
-    raise NotImplementedError("Task 4")
+    since = now - timedelta(days=7)
+    out: dict[str, Any] = {}
+    with Journal(config.journal_path, readonly=True) as j:
+        for kind in _MOMENTUM_ANOMALY_KINDS:
+            out[kind] = _kind_anomaly(j, kind, since)
+    # Research journal under its own isolation: absence of the store is
+    # information — omit its kinds rather than reporting a false zero.
+    try:
+        with Journal(config.research_journal_path, readonly=True) as rj:
+            for kind in _RESEARCH_ANOMALY_KINDS:
+                out[kind] = _kind_anomaly(rj, kind, since)
+    except sqlite3.OperationalError:
+        pass
+    return out
 
 
 def build_snapshot(

@@ -171,7 +171,7 @@ def _refuse_quotes(symbol: str) -> Decimal:
     )
 
 
-def _one_sleeve(path: str, now: datetime) -> dict[str, Any]:
+def _one_sleeve(path: str, now: datetime, *, broker_cls=None) -> dict[str, Any]:
     """One ledger's P&L / positions / fills.
 
     Opened readonly (missing file → sqlite3.OperationalError, which the
@@ -187,16 +187,23 @@ def _one_sleeve(path: str, now: datetime) -> dict[str, Any]:
     replay-from-0 cash is fiction; for them the latest equity snapshot's
     journaled cash is the best available (correct, but only as fresh as the
     last snapshot).
+
+    ``broker_cls`` selects the replay engine: the default long PaperBroker,
+    or ShortPaperBroker for the short journal — PaperBroker.from_journal
+    silently skips SHORT/COVER fills, which would render the short book as
+    empty positions. Both replay engines honor the refuse-quotes guard.
     """
-    from ops.broker.paper import PaperBroker
     from ops.trading_time import trading_day_start
+
+    if broker_cls is None:
+        from ops.broker.paper import PaperBroker as broker_cls
 
     day_start = trading_day_start(now)
     with Journal(path, readonly=True) as j:
         snaps = j.read_equity_snapshots()
         fills = j.read_fills()
         has_cash_basis = bool(j.read_cash_adjustments())
-        replay = PaperBroker.from_journal(
+        replay = broker_cls.from_journal(
             journal=j, quote_source=_refuse_quotes, starting_cash=Decimal("0"))
         positions = [
             {"symbol": p.symbol, "quantity": p.quantity,
@@ -242,13 +249,18 @@ def _one_sleeve(path: str, now: datetime) -> dict[str, Any]:
 
 
 def _sleeves_section(config: OpsConfig, now: datetime) -> dict[str, Any]:
+    from ops.broker.short_paper import ShortPaperBroker
+
     out: dict[str, Any] = {}
-    for name, path in (
-        ("momentum", config.journal_path),
-        ("research", config.research_journal_path),
-        ("baseline", config.baseline_journal_path),
+    for name, path, broker_cls in (
+        ("momentum", config.journal_path, None),
+        ("research", config.research_journal_path, None),
+        ("baseline", config.baseline_journal_path, None),
+        ("short", config.short_journal_path, ShortPaperBroker),
+        ("insider", config.insider_journal_path, None),
     ):
-        out[name] = section(lambda p=path: _one_sleeve(p, now))
+        out[name] = section(
+            lambda p=path, b=broker_cls: _one_sleeve(p, now, broker_cls=b))
     return out
 
 

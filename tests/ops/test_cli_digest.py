@@ -27,7 +27,8 @@ def _canned_report() -> dict:
         "generated_at": None,
         "quiet": True,
         "header": {
-            "date": date(2026, 7, 8), "momentum": None, "research": None, "baseline": None,
+            "date": date(2026, 7, 8), "momentum": None, "research": None,
+            "baseline": None, "short": None, "insider": None,
         },
         "momentum": {
             "cycle_ran": False, "universe": None, "universe_blind": False,
@@ -43,6 +44,10 @@ def _canned_report() -> dict:
             },
             "trades": None, "positions_opened": [], "positions_closed": [],
         },
+        "short": {"configured": False, "trades": None, "overnight": None,
+                  "positions_opened": [], "positions_closed": []},
+        "insider": {"configured": False, "trades": None, "scan": None,
+                    "positions_opened": [], "positions_closed": []},
         "baseline": {"screen": None, "exits": [], "writeoffs": []},
         "anomalies": [],
     }

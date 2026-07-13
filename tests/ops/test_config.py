@@ -264,3 +264,40 @@ def test_research_cadence_validation():
         OpsConfig(research_drain_deadline_hour=9)
     OpsConfig(research_drain_deadline_hour=8)  # boundary: still valid
     OpsConfig(research_drain_deadline_hour=0)  # boundary: still valid
+
+
+def test_sleeve_path_defaults_and_env_overrides(monkeypatch):
+    cfg = OpsConfig()
+    assert cfg.short_journal_path.endswith("short_journal.sqlite")
+    assert cfg.short_memo_store_path.endswith("short_memos.sqlite")
+    assert cfg.short_screen_store_path.endswith("short_screen.sqlite")
+    assert cfg.insider_journal_path.endswith("insider_journal.sqlite")
+    assert cfg.insider_memo_store_path.endswith("insider_memos.sqlite")
+    assert cfg.insider_signal_store_path.endswith("insider_signals.sqlite")
+    assert cfg.short_starting_cash == Decimal("10000")
+    assert cfg.insider_starting_cash == Decimal("10000")
+
+    monkeypatch.setenv("OPS_SHORT_JOURNAL_PATH", "/tmp/s.sqlite")
+    monkeypatch.setenv("OPS_SHORT_MEMO_STORE_PATH", "/tmp/sm.sqlite")
+    monkeypatch.setenv("OPS_SHORT_SCREEN_STORE_PATH", "/tmp/ss.sqlite")
+    monkeypatch.setenv("OPS_INSIDER_JOURNAL_PATH", "/tmp/i.sqlite")
+    monkeypatch.setenv("OPS_INSIDER_MEMO_STORE_PATH", "/tmp/im.sqlite")
+    monkeypatch.setenv("OPS_INSIDER_SIGNAL_STORE_PATH", "/tmp/is.sqlite")
+    monkeypatch.setenv("OPS_SHORT_STARTING_CASH", "5000")
+    monkeypatch.setenv("OPS_INSIDER_STARTING_CASH", "7000")
+    cfg = load_config()
+    assert cfg.short_journal_path == "/tmp/s.sqlite"
+    assert cfg.short_memo_store_path == "/tmp/sm.sqlite"
+    assert cfg.short_screen_store_path == "/tmp/ss.sqlite"
+    assert cfg.insider_journal_path == "/tmp/i.sqlite"
+    assert cfg.insider_memo_store_path == "/tmp/im.sqlite"
+    assert cfg.insider_signal_store_path == "/tmp/is.sqlite"
+    assert cfg.short_starting_cash == Decimal("5000")
+    assert cfg.insider_starting_cash == Decimal("7000")
+
+
+def test_sleeve_starting_cash_must_be_positive():
+    with pytest.raises(ValueError, match="short_starting_cash"):
+        OpsConfig(short_starting_cash=Decimal("0"))
+    with pytest.raises(ValueError, match="insider_starting_cash"):
+        OpsConfig(insider_starting_cash=Decimal("-1"))

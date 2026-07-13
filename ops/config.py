@@ -48,6 +48,13 @@ def _default_screen_store_path() -> str:
     return os.path.join(os.path.expanduser(base), "tradingagents", "research_screen.sqlite")
 
 
+def _state_path(filename: str) -> str:
+    """XDG-aware path under the tradingagents state dir (same rule as every
+    default above; a helper because the sleeve count keeps growing)."""
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(os.path.expanduser(base), "tradingagents", filename)
+
+
 def _default_memo_store_path() -> str:
     from tradingagents.memos.store import default_memo_store_path
 
@@ -88,6 +95,25 @@ class OpsConfig:
     research_starting_cash: Decimal = Decimal("100000")
     screen_store_path: str = field(default_factory=_default_screen_store_path)
     memo_store_path: str = field(default_factory=_default_memo_store_path)
+    # Short sleeve (fourth ledger): own journal, memo store, and screen-hit
+    # queue — the research trade step enters ALL open memos in its store
+    # unfiltered, so short memos must live in a separate DB (spec decision 1).
+    short_journal_path: str = field(
+        default_factory=lambda: _state_path("short_journal.sqlite"))
+    short_memo_store_path: str = field(
+        default_factory=lambda: _state_path("short_memos.sqlite"))
+    short_screen_store_path: str = field(
+        default_factory=lambda: _state_path("short_screen.sqlite"))
+    short_starting_cash: Decimal = Decimal("10000")
+    # Insider-cluster sleeve (fifth ledger): journal + memo store + Form 4
+    # signal store.
+    insider_journal_path: str = field(
+        default_factory=lambda: _state_path("insider_journal.sqlite"))
+    insider_memo_store_path: str = field(
+        default_factory=lambda: _state_path("insider_memos.sqlite"))
+    insider_signal_store_path: str = field(
+        default_factory=lambda: _state_path("insider_signals.sqlite"))
+    insider_starting_cash: Decimal = Decimal("10000")
     research_evidence_model: str = _DEFAULT_RESEARCH_MODEL
     research_thesis_model: str = _DEFAULT_RESEARCH_MODEL
     research_screen_interval_days: int = 3
@@ -186,6 +212,14 @@ class OpsConfig:
         if self.research_starting_cash <= 0:
             raise ValueError(
                 f"research_starting_cash must be > 0, got {self.research_starting_cash}"
+            )
+        if self.short_starting_cash <= 0:
+            raise ValueError(
+                f"short_starting_cash must be > 0, got {self.short_starting_cash}"
+            )
+        if self.insider_starting_cash <= 0:
+            raise ValueError(
+                f"insider_starting_cash must be > 0, got {self.insider_starting_cash}"
             )
         for fname in ("research_screen_interval_days", "research_screen_ttl_days",
                       "research_drain_nightly_cap"):
@@ -314,6 +348,26 @@ def load_config() -> OpsConfig:
     screen_store_path = os.environ.get("OPS_SCREEN_STORE_PATH")
     if screen_store_path is not None:
         kwargs["screen_store_path"] = screen_store_path
+
+    for env_name, field_name in (
+        ("OPS_SHORT_JOURNAL_PATH", "short_journal_path"),
+        ("OPS_SHORT_MEMO_STORE_PATH", "short_memo_store_path"),
+        ("OPS_SHORT_SCREEN_STORE_PATH", "short_screen_store_path"),
+        ("OPS_INSIDER_JOURNAL_PATH", "insider_journal_path"),
+        ("OPS_INSIDER_MEMO_STORE_PATH", "insider_memo_store_path"),
+        ("OPS_INSIDER_SIGNAL_STORE_PATH", "insider_signal_store_path"),
+    ):
+        value = os.environ.get(env_name)
+        if value is not None:
+            kwargs[field_name] = value
+
+    short_starting_cash = _env_decimal("OPS_SHORT_STARTING_CASH")
+    if short_starting_cash is not None:
+        kwargs["short_starting_cash"] = short_starting_cash
+
+    insider_starting_cash = _env_decimal("OPS_INSIDER_STARTING_CASH")
+    if insider_starting_cash is not None:
+        kwargs["insider_starting_cash"] = insider_starting_cash
 
     daily_analysis_budget = _env_int("OPS_DAILY_ANALYSIS_BUDGET")
     if daily_analysis_budget is not None:

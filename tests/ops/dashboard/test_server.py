@@ -76,7 +76,7 @@ def test_logs_route_missing_file_empty_text(base_url):
 
 def test_index_served(base_url):
     status, body = _get(base_url + "/")
-    assert status == 200 and b"ops dashboard" in body.lower()
+    assert status == 200 and b'src="/assets/app.js"' in body
 
 
 def test_static_traversal_404(base_url):

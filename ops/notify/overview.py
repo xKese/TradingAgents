@@ -65,6 +65,14 @@ _MAIN_ANOMALY_KINDS = (
     # research_trade_run.
     events.KIND_RESEARCH_MONITOR_ERROR,
     events.KIND_RESEARCH_TRADE_ERROR,
+    # Short-sleeve errors land on the MAIN journal too (_short_trade_tick /
+    # _short_overnight_pass record onto the daemon's journal param).
+    events.KIND_SHORT_TRADE_ERROR,
+    events.KIND_SHORT_DRAIN_ERROR,
+    events.KIND_SHORT_VETTING_ERROR,
+    events.KIND_INSIDER_SCAN_ERROR,
+    events.KIND_INSIDER_TRADE_ERROR,
+    events.KIND_INSIDER_MEMO_ERROR,
 )
 # No research- or baseline-journal kind matches the plan's
 # "*_error"/explicit-name list today (baseline_quote_failure is a near-miss
@@ -261,6 +269,132 @@ def _research_section(
     }
 
 
+def _short_section(
+    main_by_kind: dict[str, list[dict[str, Any]]],
+    short_by_kind: dict[str, list[dict[str, Any]]] | None,
+) -> dict[str, Any]:
+    """Short-sleeve slice of the day. ``short_by_kind`` is None when the
+    sleeve's journal isn't configured/present — the section then renders a
+    not-configured line instead of pretending the sleeve is quiet.
+    short_trade_run and the overnight drain/vetting summaries live on the
+    MAIN journal (same discipline as the research kinds); only
+    short_position_opened/closed live in the short journal."""
+    if short_by_kind is None:
+        return {"configured": False, "trades": None, "overnight": None,
+                "positions_opened": [], "positions_closed": []}
+
+    trade_runs = main_by_kind.get(events.KIND_SHORT_TRADE_RUN, [])
+    trades: dict[str, Any] | None = None
+    if trade_runs:
+        tp = trade_runs[-1]["payload"]
+        trades = {
+            "entered": tp["entered"],
+            "exited": tp["exited"],
+            "skipped": tp["skipped"],
+            "equity": Decimal(tp["equity"]),
+            "cash": Decimal(tp["cash"]),
+        }
+
+    overnight: dict[str, Any] | None = None
+    drain_runs = main_by_kind.get(events.KIND_SHORT_DRAIN_RUN, [])
+    vet_runs = main_by_kind.get(events.KIND_SHORT_VETTING_RUN, [])
+    if drain_runs or vet_runs:
+        dp = drain_runs[-1]["payload"] if drain_runs else {}
+        vp = vet_runs[-1]["payload"] if vet_runs else {}
+        overnight = {
+            "screened": dp.get("screened_this_run", False),
+            "researched": dp.get("researched", 0),
+            "still_pending": dp.get("still_pending", 0),
+            "vetted": vp.get("vetted", 0),
+            "confirmed": vp.get("confirmed", 0),
+            "rejected": vp.get("rejected", 0),
+        }
+
+    positions_opened = [
+        {
+            "symbol": ev["payload"]["symbol"],
+            "memo_id": ev["payload"]["memo_id"],
+            "tier": ev["payload"]["conviction_tier"],
+        }
+        for ev in short_by_kind.get(events.KIND_SHORT_POSITION_OPENED, [])
+    ]
+    positions_closed = [
+        {
+            "symbol": ev["payload"]["symbol"],
+            "memo_id": ev["payload"]["memo_id"],
+            "reason": ev["payload"]["reason"],
+        }
+        for ev in short_by_kind.get(events.KIND_SHORT_POSITION_CLOSED, [])
+    ]
+
+    return {
+        "configured": True,
+        "trades": trades,
+        "overnight": overnight,
+        "positions_opened": positions_opened,
+        "positions_closed": positions_closed,
+    }
+
+
+def _insider_section(
+    main_by_kind: dict[str, list[dict[str, Any]]],
+    insider_by_kind: dict[str, list[dict[str, Any]]] | None,
+) -> dict[str, Any]:
+    """Insider-sleeve slice of the day; None journal => not configured.
+    insider_trade_run/insider_scan_run live on the MAIN journal, positions
+    on the insider journal — same split as the other sleeves."""
+    if insider_by_kind is None:
+        return {"configured": False, "trades": None, "scan": None,
+                "positions_opened": [], "positions_closed": []}
+
+    trade_runs = main_by_kind.get(events.KIND_INSIDER_TRADE_RUN, [])
+    trades: dict[str, Any] | None = None
+    if trade_runs:
+        tp = trade_runs[-1]["payload"]
+        trades = {
+            "entered": tp["entered"],
+            "exited": tp["exited"],
+            "skipped": tp["skipped"],
+            "equity": Decimal(tp["equity"]),
+            "cash": Decimal(tp["cash"]),
+        }
+
+    scan_runs = main_by_kind.get(events.KIND_INSIDER_SCAN_RUN, [])
+    scan: dict[str, Any] | None = None
+    if scan_runs:
+        sp = scan_runs[-1]["payload"]
+        scan = {
+            "form4_seen": sp["form4_seen"],
+            "universe_matches": sp["universe_matches"],
+            "transactions_recorded": sp["transactions_recorded"],
+            "errors": sp["errors"],
+        }
+
+    positions_opened = [
+        {
+            "symbol": ev["payload"]["symbol"],
+            "strength": ev["payload"]["strength"],
+            "buyers": ev["payload"]["buyers"],
+        }
+        for ev in insider_by_kind.get(events.KIND_INSIDER_POSITION_OPENED, [])
+    ]
+    positions_closed = [
+        {
+            "symbol": ev["payload"]["symbol"],
+            "reason": ev["payload"]["reason"],
+        }
+        for ev in insider_by_kind.get(events.KIND_INSIDER_POSITION_CLOSED, [])
+    ]
+
+    return {
+        "configured": True,
+        "trades": trades,
+        "scan": scan,
+        "positions_opened": positions_opened,
+        "positions_closed": positions_closed,
+    }
+
+
 def _baseline_section(by_kind: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     screen_runs = by_kind.get(events.KIND_BASELINE_SCREEN_RUN, [])
     screen: dict[str, Any] | None = None
@@ -317,20 +451,40 @@ def _sleeve_snapshot(journal: Any, kind: str) -> dict[str, Any] | None:
 
 def _header_section(
     when: datetime, main_journal: Any, research_journal: Any, baseline_journal: Any,
+    *, short_journal: Any | None = None, insider_journal: Any | None = None,
 ) -> dict[str, Any]:
     return {
         "date": when.date(),
         "momentum": _sleeve_snapshot(main_journal, "open_day"),
         "research": _sleeve_snapshot(research_journal, "research_run"),
         "baseline": _sleeve_snapshot(baseline_journal, "baseline_run"),
+        "short": (_sleeve_snapshot(short_journal, "short_run")
+                  if short_journal is not None else None),
+        "insider": (_sleeve_snapshot(insider_journal, "insider_run")
+                    if insider_journal is not None else None),
     }
 
 
 def _is_quiet(
     momentum: dict[str, Any], research: dict[str, Any], baseline: dict[str, Any],
-    anomalies: list[dict[str, Any]],
+    anomalies: list[dict[str, Any]], *, short: dict[str, Any] | None = None,
+    insider: dict[str, Any] | None = None,
 ) -> bool:
     monitor = research["monitor"]
+    short_active = short is not None and short["configured"] and (
+        short["trades"] is not None
+        or short["positions_opened"]
+        or short["positions_closed"]
+        or (short["overnight"] is not None
+            and (short["overnight"]["researched"] or short["overnight"]["vetted"]))
+    )
+    insider_active = insider is not None and insider["configured"] and (
+        insider["trades"] is not None
+        or insider["positions_opened"]
+        or insider["positions_closed"]
+    )
+    if short_active or insider_active:
+        return False
     return (
         not momentum["cycle_ran"]
         and momentum["universe"] is None
@@ -356,7 +510,8 @@ def _is_quiet(
 
 def build_daily_overview(
     *, main_journal: Any, baseline_journal: Any, research_journal: Any, memo_store: Any,
-    config: Any, now: datetime | None = None,
+    config: Any, now: datetime | None = None, short_journal: Any | None = None,
+    insider_journal: Any | None = None,
 ) -> dict[str, Any]:
     """Assemble the daily overview dict from the three journals + memo store.
 
@@ -371,22 +526,32 @@ def build_daily_overview(
     main_by_kind = _day_slice(main_journal, day_start)
     research_by_kind = _day_slice(research_journal, day_start)
     baseline_by_kind = _day_slice(baseline_journal, day_start)
+    short_by_kind = _day_slice(short_journal, day_start) if short_journal is not None else None
+    insider_by_kind = (_day_slice(insider_journal, day_start)
+                       if insider_journal is not None else None)
 
     memos_today = [m for m in memo_store.list() if m.created_at >= day_start]
 
     momentum = _momentum_section(main_journal, main_by_kind, day_start)
     research = _research_section(main_by_kind, research_by_kind, memos_today)
+    short = _short_section(main_by_kind, short_by_kind)
+    insider = _insider_section(main_by_kind, insider_by_kind)
     baseline = _baseline_section(baseline_by_kind)
     anomalies = _anomalies_section(main_by_kind, research_by_kind, baseline_by_kind)
-    header = _header_section(when, main_journal, research_journal, baseline_journal)
+    header = _header_section(when, main_journal, research_journal, baseline_journal,
+                             short_journal=short_journal,
+                             insider_journal=insider_journal)
 
     return {
         "date": when.date(),
         "generated_at": when,
-        "quiet": _is_quiet(momentum, research, baseline, anomalies),
+        "quiet": _is_quiet(momentum, research, baseline, anomalies, short=short,
+                           insider=insider),
         "header": header,
         "momentum": momentum,
         "research": research,
+        "short": short,
+        "insider": insider,
         "baseline": baseline,
         "anomalies": anomalies,
     }
@@ -407,8 +572,9 @@ def _fmt_pct(value: Decimal | None) -> str | None:
 def _format_header(header: dict[str, Any]) -> list[str]:
     lines = ["## Header", f"Date: {header['date'].isoformat()}"]
     for label, key in (("Momentum", "momentum"), ("Research", "research"),
+                       ("Short", "short"), ("Insider", "insider"),
                        ("Baseline", "baseline")):
-        snap = header[key]
+        snap = header.get(key)
         if snap is None:
             lines.append(f"{label}: n/a (no snapshot yet)")
         else:
@@ -517,6 +683,68 @@ def _format_research(r: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _format_short(s: dict[str, Any]) -> list[str]:
+    lines = ["## Short sleeve"]
+    if not s["configured"]:
+        lines.append("Not configured (no short journal).")
+        return lines
+    if s["trades"] is not None:
+        t = s["trades"]
+        lines.append(
+            f"Trade run: entered {len(t['entered'])}, exited {len(t['exited'])}, "
+            f"skipped {len(t['skipped'])}, equity {_fmt_money(t['equity'])}, "
+            f"cash {_fmt_money(t['cash'])}"
+        )
+        for label, key in (("Entered", "entered"), ("Exited", "exited")):
+            if t[key]:
+                lines.append(f"  {label}: {', '.join(t[key])}")
+    else:
+        lines.append("Trades: no short_trade_run today")
+    if s["overnight"] is not None:
+        o = s["overnight"]
+        lines.append(
+            f"Overnight: screened={'yes' if o['screened'] else 'no'}, "
+            f"{o['researched']} memo(s) authored ({o['still_pending']} pending), "
+            f"vetted {o['vetted']} (confirmed {o['confirmed']}, rejected {o['rejected']})"
+        )
+    for label, key in (("Opened", "positions_opened"), ("Closed", "positions_closed")):
+        for p in s[key]:
+            detail = p.get("tier") or p.get("reason", "")
+            lines.append(f"{label}: {p['symbol']} ({detail})")
+    return lines
+
+
+def _format_insider(s: dict[str, Any]) -> list[str]:
+    lines = ["## Insider sleeve"]
+    if not s["configured"]:
+        lines.append("Not configured (no insider journal).")
+        return lines
+    if s["trades"] is not None:
+        t = s["trades"]
+        lines.append(
+            f"Trade run: entered {len(t['entered'])}, exited {len(t['exited'])}, "
+            f"skipped {len(t['skipped'])}, equity {_fmt_money(t['equity'])}, "
+            f"cash {_fmt_money(t['cash'])}"
+        )
+        for label, key in (("Entered", "entered"), ("Exited", "exited")):
+            if t[key]:
+                lines.append(f"  {label}: {', '.join(t[key])}")
+    else:
+        lines.append("Trades: no insider_trade_run today")
+    if s["scan"] is not None:
+        sc = s["scan"]
+        lines.append(
+            f"Scan: {sc['form4_seen']} Form 4s seen, {sc['universe_matches']} "
+            f"in-universe, {sc['transactions_recorded']} recorded, "
+            f"{sc['errors']} error(s)"
+        )
+    for p in s["positions_opened"]:
+        lines.append(f"Opened: {p['symbol']} ({p['strength']}: {', '.join(p['buyers'])})")
+    for p in s["positions_closed"]:
+        lines.append(f"Closed: {p['symbol']} ({p['reason']})")
+    return lines
+
+
 def _format_baseline(b: dict[str, Any]) -> list[str]:
     lines = ["## Baseline"]
 
@@ -571,6 +799,10 @@ def format_daily_overview(report: dict[str, Any]) -> str:
     lines += _format_momentum(report["momentum"])
     lines.append("")
     lines += _format_research(report["research"])
+    lines.append("")
+    lines += _format_short(report["short"])
+    lines.append("")
+    lines += _format_insider(report["insider"])
     lines.append("")
     lines += _format_baseline(report["baseline"])
     lines.append("")

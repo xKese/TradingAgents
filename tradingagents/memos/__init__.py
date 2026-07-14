@@ -8,6 +8,7 @@ from tradingagents.memos.schema import (
     Memo,
     Resolution,
     ReturnScenario,
+    ShortThesis,
     ValueThesis,
 )
 from tradingagents.memos.store import MemoStore

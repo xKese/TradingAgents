@@ -75,8 +75,8 @@ class MemoStore:
         if not memo.block_matches_type():
             raise ValueError(
                 f"memo {memo.memo_id}: thesis_type={memo.thesis_type!r} does not match "
-                "the populated thesis block (exactly one of value_block/event_block, "
-                "matching the type, must be set)"
+                "the populated thesis block (exactly one of value_block/event_block/"
+                "short_block, matching the type, must be set)"
             )
         with self._lock, self._connect() as conn:
             conn.execute(

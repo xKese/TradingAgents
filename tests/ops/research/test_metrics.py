@@ -88,6 +88,29 @@ def test_drawdown_undoes_splits_after_entry_era():
     assert drawdown_pct(ctx) == pytest.approx(-30.0)  # (10 - 13) / 10
 
 
+def test_short_direction_negates_the_series():
+    # Same closes (price FELL from 10 to 6.5): a short is WINNING, so the
+    # adverse-move reading is negative. Invariant: positive = adverse, both
+    # directions.
+    ctx = _ctx(direction="short")
+    assert drawdown_pct(ctx) == pytest.approx(-35.0)
+
+
+def test_short_squeeze_reads_positive_and_trips():
+    # Price rose 35% against the short -> +35 adverse, trips '> 30'.
+    ctx = _ctx(direction="short", price_ctx=PriceContext(
+        closes={date(2026, 7, 7): Decimal("13.5")},
+    ))
+    assert drawdown_pct(ctx) == pytest.approx(35.0)
+    check = evaluate_falsifier(_falsifier(threshold=30.0), ctx)
+    assert check.status == "tripped"
+
+
+def test_short_profit_never_trips_drawdown_falsifier():
+    check = evaluate_falsifier(_falsifier(threshold=30.0), _ctx(direction="short"))
+    assert check.status == "ok"
+
+
 def test_gross_margin_pct_sorted_descending_and_scaled():
     obs = observations("gross_margin_pct", _ctx(fundamentals=_fundamentals()))
     assert obs == pytest.approx([28.0, 40.0])  # FY2025 first

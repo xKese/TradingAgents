@@ -410,11 +410,14 @@ def _daily_overview_tick(journal: Journal, config) -> None:
         with (
             Journal(config.baseline_journal_path) as baseline_journal,
             Journal(config.research_journal_path) as research_journal,
+            Journal(config.short_journal_path) as short_journal,
+            Journal(config.insider_journal_path) as insider_journal,
         ):
             report = build_daily_overview(
                 main_journal=journal, baseline_journal=baseline_journal,
                 research_journal=research_journal, memo_store=memo_store,
-                config=config,
+                config=config, short_journal=short_journal,
+                insider_journal=insider_journal,
             )
         rendered = format_daily_overview(report)
         headline = overview_headline(report)
@@ -477,6 +480,104 @@ def _research_trade_tick(journal: Journal, config) -> None:
         journal.record_event(
             events.KIND_RESEARCH_TRADE_ERROR,
             events.research_trade_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _short_trade_tick(journal: Journal, config) -> None:
+    """Scheduler-safe wrapper around the short-sleeve trade step: gate on
+    the run-summary event (restart-safe once-per-day, same pattern as
+    _research_trade_tick), and record errors as events rather than raising
+    — raising would kill the APScheduler job."""
+    try:
+        if journal.has_event_today(events.KIND_SHORT_TRADE_RUN):
+            return
+        from ops.quotes import make_yfinance_quote_source
+        from ops.research.short_trading import trade_short_sleeve
+        from tradingagents.memos.store import MemoStore
+
+        with Journal(config.short_journal_path) as short_journal:
+            trade_short_sleeve(
+                memo_store=MemoStore(config.short_memo_store_path),
+                short_journal=short_journal,
+                main_journal=journal,
+                quote_source=make_yfinance_quote_source(),
+                starting_cash=config.short_starting_cash,
+                deny_list=config.deny_list,
+                asof=date.today(),
+            )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see above
+        journal.record_event(
+            events.KIND_SHORT_TRADE_ERROR,
+            events.short_trade_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _insider_scan_tick(journal: Journal, config) -> None:
+    """Nightly Form 4 daily-index scan (00:15). No LLM, no ds4 — pure
+    EDGAR I/O into the signal store. Gate + error discipline as always."""
+    try:
+        if journal.has_event_today(events.KIND_INSIDER_SCAN_RUN):
+            return
+        from ops.insider.scan import run_insider_scan
+        from ops.insider.store import SignalStore
+
+        summaries = run_insider_scan(store=SignalStore(config.insider_signal_store_path))
+        journal.record_event(
+            events.KIND_INSIDER_SCAN_RUN,
+            events.insider_scan_run_payload(
+                days=len(summaries),
+                form4_seen=sum(s.form4_seen for s in summaries),
+                universe_matches=sum(s.universe_matches for s in summaries),
+                transactions_recorded=sum(s.transactions_recorded for s in summaries),
+                errors=sum(len(s.errors) for s in summaries),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, scheduler-safe
+        journal.record_event(
+            events.KIND_INSIDER_SCAN_ERROR,
+            events.insider_scan_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _insider_trade_tick(journal: Journal, config) -> None:
+    """Scheduler-safe wrapper around the insider-sleeve trade step (16:29).
+    Mechanical — no LLM. The exit-time memo resolver points at the INSIDER
+    memo store; its failures are isolated inside the trade step."""
+    try:
+        if journal.has_event_today(events.KIND_INSIDER_TRADE_RUN):
+            return
+        from ops.insider.memo_lite import resolve_on_exit
+        from ops.insider.store import SignalStore
+        from ops.insider.trading import trade_insider_sleeve
+        from ops.quotes import make_yfinance_quote_source
+        from tradingagents.memos.store import MemoStore
+
+        memo_store = MemoStore(config.insider_memo_store_path)
+
+        def resolver(**kwargs):
+            resolve_on_exit(memo_store=memo_store, **kwargs)
+
+        with Journal(config.insider_journal_path) as insider_journal:
+            trade_insider_sleeve(
+                signal_store=SignalStore(config.insider_signal_store_path),
+                insider_journal=insider_journal,
+                main_journal=journal,
+                quote_source=make_yfinance_quote_source(),
+                starting_cash=config.insider_starting_cash,
+                deny_list=config.deny_list,
+                asof=date.today(),
+                resolver=resolver,
+            )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, scheduler-safe
+        journal.record_event(
+            events.KIND_INSIDER_TRADE_ERROR,
+            events.insider_trade_error_payload(
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
@@ -569,10 +670,12 @@ def _research_overnight_tick(
             screened_this_run = True
 
         memo_store = MemoStore(config.memo_store_path)
-        if not store.pending_hits() and not memo_store.pending_vetting_memos():
-            # Nothing to drain OR vet — skip waking the 86 GB ds4 model
-            # entirely. This is the common case (~2 of 3 nights). Once per
-            # day, not per fire: the half-hourly trigger must not spam it.
+        research_idle = (
+            not store.pending_hits() and not memo_store.pending_vetting_memos()
+        )
+        if research_idle:
+            # Nothing to drain OR vet on the research side. Once per day,
+            # not per fire: the half-hourly trigger must not spam it.
             if not journal.has_event_today(events.KIND_RESEARCH_DRAIN_RUN):
                 journal.record_event(
                     events.KIND_RESEARCH_DRAIN_RUN,
@@ -581,7 +684,11 @@ def _research_overnight_tick(
                         researched=0, failed=0, still_pending=0, hit_deadline=False,
                     ),
                 )
-            return
+            if (not _short_overnight_work_pending(config)
+                    and not _insider_memo_work_pending(config)):
+                # Nothing anywhere — skip waking the 86 GB ds4 model
+                # entirely. This is the common case (~2 of 3 nights).
+                return
 
         base_stop = should_stop or _shutdown_event.is_set
         pause_flag = config.research_pause_flag_path
@@ -601,7 +708,7 @@ def _research_overnight_tick(
         drain_hit_deadline = False
         drain_llms = None  # (evidence, thesis) — built once, on first chunk
         try:
-            while not stop() and tick_now() < deadline:
+            while not research_idle and not stop() and tick_now() < deadline:
                 pending = store.pending_hits()
                 if not memo_store.pending_vetting_memos() and not pending:
                     break
@@ -652,15 +759,16 @@ def _research_overnight_tick(
                     progress += summary.researched + summary.failed
                 if progress == 0:
                     break  # nothing moved (deadline/stop/errors) — don't spin
-            journal.record_event(
-                events.KIND_RESEARCH_DRAIN_RUN,
-                events.research_drain_run_payload(
-                    asof=date.today().isoformat(), screened_this_run=screened_this_run,
-                    researched=researched, failed=drain_failed,
-                    still_pending=len(store.pending_hits()),
-                    hit_deadline=drain_hit_deadline,
-                ),
-            )
+            if not research_idle:  # idle nights recorded their zero event above
+                journal.record_event(
+                    events.KIND_RESEARCH_DRAIN_RUN,
+                    events.research_drain_run_payload(
+                        asof=date.today().isoformat(), screened_this_run=screened_this_run,
+                        researched=researched, failed=drain_failed,
+                        still_pending=len(store.pending_hits()),
+                        hit_deadline=drain_hit_deadline,
+                    ),
+                )
             if vet_ran:
                 journal.record_event(
                     events.KIND_RESEARCH_VETTING_RUN,
@@ -671,12 +779,246 @@ def _research_overnight_tick(
                         hit_deadline=vet_hit_deadline,
                     ),
                 )
+            # Short sleeve gets whatever window remains — research (the
+            # proven sleeve) always drains and vets first, and both share
+            # this tick's single ds4 bracket (the sole contention guard).
+            _short_overnight_pass(
+                journal, config, backend=backend, deadline=deadline,
+                should_stop=stop, tick_now=tick_now,
+                adapter_factory=vet_adapter_factory,
+            )
+            _insider_memo_pass(
+                journal, config, backend=backend, deadline=deadline,
+                should_stop=stop, tick_now=tick_now,
+            )
         finally:
             backend.shutdown()
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
         journal.record_event(
             events.KIND_RESEARCH_DRAIN_ERROR,
             events.research_drain_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _short_overnight_work_pending(config) -> bool:
+    """True when the short sleeve has overnight work: its screen is due,
+    short-screen hits are pending, or short memos await vetting. Used by
+    _research_overnight_tick to decide whether an otherwise-idle night can
+    skip the backend bracket entirely."""
+    from ops.research.store import ScreenStore
+    from tradingagents.memos.store import MemoStore
+
+    store = ScreenStore(config.short_screen_store_path)
+    last = store.last_run()
+    if last is None or _days_since_iso(last["created_at"]) >= config.research_screen_interval_days:
+        return True
+    if store.pending_hits():
+        return True
+    return bool(MemoStore(config.short_memo_store_path).pending_vetting_memos())
+
+
+def _short_overnight_pass(
+    journal: Journal, config, *, backend, deadline, should_stop, tick_now,
+    adapter_factory=None,
+) -> None:
+    """Short-sleeve overnight work, run AFTER the research stages: screen
+    if due, then alternate graph-vetting (inverted confirm map) and drain
+    chunks against the SHORT stores under the caller's deadline and ds4
+    bracket. Scheduler-safe: any failure records short_drain_error and
+    returns — the caller's finally still tears the backend down. One
+    aggregated short_drain_run / short_vetting_run event per tick, with the
+    zero-work event gated once per day (half-hourly trigger must not spam)."""
+    try:
+        from ops.research.store import ScreenStore
+        from tradingagents.memos.store import MemoStore
+
+        store = ScreenStore(config.short_screen_store_path)
+        memo_store = MemoStore(config.short_memo_store_path)
+        screened_this_run = False
+        last = store.last_run()
+        due = (last is None
+               or _days_since_iso(last["created_at"]) >= config.research_screen_interval_days)
+        if due and not should_stop() and tick_now() < deadline:
+            from ops.research.run import run_short_screen
+
+            run_short_screen(config=config, asof=date.today())
+            screened_this_run = True
+
+        if not store.pending_hits() and not memo_store.pending_vetting_memos():
+            if not journal.has_event_today(events.KIND_SHORT_DRAIN_RUN):
+                journal.record_event(
+                    events.KIND_SHORT_DRAIN_RUN,
+                    events.short_drain_run_payload(
+                        asof=date.today().isoformat(),
+                        screened_this_run=screened_this_run,
+                        researched=0, failed=0, still_pending=0, hit_deadline=False,
+                    ),
+                )
+            return
+
+        vetted = confirmed = rejected = vet_failed = 0
+        vet_ran = False
+        vet_errored = False
+        vet_hit_deadline = False
+        researched = drain_failed = 0
+        drain_hit_deadline = False
+        drain_llms = None  # (evidence, thesis) — built once, on first chunk
+        while not should_stop() and tick_now() < deadline:
+            pending = store.pending_hits()
+            if not memo_store.pending_vetting_memos() and not pending:
+                break
+            progress = 0
+            if memo_store.pending_vetting_memos() and not vet_errored:
+                summary = _short_vetting_stage(
+                    journal, config, memo_store=memo_store, backend=backend,
+                    deadline=deadline, should_stop=should_stop, now=tick_now,
+                    adapter_factory=adapter_factory,
+                )
+                if summary is None:
+                    vet_errored = True
+                else:
+                    vet_ran = True
+                    vetted += summary.vetted
+                    confirmed += summary.confirmed
+                    rejected += summary.rejected
+                    vet_failed += summary.failed
+                    vet_hit_deadline = vet_hit_deadline or summary.hit_deadline
+                    progress += summary.vetted + summary.failed
+            if pending:
+                if drain_llms is None:
+                    from tradingagents.dataflows import edgar
+                    edgar.get_user_agent()  # fail fast before spinning ds4
+
+                    from ops.research.models import build_stage_llm
+
+                    drain_llms = (
+                        build_stage_llm(config.research_evidence_model),
+                        build_stage_llm(config.research_thesis_model),
+                    )
+                from ops.research.drain import drain_pending
+                from ops.research.short_brain import research_short_hit
+
+                backend.ensure_up()
+                summary = drain_pending(
+                    store=store, memo_store=memo_store,
+                    evidence_llm=drain_llms[0], thesis_llm=drain_llms[1],
+                    thesis_model_spec=config.research_thesis_model,
+                    max_names=config.research_drain_nightly_cap,
+                    deadline=deadline, should_stop=should_stop, now=tick_now,
+                    research_fn=research_short_hit,
+                )
+                researched += summary.researched
+                drain_failed += summary.failed
+                drain_hit_deadline = drain_hit_deadline or summary.hit_deadline
+                progress += summary.researched + summary.failed
+            if progress == 0:
+                break  # nothing moved (deadline/stop/errors) — don't spin
+        journal.record_event(
+            events.KIND_SHORT_DRAIN_RUN,
+            events.short_drain_run_payload(
+                asof=date.today().isoformat(), screened_this_run=screened_this_run,
+                researched=researched, failed=drain_failed,
+                still_pending=len(store.pending_hits()),
+                hit_deadline=drain_hit_deadline,
+            ),
+        )
+        if vet_ran:
+            journal.record_event(
+                events.KIND_SHORT_VETTING_RUN,
+                events.short_vetting_run_payload(
+                    asof=date.today().isoformat(), vetted=vetted,
+                    confirmed=confirmed, rejected=rejected, failed=vet_failed,
+                    still_pending=len(memo_store.pending_vetting_memos()),
+                    hit_deadline=vet_hit_deadline,
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+        journal.record_event(
+            events.KIND_SHORT_DRAIN_ERROR,
+            events.short_drain_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _insider_memo_work_pending(config) -> bool:
+    """True when insider-sleeve entries are awaiting their memo-lite pass."""
+    from ops.insider.store import SignalStore
+
+    return bool(SignalStore(config.insider_signal_store_path).entries_without_memo())
+
+
+def _insider_memo_pass(
+    journal: Journal, config, *, backend, deadline, should_stop, tick_now,
+) -> None:
+    """Overnight memo-lite authoring for insider entries — one cheap
+    structured call per entry, LAST in the window (after research and short
+    stages). Builds the LLM and touches ds4 only when the queue is
+    non-empty; failures record insider_memo_error and never raise."""
+    try:
+        from ops.insider.store import SignalStore
+
+        signal_store = SignalStore(config.insider_signal_store_path)
+        if not signal_store.entries_without_memo():
+            return
+        if should_stop() or tick_now() >= deadline:
+            return
+        from ops.insider.memo_lite import author_pending_memos
+        from ops.research.models import build_stage_llm
+        from tradingagents.memos.store import MemoStore
+
+        backend.ensure_up()
+        author_pending_memos(
+            signal_store=signal_store,
+            memo_store=MemoStore(config.insider_memo_store_path),
+            thesis_llm=build_stage_llm(config.research_thesis_model),
+            thesis_model_spec=config.research_thesis_model,
+            deadline=deadline, should_stop=should_stop, now=tick_now,
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, scheduler-safe
+        journal.record_event(
+            events.KIND_INSIDER_MEMO_ERROR,
+            events.insider_memo_error_payload(
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+
+
+def _short_vetting_stage(
+    journal: Journal, config, *, memo_store, backend, deadline, should_stop,
+    now, adapter_factory=None,
+):
+    """One graph-vetting pass over the SHORT pending_vetting queue with the
+    inverted confirm map (Sell -> high, Underweight -> medium). Same
+    contract as _research_vetting_stage: returns the VettingSummary, or
+    None when the queue was empty or the pass failed (recorded as
+    short_vetting_error; memos stay pending for the next night)."""
+    try:
+        if not memo_store.pending_vetting_memos():
+            return None
+        from ops.research.models import build_stage_llm
+        from ops.research.vetting import SHORT_CONFIRM_TIERS, vet_pending
+        from tradingagents.default_config import DEFAULT_CONFIG
+
+        if adapter_factory is None:
+            from ops.pipeline_adapter import TradingAgentsPipelineAdapter
+
+            adapter = TradingAgentsPipelineAdapter(backend=backend)
+        else:
+            adapter = adapter_factory(backend)
+        return vet_pending(
+            memo_store=memo_store, adapter=adapter,
+            falsifier_llm=build_stage_llm(config.research_thesis_model),
+            vetted_by_model=f"{DEFAULT_CONFIG['llm_provider']}:{DEFAULT_CONFIG['deep_think_llm']}",
+            deadline=deadline, should_stop=should_stop, now=now,
+            confirm_tiers=SHORT_CONFIRM_TIERS,
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+        journal.record_event(
+            events.KIND_SHORT_VETTING_ERROR,
+            events.short_vetting_error_payload(
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
@@ -825,6 +1167,23 @@ def _start_full_scheduler(
             lambda: _research_trade_tick(journal, config),
             CronTrigger(hour=16, minute=25, day_of_week="mon-fri"),
             id="research_trade", max_instances=1, misfire_grace_time=300,
+        )
+        sched.add_job(
+            lambda: _short_trade_tick(journal, config),
+            CronTrigger(hour=16, minute=27, day_of_week="mon-fri"),
+            id="short_trade", max_instances=1, misfire_grace_time=300,
+        )
+        sched.add_job(
+            lambda: _insider_trade_tick(journal, config),
+            CronTrigger(hour=16, minute=29, day_of_week="mon-fri"),
+            id="insider_trade", max_instances=1, misfire_grace_time=300,
+        )
+        # 00:15 daily (weekends included: Friday's index lands Saturday
+        # 00:15; a holiday's missing index is an empty day, not an error).
+        sched.add_job(
+            lambda: _insider_scan_tick(journal, config),
+            CronTrigger(hour=0, minute=15),
+            id="insider_scan", max_instances=1, misfire_grace_time=600,
         )
         # Half-hourly, not once-nightly: fires while paused (`ops research
         # pause`) or outside the overnight window return instantly, and a

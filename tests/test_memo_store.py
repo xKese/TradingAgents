@@ -13,6 +13,7 @@ from tradingagents.memos import (
     Memo,
     MemoStore,
     Resolution,
+    ShortThesis,
     ValueThesis,
 )
 
@@ -51,6 +52,47 @@ def _value_memo(**overrides) -> Memo:
                 metric="gross_margin_pct",
                 operator="<",
                 threshold=50.0,
+                consecutive_periods=2,
+            )
+        ],
+    }
+    defaults.update(overrides)
+    return Memo(**defaults)
+
+
+def _short_memo(**overrides) -> Memo:
+    defaults = {
+        "ticker": "GHST",
+        "as_of_date": date(2026, 7, 1),
+        "thesis_type": "short",
+        "thesis": "Restatement plus fading segment; priced as a growth story.",
+        "evidence": [
+            EvidenceItem(
+                claim="8-K item 4.02: FY24-FY25 financials can no longer be relied on.",
+                source_type="filing",
+                source_ref="0001111111-26-000042:8-K item 4.02",
+            )
+        ],
+        "short_block": ShortThesis(
+            overvaluation_mechanism="Priced on a segment whose backlog is in run-off.",
+            red_flags=["8-K 4.02 non-reliance filed 2026-06-30"],
+            why_now="Restatement forces a guidance reset within two quarters.",
+            squeeze_risk="12% of float short; borrow assumed available (paper).",
+            downside_scenario="Rerates to 8x normalized EBIT, ~-40%.",
+        ),
+        "conviction_tier": "medium",
+        "entry_price_ref": 42.0,
+        "price_target_low": 25.0,
+        "price_target_high": 55.0,
+        "expected_holding_months": 6,
+        "must_be_true": ["Restated numbers show materially lower margins."],
+        "falsifiers": [
+            Falsifier(
+                description="Gross margin recovers above 45% for two quarters.",
+                check_type="fundamental",
+                metric="gross_margin_pct",
+                operator=">",
+                threshold=45.0,
                 consecutive_periods=2,
             )
         ],
@@ -129,6 +171,25 @@ class TestSchema:
         memo = _event_memo(value_block=_value_memo().value_block)
         with pytest.raises(ValueError, match="exactly one"):
             store.save(memo)
+
+    def test_short_memo_block_matches(self, store):
+        memo = _short_memo()
+        assert memo.block_matches_type()
+        store.save(memo)
+        loaded = store.get(memo.memo_id)
+        assert loaded.thesis_type == "short"
+        assert loaded.short_block.red_flags == [
+            "8-K 4.02 non-reliance filed 2026-06-30"
+        ]
+
+    def test_short_memo_with_value_block_mismatches(self, store):
+        memo = _short_memo(value_block=_value_memo().value_block)
+        assert not memo.block_matches_type()
+        with pytest.raises(ValueError, match="exactly one"):
+            store.save(memo)
+
+    def test_short_type_without_short_block_mismatches(self):
+        assert not _short_memo(short_block=None).block_matches_type()
 
     def test_requires_falsifier_and_evidence(self):
         with pytest.raises(ValidationError):

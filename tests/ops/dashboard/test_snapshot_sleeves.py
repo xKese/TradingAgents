@@ -26,6 +26,8 @@ def _config(tmp_path) -> OpsConfig:
         memo_store_path=str(tmp_path / "memos.sqlite"),
         guardian_liveness_path=str(tmp_path / "guardian.alive"),
         research_pause_flag_path=str(tmp_path / "research.paused"),
+        short_journal_path=str(tmp_path / "short.sqlite"),
+        insider_journal_path=str(tmp_path / "insider.sqlite"),
     )
 
 
@@ -158,3 +160,47 @@ def test_anomalies_counts_and_last_at(tmp_path):
     assert anom[events.KIND_STOP_FAILED]["count"] == 2
     assert anom[events.KIND_STOP_FAILED]["last_at"] is not None
     assert anom[events.KIND_GUARDIAN_BLIND]["count"] == 0
+
+
+def test_short_sleeve_positions_replay_through_short_broker(tmp_path):
+    cfg = _config(tmp_path)
+    with Journal(cfg.short_journal_path) as j:
+        j.record_equity_snapshot(
+            equity=Decimal("10000"), cash=Decimal("10400"), kind="short_run", at=NOW)
+        j.record_order(
+            client_order_id="s1", symbol="GHST", side="SHORT",
+            notional_dollars=Decimal("400"), stop_loss_price=None)
+        j.record_fill(
+            order_id="o1", client_order_id="s1", symbol="GHST", side="SHORT",
+            quantity=Decimal("40"), price=Decimal("10"), filled_at=NOW)
+    short = build_snapshot(cfg, now=NOW)["sleeves"]["short"]
+    # PaperBroker replay would skip the SHORT fill and show no positions;
+    # the ShortPaperBroker dispatch is what makes this visible.
+    assert short["positions"] == [
+        {"symbol": "GHST", "quantity": "40", "entry": "10", "stop": None}]
+    assert short["equity"] == "10000"
+    assert len(short["fills_today"]) == 1
+
+
+def test_insider_sleeve_uses_long_replay(tmp_path):
+    cfg = _config(tmp_path)
+    with Journal(cfg.insider_journal_path) as j:
+        j.record_equity_snapshot(
+            equity=Decimal("10300"), cash=Decimal("9700"), kind="insider_run", at=NOW)
+        j.record_order(
+            client_order_id="i1", symbol="AAA", side="BUY",
+            notional_dollars=Decimal("300"), stop_loss_price=None)
+        j.record_fill(
+            order_id="o1", client_order_id="i1", symbol="AAA", side="BUY",
+            quantity=Decimal("30"), price=Decimal("10"), filled_at=NOW)
+    insider = build_snapshot(cfg, now=NOW)["sleeves"]["insider"]
+    assert insider["positions"] == [
+        {"symbol": "AAA", "quantity": "30", "entry": "10", "stop": None}]
+    assert insider["equity"] == "10300"
+
+
+def test_missing_new_sleeve_journals_are_per_sleeve_errors(tmp_path):
+    cfg = _config(tmp_path)  # neither file exists
+    sleeves = build_snapshot(cfg, now=NOW)["sleeves"]
+    assert "error" in sleeves["short"]
+    assert "error" in sleeves["insider"]

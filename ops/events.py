@@ -65,6 +65,9 @@ KIND_INCONSISTENCY = "inconsistency"
 KIND_POSITIONS_RECOVERED_WITHOUT_STOPS = "positions_recovered_without_stops"
 KIND_JOURNAL_REPLAY_FALLBACK = "journal_replay_fallback"
 KIND_JOURNAL_REPLAY_ORPHAN_SELL = "journal_replay_orphan_sell"
+# Short-journal twin of orphan_sell: a COVER replayed with no prior SHORT.
+# Shares journal_replay_orphan_sell_payload (same shape).
+KIND_JOURNAL_REPLAY_ORPHAN_COVER = "journal_replay_orphan_cover"
 
 # Live gate / flip ritual
 KIND_BROKER_MODE_LIVE = "broker_mode_live"
@@ -115,6 +118,26 @@ KIND_RESEARCH_TRADE_ERROR = "research_trade_error"
 KIND_RESEARCH_DRAIN_RUN = "research_drain_run"
 KIND_RESEARCH_DRAIN_ERROR = "research_drain_error"
 KIND_RESEARCH_VETTING_RUN = "research_vetting_run"
+
+# --- Short sleeve (mirrors the research set; payload builders are shared
+# aliases since the shapes are identical) ---
+KIND_SHORT_TRADE_RUN = "short_trade_run"
+KIND_SHORT_TRADE_ERROR = "short_trade_error"
+KIND_SHORT_DRAIN_RUN = "short_drain_run"
+KIND_SHORT_DRAIN_ERROR = "short_drain_error"
+KIND_SHORT_VETTING_RUN = "short_vetting_run"
+KIND_SHORT_VETTING_ERROR = "short_vetting_error"
+KIND_SHORT_POSITION_OPENED = "short_position_opened"
+KIND_SHORT_POSITION_CLOSED = "short_position_closed"
+
+# --- Insider-cluster sleeve ---
+KIND_INSIDER_SCAN_RUN = "insider_scan_run"
+KIND_INSIDER_SCAN_ERROR = "insider_scan_error"
+KIND_INSIDER_TRADE_RUN = "insider_trade_run"
+KIND_INSIDER_TRADE_ERROR = "insider_trade_error"
+KIND_INSIDER_MEMO_ERROR = "insider_memo_error"
+KIND_INSIDER_POSITION_OPENED = "insider_position_opened"
+KIND_INSIDER_POSITION_CLOSED = "insider_position_closed"
 KIND_RESEARCH_VETTING_ERROR = "research_vetting_error"
 KIND_RESEARCH_POSITION_OPENED = "research_position_opened"
 KIND_RESEARCH_POSITION_CLOSED = "research_position_closed"
@@ -142,6 +165,7 @@ AUDIT_ONLY: frozenset[str] = frozenset({
     KIND_SERVICE_STOPPING,
     KIND_JOURNAL_REPLAY_FALLBACK,
     KIND_JOURNAL_REPLAY_ORPHAN_SELL,
+    KIND_JOURNAL_REPLAY_ORPHAN_COVER,
     KIND_BROKER_MODE_LIVE,
     KIND_LIVE_FLIP_REFUSED,
     KIND_DAILY_SUMMARY_ERROR,
@@ -181,6 +205,22 @@ AUDIT_ONLY: frozenset[str] = frozenset({
     KIND_RESEARCH_VETTING_ERROR,
     KIND_RESEARCH_POSITION_OPENED,
     KIND_RESEARCH_POSITION_CLOSED,
+    # Short sleeve: same audit discipline as the research set (the
+    # short_trade_run push is the one notified kind, via POLICY).
+    KIND_SHORT_TRADE_ERROR,
+    KIND_SHORT_DRAIN_RUN,
+    KIND_SHORT_DRAIN_ERROR,
+    KIND_SHORT_VETTING_RUN,
+    KIND_SHORT_VETTING_ERROR,
+    KIND_SHORT_POSITION_OPENED,
+    KIND_SHORT_POSITION_CLOSED,
+    # Insider sleeve: insider_trade_run is the one notified kind (POLICY).
+    KIND_INSIDER_SCAN_RUN,
+    KIND_INSIDER_SCAN_ERROR,
+    KIND_INSIDER_TRADE_ERROR,
+    KIND_INSIDER_MEMO_ERROR,
+    KIND_INSIDER_POSITION_OPENED,
+    KIND_INSIDER_POSITION_CLOSED,
     # Per-name momentum pipeline verdict: audit trail, not a push — the BUY
     # case already notifies via position_opened/fill.
     KIND_ANALYSIS_DECISION,
@@ -707,6 +747,59 @@ def research_position_closed_payload(
     }
 
 
+# Short-sleeve payloads share the research shapes exactly; aliases keep the
+# producers honest (one shape, two kinds) without duplicating builders.
+short_trade_run_payload = research_trade_run_payload
+short_trade_error_payload = research_trade_error_payload
+short_drain_run_payload = research_drain_run_payload
+short_drain_error_payload = research_drain_error_payload
+short_vetting_run_payload = research_vetting_run_payload
+short_vetting_error_payload = research_vetting_error_payload
+short_position_opened_payload = research_position_opened_payload
+short_position_closed_payload = research_position_closed_payload
+
+# Insider-sleeve payloads: trade-run/error shapes are shared; the position
+# and scan payloads carry sleeve-specific fields.
+insider_trade_run_payload = research_trade_run_payload
+insider_trade_error_payload = research_trade_error_payload
+insider_scan_error_payload = research_trade_error_payload
+insider_memo_error_payload = research_trade_error_payload
+
+
+def insider_scan_run_payload(
+    *, days: int, form4_seen: int, universe_matches: int,
+    transactions_recorded: int, errors: int,
+) -> dict[str, Any]:
+    """Aggregated nightly Form 4 daily-index scan summary."""
+    return {
+        "days": days, "form4_seen": form4_seen,
+        "universe_matches": universe_matches,
+        "transactions_recorded": transactions_recorded, "errors": errors,
+    }
+
+
+def insider_position_opened_payload(
+    *, symbol: str, strength: str, entry_date: str, client_order_id: str,
+    notional: str, buyers: list[str], accessions: list[str], memo_id: str = "",
+) -> dict[str, Any]:
+    """Insider position provenance: the cluster that drove the entry rides
+    along so the overnight memo-lite pass can cite it."""
+    return {
+        "symbol": symbol, "strength": strength, "entry_date": entry_date,
+        "client_order_id": client_order_id, "notional": notional,
+        "buyers": buyers, "accessions": accessions, "memo_id": memo_id,
+    }
+
+
+def insider_position_closed_payload(
+    *, symbol: str, memo_id: str, reason: str, exit_date: str, price: str,
+) -> dict[str, Any]:
+    return {
+        "symbol": symbol, "memo_id": memo_id, "reason": reason,
+        "exit_date": exit_date, "price": price,
+    }
+
+
 def analysis_decision_payload(
     *, symbol: str, decision: str, source: str, asof: str, rank: int | None = None,
 ) -> dict[str, Any]:
@@ -795,6 +888,21 @@ BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     KIND_RESEARCH_VETTING_ERROR: research_vetting_error_payload,
     KIND_RESEARCH_POSITION_OPENED: research_position_opened_payload,
     KIND_RESEARCH_POSITION_CLOSED: research_position_closed_payload,
+    KIND_SHORT_TRADE_RUN: short_trade_run_payload,
+    KIND_SHORT_TRADE_ERROR: short_trade_error_payload,
+    KIND_SHORT_DRAIN_RUN: short_drain_run_payload,
+    KIND_SHORT_DRAIN_ERROR: short_drain_error_payload,
+    KIND_SHORT_VETTING_RUN: short_vetting_run_payload,
+    KIND_SHORT_VETTING_ERROR: short_vetting_error_payload,
+    KIND_SHORT_POSITION_OPENED: short_position_opened_payload,
+    KIND_SHORT_POSITION_CLOSED: short_position_closed_payload,
+    KIND_INSIDER_SCAN_RUN: insider_scan_run_payload,
+    KIND_INSIDER_SCAN_ERROR: insider_scan_error_payload,
+    KIND_INSIDER_TRADE_RUN: insider_trade_run_payload,
+    KIND_INSIDER_TRADE_ERROR: insider_trade_error_payload,
+    KIND_INSIDER_MEMO_ERROR: insider_memo_error_payload,
+    KIND_INSIDER_POSITION_OPENED: insider_position_opened_payload,
+    KIND_INSIDER_POSITION_CLOSED: insider_position_closed_payload,
     KIND_ANALYSIS_DECISION: analysis_decision_payload,
     KIND_DAILY_OVERVIEW: daily_overview_payload,
     KIND_DAILY_OVERVIEW_ERROR: daily_overview_error_payload,

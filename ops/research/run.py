@@ -99,6 +99,104 @@ def _name_inputs(
     )
 
 
+def _build_screen_inputs(
+    universe, *, asof, facts_fetcher, triggers_finder, price_context_fetcher,
+) -> tuple[list[NameInputs], list[str]]:
+    """Per-name input assembly shared by the long and short screens. A
+    sweep over ~1500 names must never die on a single name."""
+    inputs: list[NameInputs] = []
+    errors: list[str] = []
+    for name in universe:
+        symbol = name.member.symbol
+        try:
+            ni = _name_inputs(
+                name, asof=asof, facts_fetcher=facts_fetcher,
+                triggers_finder=triggers_finder,
+                price_context_fetcher=price_context_fetcher,
+            )
+        except Exception as exc:  # a sweep must survive any single name
+            msg = f"{symbol}: {type(exc).__name__}: {exc}"
+            print(f"[screen] skipped {msg}", file=sys.stderr)
+            errors.append(msg)
+            continue
+        if ni is not None:
+            inputs.append(ni)
+        else:
+            msg = f"{symbol}: skipped (no price history or no close at asof)"
+            print(f"[screen] skipped {msg}", file=sys.stderr)
+            errors.append(msg)
+    return inputs, errors
+
+
+def run_short_screen(
+    *,
+    config: OpsConfig,
+    asof: date,
+    dry_run: bool = False,
+    limit: int | None = None,
+    universe_builder=None,
+    facts_fetcher=None,
+    triggers_finder=None,
+    price_context_fetcher=None,
+) -> ScreenRunSummary:
+    """Universe -> inverted short screen -> short screen store.
+
+    Mirror of run_screen with three deltas: triggers come from
+    find_short_triggers (red flags, not change triggers), results from
+    screen_short_universe, and hits land in the SHORT screen store. No
+    baseline leg — the short sleeve's null is holding cash.
+    """
+    from ops.research.short_screen import screen_short_universe
+    from ops.research.short_triggers import find_short_triggers
+
+    universe_builder = universe_builder or build_smallcap_universe
+    if facts_fetcher is None:
+        from tradingagents.dataflows import edgar
+
+        edgar.get_user_agent()  # fail fast, same as run_screen
+        facts_fetcher = get_company_facts
+    triggers_finder = triggers_finder or find_short_triggers
+    price_context_fetcher = price_context_fetcher or fetch_price_context
+
+    universe = universe_builder()
+    if limit is not None:
+        universe = universe[:limit]
+
+    inputs, errors = _build_screen_inputs(
+        universe, asof=asof, facts_fetcher=facts_fetcher,
+        triggers_finder=triggers_finder,
+        price_context_fetcher=price_context_fetcher,
+    )
+
+    results = screen_short_universe(inputs, asof=asof)
+    passed = tuple(r.symbol for r in results if r.passed)
+
+    coverage: dict[str, dict[str, int]] = {}
+    for result in results:
+        for bar in result.bars:
+            slot = coverage.setdefault(bar.name, {"computed": 0, "missing": 0})
+            slot["missing" if bar.detail.startswith("missing:") else "computed"] += 1
+
+    run_id = None
+    if not dry_run:
+        store = ScreenStore(config.short_screen_store_path)
+        run_id = store.record_run(
+            asof=asof, universe_size=len(universe), results=results,
+            coverage=coverage, ttl_days=config.research_screen_ttl_days,
+        )
+
+    return ScreenRunSummary(
+        run_id=run_id,
+        asof=asof,
+        universe_size=len(universe),
+        screened=len(inputs),
+        passed=passed,
+        errors=tuple(errors),
+        baseline=None,
+        coverage=coverage,
+    )
+
+
 def run_screen(
     *,
     config: OpsConfig,
@@ -127,27 +225,11 @@ def run_screen(
     if limit is not None:
         universe = universe[:limit]
 
-    inputs: list[NameInputs] = []
-    errors: list[str] = []
-    for name in universe:
-        symbol = name.member.symbol
-        try:
-            ni = _name_inputs(
-                name, asof=asof, facts_fetcher=facts_fetcher,
-                triggers_finder=triggers_finder,
-                price_context_fetcher=price_context_fetcher,
-            )
-        except Exception as exc:  # a sweep must survive any single name
-            msg = f"{symbol}: {type(exc).__name__}: {exc}"
-            print(f"[screen] skipped {msg}", file=sys.stderr)
-            errors.append(msg)
-            continue
-        if ni is not None:
-            inputs.append(ni)
-        else:
-            msg = f"{symbol}: skipped (no price history or no close at asof)"
-            print(f"[screen] skipped {msg}", file=sys.stderr)
-            errors.append(msg)
+    inputs, errors = _build_screen_inputs(
+        universe, asof=asof, facts_fetcher=facts_fetcher,
+        triggers_finder=triggers_finder,
+        price_context_fetcher=price_context_fetcher,
+    )
 
     results = screen_universe(inputs, asof=asof)
     passed = tuple(r.symbol for r in results if r.passed)

@@ -228,3 +228,6 @@ reports/
 # Cached universe data (refreshed weekly at runtime)
 ops/universe/_data/*
 !ops/universe/_data/.gitkeep
+
+# dashboard-ui is a TS project; the Python lib/ pattern above must not swallow it
+!dashboard-ui/src/lib/

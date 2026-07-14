@@ -207,20 +207,45 @@ def test_missing_new_sleeve_journals_are_per_sleeve_errors(tmp_path):
 
 
 def test_frontend_sleeve_order_covers_every_backend_sleeve(tmp_path):
-    # The frontend renders sleeves through SLEEVE_ORDER.filter(name in payload):
-    # a sleeve the backend emits but the JS list omits disappears silently
-    # (how the short + insider panels went missing after fc0f861 added them
-    # backend-only). Parse the constant out of app.js and diff it against the
-    # snapshot's actual sleeve keys so the two can never drift again.
+    # Guard source↔backend drift only: the frontend TypeScript source declares
+    # SLEEVE_ORDER and the backend emits sleeves. If they diverge, the frontend
+    # list may omit a backend sleeve (and it disappears silently from the UI).
+    # This test ensures the source SLEEVE_ORDER stays in sync with backend sleeves.
+    # (Does NOT guard against stale shipped bundle — see
+    # test_shipped_bundle_contains_every_backend_sleeve for that.)
     import re
     from pathlib import Path
 
-    import ops.dashboard as dash
-
-    app_js = (Path(dash.__file__).parent / "static" / "app.js").read_text()
-    m = re.search(r"const SLEEVE_ORDER = \[(.*?)\];", app_js)
-    assert m, "SLEEVE_ORDER constant not found in app.js"
+    # Read from source TypeScript (not the minified built output)
+    types_ts = (Path(__file__).parent.parent.parent.parent / "dashboard-ui" / "src" / "data" / "types.ts").read_text()
+    m = re.search(r"export const SLEEVE_ORDER = \[(.*?)\]", types_ts)
+    assert m, "SLEEVE_ORDER constant not found in types.ts"
     frontend = set(re.findall(r'"(\w+)"', m.group(1)))
 
     backend = set(build_snapshot(_config(tmp_path), now=NOW)["sleeves"])
     assert frontend == backend
+
+
+def test_shipped_bundle_contains_every_backend_sleeve(tmp_path):
+    # Guard against stale shipped bundle: the built React app (ops/dashboard/
+    # static/assets/app.js) is committed to the repo but may fall out of sync if
+    # someone edits TypeScript (e.g., adds a sleeve to SLEEVE_ORDER) and backend
+    # without running `npm run build`. Sleeve names survive minification as quoted
+    # string literals, so we can grep for them directly in the bundle.
+    from pathlib import Path
+
+    # Derive the backend sleeve set (same as the existing test does)
+    backend = set(build_snapshot(_config(tmp_path), now=NOW)["sleeves"])
+
+    # Read the shipped minified bundle
+    bundle_path = (Path(__file__).parent.parent.parent.parent / "ops" / "dashboard" / "static" / "assets" / "app.js")
+    bundle_bytes = bundle_path.read_bytes()
+
+    # Quoted-substring check is per-name best-effort: generic words like "short" may appear in non-sleeve literals; a NEW sleeve name missing from a stale bundle is always caught.
+    for sleeve in backend:
+        quoted_sleeve = f'"{sleeve}"'
+        assert quoted_sleeve.encode() in bundle_bytes, \
+            f'Sleeve "{sleeve}" not found in shipped bundle at {bundle_path}. Run: npm run build'
+
+    # Sanity check: assert a name NOT in the bundle is correctly absent
+    assert b'"notasleeve"' not in bundle_bytes

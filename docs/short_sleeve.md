@@ -13,7 +13,8 @@ later — profit if the price fell. *Covering* is the buy-to-close.
 
 | job | where | when | what |
 |---|---|---|---|
-| short overnight pass | inside `_research_overnight_tick` (00:00–deadline window, half-hourly trigger) | AFTER the research stages each night | short screen if due (every `research_screen_interval_days`), then alternate graph-vetting (inverted map) and brain drain over the short stores; shares the tick's single ds4 bracket |
+| combined screen | tick's screen-if-due stage (`run_screens`) | every `research_screen_interval_days` | ONE universe sweep fills BOTH the research and short screen stores — every per-name SEC fetch (facts, submissions, Form 4s, prices) happens once |
+| short overnight pass | inside `_research_overnight_tick` (00:00–deadline window, half-hourly trigger) | AFTER the research stages each night | alternate graph-vetting (inverted map) and brain drain over the short stores; shares the tick's single ds4 bracket |
 | short_trade | ops daemon (APScheduler) | 16:27 ET mon-fri | exits then entries on the short ledger; pushes a `short_trade_run` summary |
 | research_monitor | (existing job, 16:20) | mon-fri | short memos ride the same monitor: falsifiers + direction-aware drawdown escalation |
 

@@ -664,9 +664,13 @@ def _research_overnight_tick(
         last = store.last_run()
         due = last is None or _days_since_iso(last["created_at"]) >= config.research_screen_interval_days
         if due:
-            from ops.research.run import run_screen
+            # ONE combined sweep fills BOTH screen stores: every per-name
+            # SEC fetch (facts, submissions, Form 4 XMLs, prices) happens
+            # once — running the long and short screens separately doubled
+            # the throttled sweep on exactly the busiest nights.
+            from ops.research.run import run_screens
 
-            run_screen(config=config, asof=date.today())
+            run_screens(config=config, asof=date.today())
             screened_this_run = True
 
         memo_store = MemoStore(config.memo_store_path)
@@ -786,6 +790,7 @@ def _research_overnight_tick(
                 journal, config, backend=backend, deadline=deadline,
                 should_stop=stop, tick_now=tick_now,
                 adapter_factory=vet_adapter_factory,
+                screened_this_run=screened_this_run,
             )
             _insider_memo_pass(
                 journal, config, backend=backend, deadline=deadline,
@@ -803,48 +808,39 @@ def _research_overnight_tick(
 
 
 def _short_overnight_work_pending(config) -> bool:
-    """True when the short sleeve has overnight work: its screen is due,
-    short-screen hits are pending, or short memos await vetting. Used by
+    """True when the short sleeve has overnight work: short-screen hits
+    pending or short memos awaiting vetting. Used by
     _research_overnight_tick to decide whether an otherwise-idle night can
-    skip the backend bracket entirely."""
+    skip the backend bracket entirely. Screening is NOT this sleeve's job —
+    the tick's screen-if-due stage runs run_screens, which fills BOTH
+    screen stores in one SEC sweep."""
     from ops.research.store import ScreenStore
     from tradingagents.memos.store import MemoStore
 
-    store = ScreenStore(config.short_screen_store_path)
-    last = store.last_run()
-    if last is None or _days_since_iso(last["created_at"]) >= config.research_screen_interval_days:
-        return True
-    if store.pending_hits():
+    if ScreenStore(config.short_screen_store_path).pending_hits():
         return True
     return bool(MemoStore(config.short_memo_store_path).pending_vetting_memos())
 
 
 def _short_overnight_pass(
     journal: Journal, config, *, backend, deadline, should_stop, tick_now,
-    adapter_factory=None,
+    adapter_factory=None, screened_this_run: bool = False,
 ) -> None:
-    """Short-sleeve overnight work, run AFTER the research stages: screen
-    if due, then alternate graph-vetting (inverted confirm map) and drain
-    chunks against the SHORT stores under the caller's deadline and ds4
-    bracket. Scheduler-safe: any failure records short_drain_error and
-    returns — the caller's finally still tears the backend down. One
-    aggregated short_drain_run / short_vetting_run event per tick, with the
-    zero-work event gated once per day (half-hourly trigger must not spam)."""
+    """Short-sleeve overnight work, run AFTER the research stages:
+    alternate graph-vetting (inverted confirm map) and drain chunks against
+    the SHORT stores under the caller's deadline and ds4 bracket. The
+    screen itself already ran in the tick's combined run_screens stage —
+    ``screened_this_run`` is passed through for honest bookkeeping only.
+    Scheduler-safe: any failure records short_drain_error and returns — the
+    caller's finally still tears the backend down. One aggregated
+    short_drain_run / short_vetting_run event per tick, with the zero-work
+    event gated once per day (half-hourly trigger must not spam)."""
     try:
         from ops.research.store import ScreenStore
         from tradingagents.memos.store import MemoStore
 
         store = ScreenStore(config.short_screen_store_path)
         memo_store = MemoStore(config.short_memo_store_path)
-        screened_this_run = False
-        last = store.last_run()
-        due = (last is None
-               or _days_since_iso(last["created_at"]) >= config.research_screen_interval_days)
-        if due and not should_stop() and tick_now() < deadline:
-            from ops.research.run import run_short_screen
-
-            run_short_screen(config=config, asof=date.today())
-            screened_this_run = True
 
         if not store.pending_hits() and not memo_store.pending_vetting_memos():
             if not journal.has_event_today(events.KIND_SHORT_DRAIN_RUN):

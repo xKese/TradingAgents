@@ -16,6 +16,12 @@ describe("fmtMoney (string decimal, never floats)", () => {
     expect(fmtMoney(null, 2)).toBe("—");
     expect(fmtMoney("not-a-number", 2)).toBe("not-a-number");
   });
+  it("suppresses the sign when rounding collapses a negative to zero", () => {
+    expect(fmtMoney("-0.001", 2)).toBe("$0.00");
+    expect(fmtMoney("-0.4", 0)).toBe("$0");
+    // a real negative still signs
+    expect(fmtMoney("-0.006", 2)).toBe("−$0.01");
+  });
   it("survives values beyond float precision", () => {
     expect(fmtMoney("90071992547409929.05", 2)).toBe("$90,071,992,547,409,929.05");
   });

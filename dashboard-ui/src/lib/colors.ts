@@ -23,6 +23,35 @@ const KIND_GROUPS: Record<string, string> = {
   catalyst_due: "memo",
   service_started: "muted",
   service_stopping: "muted",
+
+  // Short sleeve (mirrors the research sleeve's kinds — see
+  // ops/events.py KIND_SHORT_*).
+  short_trade_run: "batch",
+  short_drain_run: "batch",
+  short_vetting_run: "batch",
+  short_trade_error: "error",
+  short_drain_error: "error",
+  short_vetting_error: "error",
+  short_position_opened: "fill",
+  short_position_closed: "fill",
+
+  // Insider-cluster sleeve (see ops/events.py KIND_INSIDER_*).
+  insider_scan_run: "batch",
+  insider_trade_run: "batch",
+  insider_scan_error: "error",
+  insider_trade_error: "error",
+  insider_memo_error: "error",
+  insider_position_opened: "fill",
+  insider_position_closed: "fill",
+
+  // Other high-signal safety kinds (ops/events.py) that were missing
+  // from this table — all are instant-critical or high-urgency in
+  // ops/notify/policy.py's POLICY table (or the sibling of one).
+  order_not_filled: "order",
+  kill_switch_close_failed: "error",
+  positions_recovered_without_stops: "error",
+  guardian_blind: "error",
+  universe_blind: "error",
 };
 
 export const kindClass = (kind: string) => "k-" + (KIND_GROUPS[kind] ?? "muted");

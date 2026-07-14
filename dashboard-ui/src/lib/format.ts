@@ -26,7 +26,11 @@ export function fmtMoney(value: string | null | undefined, dp: number): string {
   const fp = dp ? digits.slice(-dp) : "";
   ip = (ip.replace(/^0+(?=\d)/, "") || "0")
     .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return (neg ? "−" : "") + "$" + ip + (dp ? "." + fp : "");
+  // Rounding can carry a negative value to zero (e.g. "-0.001" at 2dp) —
+  // suppress the sign once every kept digit is 0, so it reads "$0.00"
+  // instead of the misleading "−$0.00".
+  const isZero = !/[1-9]/.test(digits);
+  return (neg && !isZero ? "−" : "") + "$" + ip + (dp ? "." + fp : "");
 }
 
 export function fmtPct(

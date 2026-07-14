@@ -232,7 +232,6 @@ def test_shipped_bundle_contains_every_backend_sleeve(tmp_path):
     # someone edits TypeScript (e.g., adds a sleeve to SLEEVE_ORDER) and backend
     # without running `npm run build`. Sleeve names survive minification as quoted
     # string literals, so we can grep for them directly in the bundle.
-    import re
     from pathlib import Path
 
     # Derive the backend sleeve set (same as the existing test does)
@@ -240,10 +239,9 @@ def test_shipped_bundle_contains_every_backend_sleeve(tmp_path):
 
     # Read the shipped minified bundle
     bundle_path = (Path(__file__).parent.parent.parent.parent / "ops" / "dashboard" / "static" / "assets" / "app.js")
-    bundle_text = bundle_path.read_text()
-    bundle_bytes = bundle_text.encode()
+    bundle_bytes = bundle_path.read_bytes()
 
-    # Assert each backend sleeve name appears as a quoted string literal in the bundle
+    # Quoted-substring check is per-name best-effort: generic words like "short" may appear in non-sleeve literals; a NEW sleeve name missing from a stale bundle is always caught.
     for sleeve in backend:
         quoted_sleeve = f'"{sleeve}"'
         assert quoted_sleeve.encode() in bundle_bytes, \

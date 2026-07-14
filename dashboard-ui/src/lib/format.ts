@@ -1,0 +1,71 @@
+// Money display is STRING arithmetic on the API's decimal strings.
+// IEEE floats never touch a money value (Global Constraints).
+
+export function fmtMoney(value: string | null | undefined, dp: number): string {
+  if (value == null || value === "") return "—";
+  let s = String(value);
+  const neg = s.startsWith("-");
+  if (neg) s = s.slice(1);
+  if (!/^\d+(\.\d*)?$/.test(s)) return String(value);
+  let [intPart, frac = ""] = s.split(".");
+  frac = frac.padEnd(dp + 1, "0");
+  const keep = frac.slice(0, dp);
+  const roundUp = frac.charCodeAt(dp) - 48 >= 5;
+  let digits = intPart + keep;
+  if (roundUp) {
+    const a = digits.split("");
+    let k = a.length - 1;
+    while (k >= 0) {
+      if (a[k] === "9") { a[k] = "0"; k -= 1; }
+      else { a[k] = String(+a[k] + 1); break; }
+    }
+    if (k < 0) a.unshift("1");
+    digits = a.join("");
+  }
+  let ip = dp ? digits.slice(0, -dp) : digits;
+  const fp = dp ? digits.slice(-dp) : "";
+  ip = (ip.replace(/^0+(?=\d)/, "") || "0")
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return (neg ? "−" : "") + "$" + ip + (dp ? "." + fp : "");
+}
+
+export function fmtPct(
+  ratio: string | null | undefined,
+): { text: string; cls: "pos" | "neg" | "flat" } {
+  if (ratio == null || ratio === "") return { text: "—", cls: "flat" };
+  const v = Number(ratio) * 100; // a ratio, not money — float is fine
+  if (!Number.isFinite(v)) return { text: "—", cls: "flat" };
+  const sign = v > 0 ? "+" : v < 0 ? "−" : "";
+  const cls = v > 0 ? "pos" : v < 0 ? "neg" : "flat";
+  return { text: sign + Math.abs(v).toFixed(2) + "%", cls };
+}
+
+export function fmtQty(q: string): string {
+  if (!q.includes(".")) return q;
+  return q.replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function relAge(iso: string | null | undefined, nowMs = Date.now()): string {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "—";
+  const d = (nowMs - t) / 1000;
+  if (d < 45) return "just now";
+  if (d < 3600) return Math.round(d / 60) + "m ago";
+  if (d < 86400) return Math.round(d / 3600) + "h ago";
+  return Math.round(d / 86400) + "d ago";
+}
+
+export function hhmmss(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+export function guardAge(sec: number | null | undefined): string {
+  if (sec == null) return "—";
+  if (sec < 90) return Math.round(sec) + "s";
+  if (sec < 3600) return Math.round(sec / 60) + "m";
+  return Math.round(sec / 3600) + "h";
+}

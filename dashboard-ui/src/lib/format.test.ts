@@ -1,0 +1,56 @@
+import { describe, expect, it } from "vitest";
+import { fmtMoney, fmtPct, fmtQty, guardAge, relAge } from "./format";
+
+describe("fmtMoney (string decimal, never floats)", () => {
+  it("rounds half-up and groups thousands", () => {
+    expect(fmtMoney("10450.2347", 2)).toBe("$10,450.23");
+    expect(fmtMoney("10450.2379", 2)).toBe("$10,450.24");
+    expect(fmtMoney("1234567.5", 0)).toBe("$1,234,568");
+  });
+  it("carries rounding across digits", () => {
+    expect(fmtMoney("0.999", 2)).toBe("$1.00");
+    expect(fmtMoney("9.995", 2)).toBe("$10.00");
+  });
+  it("handles negatives, null, and junk", () => {
+    expect(fmtMoney("-5.005", 2)).toBe("−$5.01");
+    expect(fmtMoney(null, 2)).toBe("—");
+    expect(fmtMoney("not-a-number", 2)).toBe("not-a-number");
+  });
+  it("survives values beyond float precision", () => {
+    expect(fmtMoney("90071992547409929.05", 2)).toBe("$90,071,992,547,409,929.05");
+  });
+});
+
+describe("fmtPct", () => {
+  it("scales ratio to percent with sign and class", () => {
+    expect(fmtPct("0.0182")).toEqual({ text: "+1.82%", cls: "pos" });
+    expect(fmtPct("-0.0064")).toEqual({ text: "−0.64%", cls: "neg" });
+    expect(fmtPct("0")).toEqual({ text: "0.00%", cls: "flat" });
+    expect(fmtPct(null)).toEqual({ text: "—", cls: "flat" });
+  });
+});
+
+describe("fmtQty", () => {
+  it("strips paper-fill precision noise", () => {
+    expect(fmtQty("12.0000")).toBe("12");
+    expect(fmtQty("0.5000")).toBe("0.5");
+    expect(fmtQty("-30")).toBe("-30");
+  });
+});
+
+describe("ages", () => {
+  const now = Date.parse("2026-07-14T12:00:00Z");
+  it("relAge buckets", () => {
+    expect(relAge("2026-07-14T11:59:40Z", now)).toBe("just now");
+    expect(relAge("2026-07-14T11:30:00Z", now)).toBe("30m ago");
+    expect(relAge("2026-07-14T04:00:00Z", now)).toBe("8h ago");
+    expect(relAge("2026-07-10T12:00:00Z", now)).toBe("4d ago");
+    expect(relAge(null, now)).toBe("—");
+  });
+  it("guardAge buckets", () => {
+    expect(guardAge(42)).toBe("42s");
+    expect(guardAge(360)).toBe("6m");
+    expect(guardAge(7300)).toBe("2h");
+    expect(guardAge(null)).toBe("—");
+  });
+});

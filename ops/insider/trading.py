@@ -64,7 +64,8 @@ def _exit_reason(pos, quote: Decimal, entry_date: str | None, today: date) -> st
     return None
 
 
-def _exit_pass(*, broker, insider_journal, prov, now, outcome, resolver) -> set[str]:
+def _exit_pass(*, broker, signal_store, insider_journal, prov, now, outcome,
+               resolver) -> set[str]:
     exited: set[str] = set()
     for pos in list(broker.get_positions()):
         symbol = pos.symbol
@@ -81,7 +82,19 @@ def _exit_pass(*, broker, insider_journal, prov, now, outcome, resolver) -> set[
         except Exception as exc:  # noqa: BLE001 - one bad position must not wedge the run
             outcome.errors.append(f"{symbol}: {type(exc).__name__}: {exc}")
             continue
+        # The opened event carries memo_id="" (the memo is authored the
+        # night AFTER entry, and journal events are immutable) — the signal
+        # store is the live source. Payload kept as a legacy fallback.
         memo_id = pos_prov.get("memo_id", "")
+        entry_date = pos_prov.get("entry_date")
+        if not memo_id and entry_date:
+            try:
+                memo_id = signal_store.entry_memo_id(
+                    symbol, date.fromisoformat(entry_date))
+            except Exception as exc:  # noqa: BLE001 - lookup never blocks an exit
+                outcome.errors.append(
+                    f"{symbol}: memo lookup failed ({type(exc).__name__}: {exc})"
+                )
         insider_journal.record_event(
             events.KIND_INSIDER_POSITION_CLOSED,
             events.insider_position_closed_payload(
@@ -194,8 +207,8 @@ def trade_insider_sleeve(
         events.KIND_INSIDER_POSITION_OPENED)
 
     exited = _exit_pass(
-        broker=broker, insider_journal=insider_journal, prov=prov, now=now,
-        outcome=outcome, resolver=resolver,
+        broker=broker, signal_store=signal_store, insider_journal=insider_journal,
+        prov=prov, now=now, outcome=outcome, resolver=resolver,
     )
 
     if adv_fetcher is None:

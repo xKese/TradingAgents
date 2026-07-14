@@ -82,16 +82,8 @@ class _Backend:
 
 
 def test_zero_work_records_drain_run_once_per_day(journal, cfg, monkeypatch):
-    # A screen "ran recently" so nothing is due; queues empty.
-    monkeypatch.setattr(
-        "ops.research.run.run_short_screen",
-        lambda **kw: (_ for _ in ()).throw(AssertionError("screen not due")),
-    )
-    from ops.research.store import ScreenStore
-
-    store = ScreenStore(cfg.short_screen_store_path)
-    store.record_run(asof=date.today(), universe_size=0, results=[])
-
+    # Queues empty; screening is the combined run_screens stage's job, so
+    # empty stores mean NO short work at all.
     backend = _Backend()
     _short_overnight_pass(journal, cfg, backend=backend, **_window())
     _short_overnight_pass(journal, cfg, backend=backend, **_window())
@@ -100,25 +92,44 @@ def test_zero_work_records_drain_run_once_per_day(journal, cfg, monkeypatch):
     assert not _short_overnight_work_pending(cfg)
 
 
-def test_screen_due_runs_short_screen_and_records(journal, cfg, monkeypatch):
-    calls = []
+def test_pass_never_screens_and_passes_bookkeeping_through(journal, cfg, monkeypatch):
+    # The pass must NOT call any screen (the combined sweep already ran in
+    # the tick); it only reports the tick's screened_this_run in its event.
     monkeypatch.setattr(
         "ops.research.run.run_short_screen",
-        lambda **kw: calls.append(kw) or None,
+        lambda **kw: (_ for _ in ()).throw(AssertionError("pass must not screen")),
     )
-    backend = _Backend()
-    assert _short_overnight_work_pending(cfg)  # no run yet -> due
-    _short_overnight_pass(journal, cfg, backend=backend, **_window())
-    assert len(calls) == 1
+    monkeypatch.setattr(
+        "ops.research.run.run_screens",
+        lambda **kw: (_ for _ in ()).throw(AssertionError("pass must not screen")),
+    )
+    _short_overnight_pass(journal, cfg, backend=_Backend(),
+                          screened_this_run=True, **_window())
     (event,) = journal.read_events()
     assert event["kind"] == events.KIND_SHORT_DRAIN_RUN
     assert event["payload"]["screened_this_run"] is True
 
 
 def test_pass_failure_records_short_drain_error(journal, cfg, monkeypatch):
+    import dataclasses
+
+    from ops.research.store import ScreenStore
+
+    # Seed one pending hit so the pass proceeds past the zero-work return,
+    # then blow up the drain path (LLM build) to hit the error handler.
+    @dataclasses.dataclass
+    class FakeResult:
+        symbol: str
+        passed: bool
+
+    store = ScreenStore(cfg.short_screen_store_path)
+    store.record_run(asof=date.today(), universe_size=1,
+                     results=[FakeResult("GHST", True)])
+    assert store.pending_hits()
     monkeypatch.setattr(
-        "ops.research.run.run_short_screen",
-        lambda **kw: (_ for _ in ()).throw(RuntimeError("universe fetch died")),
+        "ops.research.models.build_stage_llm",
+        lambda spec: (_ for _ in ()).throw(RuntimeError("model config broken")),
     )
+    monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
     _short_overnight_pass(journal, cfg, backend=_Backend(), **_window())
     assert journal.count_events(events.KIND_SHORT_DRAIN_ERROR) == 1

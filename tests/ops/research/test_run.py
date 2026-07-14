@@ -80,6 +80,7 @@ def config(tmp_path):
         journal_path=str(tmp_path / "j.sqlite"),
         baseline_journal_path=str(tmp_path / "b.sqlite"),
         screen_store_path=str(tmp_path / "s.sqlite"),
+        short_screen_store_path=str(tmp_path / "short_s.sqlite"),
         baseline_starting_cash=D("100000"),
     )
 
@@ -248,3 +249,101 @@ def test_year_end_prices_are_split_unadjusted(config):
     assert ni is not None
     # Every year-end price is 10x the adjusted 20 -> 200.
     assert all(px == Decimal("200") for px in ni.year_end_prices.values())
+
+
+# --- run_screens: one sweep, both screens ------------------------------------
+
+def test_run_screens_fetches_each_source_once_per_name(config):
+    """The combined runner's whole point (review finding P2): facts, price
+    context, the submissions listing, and the Form 4 pass each happen ONCE
+    per name while feeding BOTH screens."""
+    from collections import Counter
+
+    universe = [_name("GOOD"), _name("MEH")]
+    calls = Counter()
+
+    def facts(t):
+        calls[f"facts:{t}"] += 1
+        return _facts_for_passer()
+
+    def prices(t):
+        calls[f"prices:{t}"] += 1
+        return _price_ctx()
+
+    def filings(t, **kw):
+        calls[f"filings:{t}"] += 1
+        return []
+
+    def txns(t, since):
+        calls[f"txns:{t}"] += 1
+        return []
+
+    long_summary, short_summary = run_mod.run_screens(
+        config=config, asof=ASOF,
+        universe_builder=lambda: universe,
+        facts_fetcher=facts, price_context_fetcher=prices,
+        list_filings=filings, transactions_fetcher=txns,
+        full_text_search=lambda q, **kw: [],
+        fetch_text=lambda f: "",
+        cik_resolver=lambda t: 1,
+        quote_source=lambda s: D("20"),
+    )
+    for t in ("GOOD", "MEH"):
+        for src in ("facts", "prices", "filings", "txns"):
+            assert calls[f"{src}:{t}"] == 1, f"{src}:{t} fetched {calls[f'{src}:{t}']}x"
+    assert long_summary.screened == 2 and short_summary.screened == 2
+
+
+def test_run_screens_records_both_stores_and_buys_baseline(config):
+    universe = [_name("GOOD")] + [_name(f"PEER{i}") for i in range(5)]
+    # run_screens calls find_triggers directly, so inject at the
+    # shared-fetch level: list_filings returns a 13D for GOOD, which the
+    # real trigger taxonomy classifies as an activist change trigger.
+    from tradingagents.dataflows.edgar import Filing
+
+    def filings(t, **kw):
+        if t != "GOOD":
+            return []
+        return [Filing(ticker=t, cik=1, accession_number="0001-26-000001",
+                       form="SC 13D", filing_date=ASOF, report_date=None,
+                       primary_document="d.htm")]
+
+    long_summary, short_summary = run_mod.run_screens(
+        config=config, asof=ASOF,
+        universe_builder=lambda: universe,
+        facts_fetcher=lambda t: _facts_for_passer(),
+        price_context_fetcher=lambda s: _price_ctx(),
+        list_filings=filings, transactions_fetcher=lambda t, since: [],
+        full_text_search=lambda q, **kw: [],
+        fetch_text=lambda f: "",
+        cik_resolver=lambda t: 1,
+        quote_source=lambda s: D("20"),
+    )
+    assert "GOOD" in long_summary.passed
+    assert long_summary.baseline is not None
+    assert long_summary.baseline["buys"] == list(long_summary.passed)
+    # cheap+quality fundamentals pass nothing on the short side, but the
+    # short store must still record the run (its cadence gate reads it).
+    assert short_summary.passed == ()
+    assert ScreenStore(config.short_screen_store_path).last_run() is not None
+    assert ScreenStore(config.screen_store_path).last_run() is not None
+
+
+def test_run_screens_per_name_failure_hits_neither_screen(config):
+    universe = [_name("GOOD"), _name("BOOM")]
+
+    def facts(t):
+        if t == "BOOM":
+            raise RuntimeError("facts feed died")
+        return _facts_for_passer()
+
+    long_summary, short_summary = run_mod.run_screens(
+        config=config, asof=ASOF, dry_run=True,
+        universe_builder=lambda: universe,
+        facts_fetcher=facts, price_context_fetcher=lambda s: _price_ctx(),
+        list_filings=lambda t, **kw: [], transactions_fetcher=lambda t, since: [],
+        full_text_search=lambda q, **kw: [], fetch_text=lambda f: "",
+        cik_resolver=lambda t: 1,
+    )
+    assert long_summary.screened == 1 and short_summary.screened == 1
+    assert any("BOOM" in e for e in long_summary.errors)

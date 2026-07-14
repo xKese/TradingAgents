@@ -140,6 +140,20 @@ class SignalStore:
         return [{"symbol": r["symbol"], "asof": date.fromisoformat(r["asof"])}
                 for r in rows]
 
+    def entry_memo_id(self, symbol: str, asof: date) -> str:
+        """The memo authored for this entry, or "" while still queued.
+
+        The journal's insider_position_opened payload is written at entry
+        time — BEFORE the overnight memo pass exists — and journal events
+        are immutable, so this table is the only live source of the id.
+        The exit pass must read it from here (review finding P1)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT memo_id FROM sleeve_entries WHERE symbol = ? AND asof = ?",
+                (symbol.upper(), asof.isoformat()),
+            ).fetchone()
+        return row["memo_id"] if row else ""
+
     def set_entry_memo(self, symbol: str, asof: date, memo_id: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute(

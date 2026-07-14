@@ -13,14 +13,10 @@ from ops.reconcile import PositionDiff, ReconcileResult
 def _isolate_new_sleeve_state(monkeypatch, tmp_path_factory):
     """The overnight tick now also services the short and insider sleeves.
     Every test in this module predates them, so isolate their state paths
-    to tmp (never the operator's real XDG state) and seed a fresh short
-    screen run so 'quiet night' tests keep their exact semantics — the
-    short screen is otherwise due-by-default on an empty store, which
-    would defeat the skip-the-backend early return."""
-    from datetime import date
-
-    from ops.research.store import ScreenStore
-
+    to tmp (never the operator's real XDG state). Empty stores read as "no
+    short/insider work" (screen cadence belongs to the tick's combined
+    run_screens stage, not the sleeve passes), so quiet-night semantics
+    hold without any seeding."""
     base = tmp_path_factory.mktemp("sleeves")
     monkeypatch.setenv("OPS_SHORT_JOURNAL_PATH", str(base / "short_journal.sqlite"))
     monkeypatch.setenv("OPS_SHORT_MEMO_STORE_PATH", str(base / "short_memos.sqlite"))
@@ -28,9 +24,6 @@ def _isolate_new_sleeve_state(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("OPS_INSIDER_JOURNAL_PATH", str(base / "insider_journal.sqlite"))
     monkeypatch.setenv("OPS_INSIDER_MEMO_STORE_PATH", str(base / "insider_memos.sqlite"))
     monkeypatch.setenv("OPS_INSIDER_SIGNAL_STORE_PATH", str(base / "insider_signals.sqlite"))
-    ScreenStore(str(base / "short_screen.sqlite")).record_run(
-        asof=date.today(), universe_size=0, results=[],
-    )
 
 
 @pytest.fixture
@@ -712,7 +705,7 @@ def test_overnight_tick_screens_when_due_then_drains(monkeypatch, tmp_path):
             "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="screen",
         )
 
-    monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
+    monkeypatch.setattr("ops.research.run.run_screens", _fake_screen)
     screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
 
     def _fake_drain(**kw):
@@ -758,7 +751,7 @@ def test_overnight_tick_skips_screen_when_recent(monkeypatch, tmp_path):
     store.enqueue_hit("AAPL", asof=date.today(), payload={"symbol": "AAPL"}, source="test")
 
     seen = []
-    monkeypatch.setattr("ops.research.run.run_screen",
+    monkeypatch.setattr("ops.research.run.run_screens",
                         lambda **kw: seen.append("screen"))
 
     def _fake_drain(**kw):
@@ -835,7 +828,7 @@ def test_overnight_tick_records_error_event_not_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("OPS_SCREEN_STORE_PATH", str(tmp_path / "screen.sqlite"))
     monkeypatch.setenv("OPS_MEMO_STORE_PATH", str(tmp_path / "memos.sqlite"))
     monkeypatch.setenv("SEC_EDGAR_USER_AGENT", "T t@e.com")
-    monkeypatch.setattr("ops.research.run.run_screen",
+    monkeypatch.setattr("ops.research.run.run_screens",
                         lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
 
     config = load_config()
@@ -916,7 +909,7 @@ def test_overnight_tick_vets_before_drain_and_records_events(monkeypatch, tmp_pa
             "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="screen",
         )
 
-    monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
+    monkeypatch.setattr("ops.research.run.run_screens", _fake_screen)
 
     stage_order = []
     drain_kw = {}
@@ -998,7 +991,7 @@ def test_overnight_tick_vet_only_night_runs_vetting_without_drain(monkeypatch, t
     MemoStore(str(tmp_path / "memos.sqlite")).save(_pending_vetting_memo())
 
     seen = []
-    monkeypatch.setattr("ops.research.run.run_screen",
+    monkeypatch.setattr("ops.research.run.run_screens",
                         lambda **kw: seen.append("screen"))
     monkeypatch.setattr("ops.research.drain.drain_pending",
                         lambda **kw: seen.append("drain"))
@@ -1107,7 +1100,7 @@ def test_overnight_tick_vetting_error_recorded_not_raised(monkeypatch, tmp_path)
             "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="screen",
         )
 
-    monkeypatch.setattr("ops.research.run.run_screen", _fake_screen)
+    monkeypatch.setattr("ops.research.run.run_screens", _fake_screen)
     screen_store = ScreenStore(str(tmp_path / "screen.sqlite"))
 
     def _fake_drain(**kw):
@@ -1267,7 +1260,7 @@ def test_overnight_tick_paused_flag_skips_everything(monkeypatch, tmp_path):
     def _boom(*a, **kw):
         raise AssertionError("paused tick must touch nothing")
 
-    monkeypatch.setattr("ops.research.run.run_screen", _boom)
+    monkeypatch.setattr("ops.research.run.run_screens", _boom)
     monkeypatch.setattr(main_mod, "build_managed_backend", _boom)
 
     config = load_config()
@@ -1300,7 +1293,7 @@ def test_overnight_tick_stop_callable_honors_pause_flag(monkeypatch, tmp_path):
     screen_store.enqueue_hit(
         "AAPL", asof=_date.today(), payload={"symbol": "AAPL"}, source="test",
     )
-    monkeypatch.setattr("ops.research.run.run_screen", lambda **kw: None)
+    monkeypatch.setattr("ops.research.run.run_screens", lambda **kw: None)
 
     captured = {}
 

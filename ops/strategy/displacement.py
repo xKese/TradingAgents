@@ -86,7 +86,10 @@ def _trimmable_starters(
         except BrokerError:
             continue  # unquotable starter: skip it, never block the plan
         ordered.append(pos.symbol)
-        value[pos.symbol] = pos.market_value(px)
+        # Quantize once at the anchor: fractional-share positions (the norm,
+        # see ops/broker/paper.py) produce sub-cent market values, and all
+        # downstream shortfall/take arithmetic must stay cent-aligned.
+        value[pos.symbol] = _quantize_money(pos.market_value(px))
     return ordered, value
 
 
@@ -104,7 +107,9 @@ def plan_displacement(
 ) -> DisplacementPlan:
     # Spendable cash above the reserve floor. Trims convert position value
     # to cash without changing equity, so the floor is constant all plan.
-    available = cash - equity * config.cash_reserve_pct
+    # Quantized once here: with this and starter values cent-anchored, every
+    # derived shortfall/take (and UnfundedSkip.shortfall) is exact cents.
+    available = _quantize_money(cash - equity * config.cash_reserve_pct)
     trim_budget = max(0, config.displacement_max_trims_per_day - trims_used_today)
 
     ordered_starters, remaining_value = _trimmable_starters(

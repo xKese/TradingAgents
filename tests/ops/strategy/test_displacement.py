@@ -192,3 +192,30 @@ def test_two_high_proposals_share_starters_without_double_spending():
         ("OLD1", Decimal("300.00"), "NEW2"),
     ]
     assert plan.funded_client_order_ids == frozenset({"pem-NEW1", "pem-NEW2"})
+
+
+def test_fractional_share_values_are_cent_quantized_with_no_phantom_residue():
+    # Fractional shares are the norm (paper broker fills fractionally):
+    # qty 10.0005 @ 10 -> raw market value 100.005, which the planner must
+    # anchor at cents (100.00 under banker's rounding). NEW1 consumes the
+    # whole starter; NEW2 then finds no phantom 0.005 left to trim.
+    cents = Decimal("0.01")
+    plan = _plan(
+        proposals=[_proposal("NEW1", "100"), _proposal("NEW2", "5")],
+        cash=Decimal("1600"),  # available 0
+        positions=[_position("OLD1", qty="10.0005")],  # raw value 100.005
+        provenance={"OLD1": _prov("2026-07-01")},
+    )
+    # Full trim of the starter is exact cents, not the raw sub-cent value.
+    assert [(t.symbol, t.notional, t.funded_symbol) for t in plan.trims] == [
+        ("OLD1", Decimal("100.00"), "NEW1"),
+    ]
+    assert plan.funded_client_order_ids == frozenset({"pem-NEW1"})
+    # Bookkeeping zeroed cleanly: NEW2 cannot extract the 0.005 residue
+    # (unfixed code plans a 0.00-notional trim here and reports a raw
+    # 4.995 shortfall).
+    assert len(plan.skips) == 1
+    skip = plan.skips[0]
+    assert skip.symbol == "NEW2"
+    assert skip.shortfall == Decimal("5.00")
+    assert skip.shortfall == skip.shortfall.quantize(cents)

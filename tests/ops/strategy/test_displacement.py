@@ -165,6 +165,61 @@ def test_quote_failure_skips_that_starter_and_continues():
     assert plan.funded_client_order_ids == frozenset({"pem-NEWB"})
 
 
+def test_unknown_or_empty_tier_never_displaces():
+    # D4: only an exact TIER_HIGH tier is displacement-fundable. Empty/
+    # unknown tiers must fail CLOSED (behave like starters for funding
+    # purposes) — never trigger trims, even with an aged starter sitting
+    # right there ready to fund them.
+    plan = _plan(
+        proposals=[
+            _proposal("EMPTY", "100", tier=""),
+            _proposal("BANANA", "100", tier="banana"),
+        ],
+        cash=Decimal("1600"),  # available = 0
+        positions=[_position("OLD1", qty="100")],
+        provenance={"OLD1": _prov("2026-07-01")},
+    )
+    assert plan.trims == []
+    assert plan.funded_client_order_ids == frozenset()
+    assert len(plan.skips) == 2
+    reasons = {s.symbol: s.reason for s in plan.skips}
+    assert reasons["EMPTY"] == "insufficient cash; unknown tier never displaces"
+    assert reasons["BANANA"] == "insufficient cash; unknown tier never displaces"
+
+
+def test_full_exit_flag_set_when_trim_consumes_entire_starter_value():
+    # I1: OLD2 (value 300) is entirely consumed by the shortfall -> a full
+    # exit; OLD1 only gives up part of its value -> a partial trim. Mirrors
+    # test_high_tier_shortfall_trims_oldest_starter_first's numbers.
+    plan = _plan(
+        proposals=[_proposal("NEWB", "1200")],
+        cash=Decimal("2400"),  # available = 800, shortfall = 400
+        positions=[_position("OLD1", qty="30"), _position("OLD2", qty="30")],
+        provenance={"OLD1": _prov("2026-07-06"), "OLD2": _prov("2026-07-01")},
+    )
+    trims_by_symbol = {t.symbol: t for t in plan.trims}
+    assert trims_by_symbol["OLD2"].notional == Decimal("300.00")
+    assert trims_by_symbol["OLD2"].full_exit is True
+    assert trims_by_symbol["OLD1"].notional == Decimal("100.00")
+    assert trims_by_symbol["OLD1"].full_exit is False
+
+
+def test_full_exit_flag_false_when_shortfall_exactly_equals_multiple_starters():
+    # Two starters, each entirely consumed to cover the shortfall exactly:
+    # both must be full_exit, not just the last one.
+    plan = _plan(
+        proposals=[_proposal("NEWB", "1900")],
+        cash=Decimal("1600"),  # available = 0, shortfall = 1900
+        positions=[_position("OLD1", qty="100"), _position("OLD2", qty="90")],
+        provenance={"OLD1": _prov("2026-07-01"), "OLD2": _prov("2026-07-02")},
+    )
+    # OLD1 value 1000 (fully consumed), OLD2 value 900 -> only 900 needed
+    # of the remaining 900 shortfall, so OLD2 is also fully consumed.
+    trims_by_symbol = {t.symbol: t for t in plan.trims}
+    assert trims_by_symbol["OLD1"].full_exit is True
+    assert trims_by_symbol["OLD2"].full_exit is True
+
+
 def test_high_before_starter_ordering_and_partial_funding():
     # available 1400: high (1200) funds first, starter (500) then falls short.
     plan = _plan(

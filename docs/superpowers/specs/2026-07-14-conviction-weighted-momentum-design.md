@@ -101,8 +101,9 @@ Mechanics:
 - If the shortfall remains after guards are exhausted, the buy is skipped
   and a journal event records why.
 - Every trim journals a `displacement_trim` event:
-  `{trimmed_symbol, trimmed_tier, notional, funded_symbol, remaining_shortfall}`
+  `{symbol, tier, notional, funded_symbol, client_order_id}`
   — the one-line explanation is "trimmed X (starter) to fund Buy-rated Y".
+  (amended post-review to match shipped payload)
 - Displacement SELLs flow through the guardrail engine like any other
   order (SELLs are always allowed by drawdown rules).
 

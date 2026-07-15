@@ -1044,6 +1044,99 @@ def test_unfunded_buy_is_skipped_and_journaled(tmp_path):
     assert _events_of(journal, events.KIND_POSITION_OPENED) == []
 
 
+def test_full_exit_displacement_trim_uses_close_position(tmp_path):
+    # I1: when the planned trim consumes the starter's entire remaining
+    # value, the orchestrator must close the position outright
+    # (broker.close_position) rather than place a notional SELL that can
+    # leave dust shares behind and strand the symbol as "held" forever.
+    from ops.broker.types import Fill
+    from ops.config import OpsConfig
+    journal = _make_journal()
+    journal.record_event(
+        events.KIND_POSITION_OPENED,
+        events.position_opened_payload(
+            symbol="OLDS", source="MOMENTUM", entry_date=date(2026, 7, 1),
+            client_order_id="old", tier="starter",
+        ),
+    )
+    starter_pos = MagicMock(symbol="OLDS")
+    starter_pos.market_value.return_value = Decimal("500")
+    broker = _fake_broker(
+        positions=[starter_pos], equity=Decimal("10000"), cash=Decimal("1600"),
+    )  # available = 0 -> shortfall 500 == starter's entire value -> full exit
+    broker.get_quote.return_value = Decimal("10")
+    close_fill = Fill(
+        order_id="o1", client_order_id="close-OLDS-abc", symbol="OLDS",
+        side=Side.SELL, quantity=Decimal("50"), price=Decimal("10"),
+        filled_at=datetime.now(timezone.utc),
+    )
+    broker.close_position.return_value = close_fill
+    so = _strategy_order_tiered("NEWB", notional="500", tier="high")
+    strat = _fake_strategy_with_sink([so], [])
+    orch = _make_orchestrator(
+        journal=journal, strategy=strat, broker=broker, config=OpsConfig(),
+    )
+    orch.tick()
+    broker.close_position.assert_called_once_with("OLDS")
+    # No notional SELL was placed for the trim leg -- only the funded BUY
+    # went through place_order.
+    placed_symbols = [c.args[0].symbol for c in broker.place_order.call_args_list]
+    assert "OLDS" not in placed_symbols
+    assert "NEWB" in placed_symbols
+    trims = _events_of(journal, events.KIND_DISPLACEMENT_TRIM)
+    assert len(trims) == 1
+    assert trims[0]["symbol"] == "OLDS"
+    assert trims[0]["funded_symbol"] == "NEWB"
+    # Journaled notional is the fill's ACTUAL notional (quantity * price),
+    # not the planner's pre-fill estimate.
+    assert trims[0]["notional"] == "500.00"
+
+
+def test_trim_broker_error_only_unfunds_that_proposal(tmp_path):
+    # I2: a BrokerError placing one trim must not silently cancel every
+    # other entry this tick -- only the proposal that trim was funding
+    # gets skipped; a cash-funded buy needing no trims must still place.
+    from ops.config import OpsConfig
+    journal = _make_journal()
+    journal.record_event(
+        events.KIND_POSITION_OPENED,
+        events.position_opened_payload(
+            symbol="OLDS", source="MOMENTUM", entry_date=date(2026, 7, 1),
+            client_order_id="old", tier="starter",
+        ),
+    )
+    starter_pos = MagicMock(symbol="OLDS")
+    starter_pos.market_value.return_value = Decimal("1000")
+    broker = _fake_broker(
+        positions=[starter_pos], equity=Decimal("10000"), cash=Decimal("1800"),
+    )  # available = 200
+    broker.get_quote.return_value = Decimal("10")
+
+    def place_order_side_effect(order):
+        if order.symbol == "OLDS":
+            raise BrokerError("boom")
+        return MagicMock()
+
+    broker.place_order.side_effect = place_order_side_effect
+
+    cash_order = _strategy_order_tiered("CASHY", notional="100", tier="high")
+    trim_order = _strategy_order_tiered("TRIMY", notional="500", tier="high")
+    strat = _fake_strategy_with_sink([cash_order, trim_order], [])
+    orch = _make_orchestrator(
+        journal=journal, strategy=strat, broker=broker, config=OpsConfig(),
+    )
+    orch.tick()
+
+    placed_symbols = [c.args[0].symbol for c in broker.place_order.call_args_list]
+    assert "CASHY" in placed_symbols  # cash-funded buy still places
+    assert "TRIMY" not in placed_symbols  # trim-funded buy does NOT place
+
+    skips = _events_of(journal, events.KIND_ENTRY_SKIPPED_UNFUNDED)
+    assert len(skips) == 1
+    assert skips[0]["symbol"] == "TRIMY"
+    assert skips[0]["reason"] == "displacement trim OLDS failed: BrokerError"
+
+
 def test_underweight_trim_sells_half_of_held_position(tmp_path):
     journal = _make_journal()
     pos = MagicMock(symbol="AAPL")

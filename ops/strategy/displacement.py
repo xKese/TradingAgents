@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, ROUND_FLOOR, Decimal
 
 from ops.broker.base import BrokerError
 from ops.broker.types import Position
@@ -34,6 +34,14 @@ class PlannedTrim:
     tier: str
     notional: Decimal
     funded_symbol: str
+    full_exit: bool = False
+    """True when this trim consumes the starter's entire remaining value
+    (i.e. `take == value` before the shortfall min — see plan_displacement).
+    A full exit must be executed via broker.close_position, never a
+    notional SELL: a value-rounded-DOWN-to-cents SELL can leave up to ~1
+    cent of dust shares behind (above the paper broker's 1e-7 epsilon),
+    which keeps the position alive — occupying a max_open_positions slot
+    and blocking re-entry via `held` (finding I1)."""
 
 
 @dataclass(frozen=True)
@@ -55,7 +63,17 @@ def _quantize_money(d: Decimal) -> Decimal:
 
 
 def _proposal_tier(p: StrategyOrder) -> str:
-    return TIER_STARTER if getattr(p.pipeline, "tier", "") == TIER_STARTER else TIER_HIGH
+    """Raw tier string off the proposal, defaulting to "" (fail CLOSED).
+
+    D4: only an *exact* TIER_HIGH match is displacement-fundable. An empty
+    or unrecognized tier must never be treated as TIER_HIGH — that would
+    grant displacement-funding rights to any future tier-less proposal
+    (e.g. a new upstream rating this code doesn't know about yet). Callers
+    checking fundability compare `== TIER_HIGH` directly; this function
+    intentionally does NOT collapse unknown tiers to TIER_HIGH or
+    TIER_STARTER so the skip-reason logic below can tell the two apart.
+    """
+    return getattr(p.pipeline, "tier", "") or ""
 
 
 def _trimmable_starters(
@@ -114,7 +132,26 @@ def plan_displacement(
     # to cash without changing equity, so the floor is constant all plan.
     # Quantized once here: with this and starter values cent-anchored, every
     # derived shortfall/take (and UnfundedSkip.shortfall) is exact cents.
-    available = _quantize_money(cash - equity * config.cash_reserve_pct)
+    #
+    # ROUND_FLOOR, never HALF_EVEN and never ROUND_DOWN: this value's sign
+    # is not guaranteed. With fractional equity (the norm — paper fills are
+    # fractional-share) cash can sit fractionally BELOW the exact floor,
+    # e.g. equity 10000.03 / cash 1600.00 puts the true floor at 1600.0048
+    # and the true available at -0.0048. HALF_EVEN rounds that to 0.00, and
+    # so does ROUND_DOWN (which truncates *toward* zero, not toward
+    # -infinity — for a negative input that means UP, i.e. more generous).
+    # Both overstate how much is actually spendable, so a trim-funded buy's
+    # shortfall gets computed a fraction of a cent short: the planner trims
+    # exactly "enough", the trims fill, and the buy that follows lands
+    # post-trade cash a hair below the floor — CashReserveRule's unquantized
+    # compare rejects it AFTER the trims already sold (see
+    # tests/ops/strategy/test_displacement_integration.py for the real-
+    # broker repro). ROUND_FLOOR is the only mode that keeps
+    # available <= the true value on both sides of zero, so the computed
+    # shortfall is never short.
+    available = (cash - equity * config.cash_reserve_pct).quantize(
+        Decimal("0.01"), rounding=ROUND_FLOOR,
+    )
     trim_budget = max(0, config.displacement_max_trims_per_day - trims_used_today)
 
     ordered_starters, remaining_value = _trimmable_starters(
@@ -134,11 +171,23 @@ def plan_displacement(
             available -= need
             funded.add(p.order.client_order_id)
             continue
-        if _proposal_tier(p) != TIER_HIGH:
+        tier = _proposal_tier(p)
+        if tier != TIER_HIGH:
+            # D4: fail CLOSED. TIER_STARTER gets its own reason (working as
+            # designed — starters never displace); anything else (empty or
+            # an unrecognized tier string) is called out separately so the
+            # journal makes clear this wasn't a starter-tier proposal, it's
+            # a proposal displacement doesn't understand and refuses to
+            # fund via trims.
+            reason = (
+                "insufficient cash; starter entries never displace"
+                if tier == TIER_STARTER
+                else "insufficient cash; unknown tier never displaces"
+            )
             skips.append(UnfundedSkip(
                 symbol=p.order.symbol,
                 shortfall=need - available,
-                reason="insufficient cash; starter entries never displace",
+                reason=reason,
             ))
             continue
         shortfall = need - available
@@ -153,6 +202,7 @@ def plan_displacement(
             planned_here.append(PlannedTrim(
                 symbol=sym, tier=TIER_STARTER,
                 notional=_quantize_money(take), funded_symbol=p.order.symbol,
+                full_exit=take == value,
             ))
             shortfall -= take
             if shortfall <= 0:

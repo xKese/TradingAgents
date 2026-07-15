@@ -48,9 +48,9 @@ from ops.notify.summary import emit_daily_summary
 from ops.notify.transport import DisabledTransport
 from ops.position_guardian import PositionGuardian
 from ops.reconcile import ReconcileResult, emit_reconcile_events, reconcile
+from ops.scheduler import times
 from ops.scheduler.market_calendar import MarketCalendar
 from ops.scheduler.orchestrator import Orchestrator
-from ops.scheduler import times
 from ops.trading_time import trading_day_start, trading_week_start
 
 _shutdown_event = threading.Event()

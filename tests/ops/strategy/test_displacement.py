@@ -219,3 +219,20 @@ def test_fractional_share_values_are_cent_quantized_with_no_phantom_residue():
     assert skip.symbol == "NEW2"
     assert skip.shortfall == Decimal("5.00")
     assert skip.shortfall == skip.shortfall.quantize(cents)
+
+
+def test_starter_value_anchor_rounds_down_never_plans_oversell():
+    # qty 9.9995 @ 10 -> true quoted value 99.995. Half-even would anchor
+    # that UP to 100.00 and plan a sell 0.005 above what the position is
+    # worth — the broker rejects that (qty_to_sell > held) and strands the
+    # funded buy. The anchor must round DOWN: trim at most 99.99.
+    plan = _plan(
+        proposals=[_proposal("NEWB", "150")],
+        cash=Decimal("1600"),  # available 0, shortfall 150
+        positions=[_position("OLD1", qty="9.9995"), _position("OLD2", qty="30")],
+        provenance={"OLD1": _prov("2026-07-01"), "OLD2": _prov("2026-07-02")},
+    )
+    assert [(t.symbol, t.notional) for t in plan.trims] == [
+        ("OLD1", Decimal("99.99")), ("OLD2", Decimal("50.01")),
+    ]
+    assert plan.funded_client_order_ids == frozenset({"pem-NEWB"})

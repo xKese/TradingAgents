@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from ops.broker.base import BrokerError
 from ops.broker.types import Position
@@ -89,7 +89,12 @@ def _trimmable_starters(
         # Quantize once at the anchor: fractional-share positions (the norm,
         # see ops/broker/paper.py) produce sub-cent market values, and all
         # downstream shortfall/take arithmetic must stay cent-aligned.
-        value[pos.symbol] = _quantize_money(pos.market_value(px))
+        # ROUND_DOWN, never half-even: rounding a 99.995 position up to
+        # 100.00 plans a sell above its quoted value, which the broker
+        # rejects (qty_to_sell > held) — stranding the buy it funded.
+        value[pos.symbol] = pos.market_value(px).quantize(
+            Decimal("0.01"), rounding=ROUND_DOWN,
+        )
     return ordered, value
 
 

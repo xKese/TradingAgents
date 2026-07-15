@@ -50,6 +50,7 @@ from ops.position_guardian import PositionGuardian
 from ops.reconcile import ReconcileResult, emit_reconcile_events, reconcile
 from ops.scheduler.market_calendar import MarketCalendar
 from ops.scheduler.orchestrator import Orchestrator
+from ops.scheduler import times
 from ops.trading_time import trading_day_start, trading_week_start
 
 _shutdown_event = threading.Event()
@@ -1135,7 +1136,8 @@ def _start_full_scheduler(
     sched = BackgroundScheduler(timezone="America/New_York")
     sched.add_job(
         orchestrator.tick,
-        CronTrigger(minute="0,30", hour="9-15", day_of_week="mon-fri"),
+        CronTrigger(minute=times.TICK_CRON_MINUTE, hour=times.TICK_CRON_HOUR,
+                    day_of_week=times.TICK_CRON_DOW),
         id="orchestrator_tick", max_instances=1, misfire_grace_time=60,
     )
     sched.add_job(
@@ -1188,7 +1190,7 @@ def _start_full_scheduler(
         # queues back up within 30 minutes.
         sched.add_job(
             lambda: _research_overnight_tick(journal, config),
-            CronTrigger(minute="0,30"),
+            CronTrigger(minute=times.OVERNIGHT_CRON_MINUTE),
             id="research_overnight", max_instances=1, misfire_grace_time=600,
         )
         sched.add_job(

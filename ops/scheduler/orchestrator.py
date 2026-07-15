@@ -4,11 +4,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, time, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 from ops import events
 from ops.broker.base import BrokerError, NoSuchPosition, OrderRejected
+from ops.broker.types import Order, OrderType, Side
 from ops.exits import evaluate_exits
 from ops.live_gate import count_live_buy_fills
+from ops.pipeline_adapter import PipelineDecision
+from ops.strategy.displacement import plan_displacement
 from ops.trading_time import (
     TRADING_TZ,
     trading_day_start,
@@ -142,24 +146,8 @@ class Orchestrator:
                 live_max_position_cap=live_cap,
                 decision_sink=decisions,
             )
-            for proposal in proposals:
-                try:
-                    self._broker.place_order(proposal.order)
-                except OrderRejected:
-                    continue
-                except BrokerError:
-                    break
-                cand = proposal.candidate
-                self._journal.record_event(
-                    events.KIND_POSITION_OPENED,
-                    events.position_opened_payload(
-                        symbol=cand.symbol,
-                        source=cand.source.value,
-                        entry_date=asof_date,
-                        client_order_id=proposal.order.client_order_id,
-                        entry_rank=cand.momentum.rank if cand.momentum else None,
-                    ),
-                )
+            self._place_entries(proposals, asof_date, now)
+            self._apply_underweight_trims(decisions, asof_date)
             for decision in decisions:
                 cand = decision.candidate
                 self._journal.record_event(
@@ -170,6 +158,7 @@ class Orchestrator:
                         source=cand.source.value,
                         asof=asof_date.isoformat(),
                         rank=cand.momentum.rank if cand.momentum else None,
+                        rating=decision.pipeline.rating,
                     ),
                 )
 
@@ -181,6 +170,141 @@ class Orchestrator:
             events.daily_cycle_completed_payload(asof_date=asof_date.isoformat()),
             at=now,
         )
+
+    def _place_entries(self, proposals, asof_date, now) -> None:
+        """Fund and place proposed BUYs, displacing starters when a
+        high-conviction entry lacks cash (spec 2026-07-14). All-or-nothing
+        per proposal: a buy the plan could not fund is skipped (and
+        journaled), not fired into a CashReserveRule rejection."""
+        if not proposals:
+            return
+        plan = plan_displacement(
+            proposals=proposals,
+            positions=list(self._broker.get_positions()),
+            provenance=self._journal.latest_event_payload_by_symbol(
+                events.KIND_POSITION_OPENED,
+            ),
+            quote=self._broker.get_quote,
+            cash=self._broker.get_cash(),
+            equity=self._broker.get_equity(),
+            trims_used_today=self._journal.count_events(
+                events.KIND_DISPLACEMENT_TRIM, since=trading_day_start(now),
+            ),
+            asof_date=asof_date,
+            config=self._config,
+        )
+        for trim in plan.trims:
+            order = Order(
+                client_order_id=(
+                    f"disp-{asof_date.isoformat()}-{trim.symbol}-{uuid4().hex[:8]}"
+                ),
+                symbol=trim.symbol,
+                side=Side.SELL,
+                notional_dollars=trim.notional,
+                order_type=OrderType.MARKET,
+            )
+            try:
+                self._broker.place_order(order)
+            except OrderRejected:
+                # Funded buy may now bounce off CashReserveRule — that
+                # existing rejection path is the safety net, not an error.
+                continue
+            except BrokerError:
+                return
+            self._journal.record_event(
+                events.KIND_DISPLACEMENT_TRIM,
+                events.displacement_trim_payload(
+                    symbol=trim.symbol,
+                    tier=trim.tier,
+                    notional=trim.notional,
+                    funded_symbol=trim.funded_symbol,
+                    client_order_id=order.client_order_id,
+                ),
+            )
+        for skip in plan.skips:
+            self._journal.record_event(
+                events.KIND_ENTRY_SKIPPED_UNFUNDED,
+                events.entry_skipped_unfunded_payload(
+                    symbol=skip.symbol,
+                    shortfall=skip.shortfall,
+                    reason=skip.reason,
+                ),
+            )
+        for proposal in proposals:
+            if proposal.order.client_order_id not in plan.funded_client_order_ids:
+                continue
+            try:
+                self._broker.place_order(proposal.order)
+            except OrderRejected:
+                continue
+            except BrokerError:
+                break
+            cand = proposal.candidate
+            self._journal.record_event(
+                events.KIND_POSITION_OPENED,
+                events.position_opened_payload(
+                    symbol=cand.symbol,
+                    source=cand.source.value,
+                    entry_date=asof_date,
+                    client_order_id=proposal.order.client_order_id,
+                    entry_rank=cand.momentum.rank if cand.momentum else None,
+                    tier=proposal.pipeline.tier or None,
+                ),
+            )
+
+    def _apply_underweight_trims(self, decisions, asof_date) -> None:
+        """Sell half of any held position the pipeline rated Underweight.
+        Dormant today (fresh_candidates excludes held names) but wired so
+        the TRIM signal acts the moment held names are re-analyzed."""
+        trim_decisions = [
+            d for d in decisions
+            if d.pipeline.decision is PipelineDecision.TRIM
+        ]
+        if not trim_decisions:
+            return
+        held = {p.symbol: p for p in self._broker.get_positions()}
+        for d in trim_decisions:
+            pos = held.get(d.candidate.symbol)
+            if pos is None:
+                continue
+            try:
+                px = self._broker.get_quote(pos.symbol)
+            except BrokerError:
+                self._journal.record_event(
+                    events.KIND_EXIT_SKIPPED_MISSING_DATA,
+                    events.exit_skipped_missing_data_payload(
+                        symbol=pos.symbol,
+                        reason="underweight trim skipped: no quote",
+                    ),
+                )
+                continue
+            notional = (pos.market_value(px) * Decimal("0.5")).quantize(Decimal("0.01"))
+            if notional <= 0:
+                continue
+            order = Order(
+                client_order_id=(
+                    f"uwt-{asof_date.isoformat()}-{pos.symbol}-{uuid4().hex[:8]}"
+                ),
+                symbol=pos.symbol,
+                side=Side.SELL,
+                notional_dollars=notional,
+                order_type=OrderType.MARKET,
+            )
+            try:
+                self._broker.place_order(order)
+            except OrderRejected:
+                continue
+            except BrokerError:
+                return
+            self._journal.record_event(
+                events.KIND_UNDERWEIGHT_TRIM,
+                events.underweight_trim_payload(
+                    symbol=pos.symbol,
+                    rating=d.pipeline.rating,
+                    notional=notional,
+                    client_order_id=order.client_order_id,
+                ),
+            )
 
     def _run_exits(self, leaderboard, asof_date) -> None:
         report = evaluate_exits(

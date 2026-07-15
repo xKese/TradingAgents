@@ -9,6 +9,8 @@ from ops.scheduler.orchestrator import Orchestrator
 from ops.broker.types import Order, OrderType, Side
 from ops.broker.base import OrderRejected, BrokerError
 from ops.strategy.base import StrategyOrder
+from ops import events
+from ops.pipeline_adapter import PipelineDecision, PipelineResult, TIER_STARTER
 
 
 def _fake_calendar(is_open: bool):
@@ -81,13 +83,62 @@ def _order(symbol):
     )
 
 
+def _pipeline_result(symbol, decision=PipelineDecision.BUY, tier="high", rating="Buy"):
+    return PipelineResult(
+        symbol=symbol, date=date(2026, 7, 14), decision=decision,
+        rating=rating, tier=tier,
+    )
+
+
 def _strategy_order(symbol):
     return StrategyOrder(
         order=_order(symbol),
         reason="test",
         candidate=MagicMock(symbol=symbol),
-        pipeline=MagicMock(),
+        pipeline=_pipeline_result(symbol),
     )
+
+
+def _strategy_order_tiered(symbol, notional="50", tier="high", rating="Buy"):
+    order = Order(
+        client_order_id=f"b-{symbol}", symbol=symbol, side=Side.BUY,
+        notional_dollars=Decimal(notional), order_type=OrderType.MARKET,
+        stop_pct=Decimal("-0.08"),
+    )
+    return StrategyOrder(
+        order=order, reason="test",
+        candidate=MagicMock(symbol=symbol, momentum=None, source=MagicMock(value="MOMENTUM")),
+        pipeline=_pipeline_result(symbol, tier=tier, rating=rating),
+    )
+
+
+def _fake_strategy_with_sink(proposals, decisions):
+    """Strategy fake that also fills the decision_sink like the real one."""
+    strat = MagicMock()
+
+    def side_effect(*, decision_sink=None, **kwargs):
+        if decision_sink is not None:
+            decision_sink.extend(decisions)
+        return proposals
+
+    strat.propose_orders.side_effect = side_effect
+    return strat
+
+
+def _decision(symbol, decision, rating, tier=""):
+    from ops.strategy.base import AnalyzedDecision
+    return AnalyzedDecision(
+        candidate=MagicMock(symbol=symbol, momentum=None),
+        pipeline=_pipeline_result(symbol, decision=decision, tier=tier, rating=rating),
+    )
+
+
+def _events_of(journal, kind):
+    import json
+    rows = journal._conn.execute(
+        "SELECT payload FROM events WHERE kind = ?", (kind,),
+    ).fetchall()
+    return [json.loads(r[0]) for r in rows]
 
 
 def test_tick_market_closed_noop(tmp_path):
@@ -915,3 +966,107 @@ def test_no_blind_alarm_when_feed_healthy(monkeypatch):
     kinds = [e["kind"] for e in journal.read_events()]
     assert events.KIND_UNIVERSE_DIAGNOSTICS in kinds
     assert events.KIND_UNIVERSE_BLIND not in kinds
+
+
+# --- Task 7: orchestrator executes the displacement plan + underweight
+# trims, journals rating/tier ---
+
+def test_analysis_decision_journals_native_rating(tmp_path):
+    journal = _make_journal()
+    strat = _fake_strategy_with_sink(
+        [], [_decision("AAPL", PipelineDecision.HOLD, rating="Overweight")],
+    )
+    orch = _make_orchestrator(journal=journal, strategy=strat)
+    orch.tick()
+    payloads = _events_of(journal, events.KIND_ANALYSIS_DECISION)
+    assert payloads and payloads[0]["rating"] == "Overweight"
+
+
+def test_position_opened_carries_tier(tmp_path):
+    journal = _make_journal()
+    so = _strategy_order_tiered("AAPL", tier=TIER_STARTER, rating="Overweight")
+    strat = _fake_strategy_with_sink([so], [])
+    orch = _make_orchestrator(journal=journal, strategy=strat)
+    orch.tick()
+    payloads = _events_of(journal, events.KIND_POSITION_OPENED)
+    assert payloads and payloads[0]["tier"] == TIER_STARTER
+
+
+def test_displacement_trim_executed_and_journaled(tmp_path):
+    from ops.config import OpsConfig
+    journal = _make_journal()
+    # Aged starter on the books: provenance via a prior position_opened event.
+    journal.record_event(
+        events.KIND_POSITION_OPENED,
+        events.position_opened_payload(
+            symbol="OLDS", source="MOMENTUM", entry_date=date(2026, 7, 1),
+            client_order_id="old", tier="starter",
+        ),
+    )
+    starter_pos = MagicMock(symbol="OLDS")
+    starter_pos.market_value.return_value = Decimal("600")
+    broker = _fake_broker(
+        positions=[starter_pos], equity=Decimal("10000"), cash=Decimal("1600"),
+    )  # available = 0 -> full shortfall
+    broker.get_quote.return_value = Decimal("10")
+    so = _strategy_order_tiered("NEWB", notional="500", tier="high")
+    strat = _fake_strategy_with_sink([so], [])
+    orch = _make_orchestrator(
+        journal=journal, strategy=strat, broker=broker, config=OpsConfig(),
+    )
+    orch.tick()
+    trims = _events_of(journal, events.KIND_DISPLACEMENT_TRIM)
+    assert len(trims) == 1
+    assert trims[0]["symbol"] == "OLDS"
+    assert trims[0]["funded_symbol"] == "NEWB"
+    # SELL for the trim and BUY for the entry both placed
+    sides = [c.args[0].side for c in broker.place_order.call_args_list]
+    assert Side.SELL in sides and Side.BUY in sides
+
+
+def test_unfunded_buy_is_skipped_and_journaled(tmp_path):
+    from ops.config import OpsConfig
+    journal = _make_journal()
+    broker = _fake_broker(equity=Decimal("10000"), cash=Decimal("1600"))
+    so = _strategy_order_tiered("NEWB", notional="500", tier="high")
+    strat = _fake_strategy_with_sink([so], [])
+    orch = _make_orchestrator(
+        journal=journal, strategy=strat, broker=broker, config=OpsConfig(),
+    )
+    orch.tick()
+    skips = _events_of(journal, events.KIND_ENTRY_SKIPPED_UNFUNDED)
+    assert skips and skips[0]["symbol"] == "NEWB"
+    assert broker.place_order.call_count == 0
+    assert _events_of(journal, events.KIND_POSITION_OPENED) == []
+
+
+def test_underweight_trim_sells_half_of_held_position(tmp_path):
+    journal = _make_journal()
+    pos = MagicMock(symbol="AAPL")
+    pos.market_value.return_value = Decimal("1200")
+    broker = _fake_broker(
+        positions=[pos], equity=Decimal("10000"), cash=Decimal("5000"),
+    )
+    broker.get_quote.return_value = Decimal("120")
+    strat = _fake_strategy_with_sink(
+        [], [_decision("AAPL", PipelineDecision.TRIM, rating="Underweight")],
+    )
+    orch = _make_orchestrator(journal=journal, strategy=strat, broker=broker)
+    orch.tick()
+    trims = _events_of(journal, events.KIND_UNDERWEIGHT_TRIM)
+    assert trims and trims[0]["symbol"] == "AAPL"
+    assert trims[0]["notional"] == "600.00"
+    sell = broker.place_order.call_args_list[0].args[0]
+    assert sell.side == Side.SELL and sell.notional_dollars == Decimal("600.00")
+
+
+def test_underweight_trim_ignored_when_not_held(tmp_path):
+    journal = _make_journal()
+    broker = _fake_broker(positions=[])
+    strat = _fake_strategy_with_sink(
+        [], [_decision("GHOST", PipelineDecision.TRIM, rating="Underweight")],
+    )
+    orch = _make_orchestrator(journal=journal, strategy=strat, broker=broker)
+    orch.tick()
+    assert _events_of(journal, events.KIND_UNDERWEIGHT_TRIM) == []
+    assert broker.place_order.call_count == 0

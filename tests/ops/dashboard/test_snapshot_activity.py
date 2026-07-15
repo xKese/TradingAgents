@@ -100,6 +100,44 @@ def test_dangling_start_older_than_cap_is_stale(config):
     assert out["stale"] is True
 
 
+def test_dangling_start_closed_by_later_service_restart_is_idle(config):
+    # item start journaled, then the service crashes and restarts (health
+    # verdict back to RUNNING) -- the dangling start must NOT survive as a
+    # phantom "current"; it's just an interrupted run.
+    with _journal(config) as j:
+        _start(j, scope="job", job="daily_cycle", at=NOW - timedelta(hours=1),
+               reason="attempt 1 of 3")
+        _start(j, scope="item", job="daily_cycle", stage="analyzing",
+               symbol="BAH", at=NOW - timedelta(minutes=50))
+        j.record_event(events.KIND_SERVICE_STARTED, {"pid": 1},
+                       at=NOW - timedelta(minutes=30))
+    out = activity_section(config, NOW, health_verdict="RUNNING")
+    assert out["current"] is None
+    assert out["stale"] is False
+    runs = out["recent_runs"]
+    assert runs[0]["job"] == "daily_cycle"
+    assert runs[0]["ok"] is False
+    assert runs[0]["outcome"] == "interrupted"
+
+
+def test_item_finish_across_service_restart_does_not_resurrect_job(config):
+    # the item finish is the newest activity event, but its enclosing job
+    # start is on the far side of a service restart -- must not be
+    # resurrected as current.
+    with _journal(config) as j:
+        _start(j, scope="job", job="overnight", at=NOW - timedelta(hours=2),
+               reason="2 hit(s) to research")
+        _start(j, scope="item", job="overnight", stage="researching",
+               symbol="AAA", at=NOW - timedelta(hours=1, minutes=50))
+        j.record_event(events.KIND_SERVICE_STARTED, {"pid": 1},
+                       at=NOW - timedelta(hours=1))
+        _finish(j, scope="item", job="overnight", stage="researching",
+                symbol="AAA", at=NOW - timedelta(minutes=10))
+    out = activity_section(config, NOW, health_verdict="RUNNING")
+    assert out["current"] is None
+    assert out["stale"] is False
+
+
 def test_recent_runs_joined_and_interrupted(config):
     with _journal(config) as j:
         # run 1: clean

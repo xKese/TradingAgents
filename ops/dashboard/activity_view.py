@@ -57,19 +57,29 @@ def _as_current(row: dict[str, Any], now: datetime) -> dict[str, Any]:
 
 def _find_current(rows: list[dict[str, Any]], now: datetime) -> tuple[dict | None, bool]:
     """(current, is_dangling): newest activity event decides; item finishes
-    fall back to the still-open enclosing job start."""
+    fall back to the still-open enclosing job start.
+
+    A service_started row closes anything older than it: a restart means
+    the process that owned a dangling start is dead, so that start must
+    not resurface as "current" (recent_runs already reports it as
+    interrupted). We only reach a service_started row here if it's newer
+    than any activity event we've inspected so far, which is exactly the
+    "the dangling work died before this restart" case."""
     for row in rows:
         if row["kind"] == events.KIND_SERVICE_STARTED:
-            continue
+            return None, False  # restart is newer than any dangling start -> idle
         p = row["payload"]
         if row["kind"] == events.KIND_ACTIVITY_STARTED:
             return _as_current(row, now), True
         if p.get("scope") == "job":
             return None, False  # job finished cleanly -> idle
-        # item finished; is its job still open? (job start w/o later job finish)
+        # item finished; is its job still open? (job start w/o later job
+        # finish, and w/o an intervening service restart)
         for r2 in rows:
-            if r2["id"] >= row["id"] or r2["kind"] == events.KIND_SERVICE_STARTED:
+            if r2["id"] >= row["id"]:
                 continue
+            if r2["kind"] == events.KIND_SERVICE_STARTED:
+                return None, False  # job start is on the far side of a restart -> dead
             p2 = r2["payload"]
             if p2.get("scope") != "job":
                 continue

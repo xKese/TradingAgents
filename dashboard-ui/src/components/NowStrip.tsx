@@ -16,7 +16,7 @@ export default function NowStrip({ activity, health }: {
       <span className="now-dot" aria-hidden="true" />
       <span className="now-text">{line.text}</span>
       {line.state === "busy" && started && (
-        <span className="now-age">started {relAge(started)} ago</span>
+        <span className="now-age">started {relAge(started)}</span>
       )}
       {activity && isErr(activity) && (
         <span className="now-age">{activity.error}</span>

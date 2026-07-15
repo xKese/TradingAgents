@@ -66,7 +66,7 @@ config["backend_url"] = "http://localhost:11434/v1"  # or your OLLAMA_BASE_URL
 config["quick_think_llm"] = "trading-fast"
 config["deep_think_llm"] = "trading-fast"
 
-graph = TradingAgentsGraph(config=config)
+graph = TradingAgentsGraph(["market", "news"], config=config)
 _, decision = graph.propagate("NVDA", "2026-05-01")
 print(decision)
 ```

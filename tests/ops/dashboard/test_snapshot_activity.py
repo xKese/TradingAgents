@@ -15,6 +15,14 @@ NOW = datetime(2026, 7, 14, 18, 0, tzinfo=timezone.utc)
 def config(tmp_path):
     class _C:
         journal_path = str(tmp_path / "j.db")
+        screen_store_path = str(tmp_path / "screen.db")
+        short_screen_store_path = str(tmp_path / "short_screen.db")
+        memo_store_path = str(tmp_path / "memos.db")
+        short_memo_store_path = str(tmp_path / "short_memos.db")
+        insider_signal_store_path = str(tmp_path / "insider.db")
+        research_screen_interval_days = 3
+        research_drain_deadline_hour = 8
+        daily_analysis_budget = 8
     # touch the journal file so ro_conn can open it
     Journal(_C.journal_path).close()
     return _C()
@@ -120,4 +128,6 @@ def test_recent_runs_joined_and_interrupted(config):
 def test_missing_journal_returns_empty(config, tmp_path):
     config.journal_path = str(tmp_path / "missing.db")
     out = activity_section(config, NOW, health_verdict="UNKNOWN")
-    assert out == {"current": None, "stale": False, "recent_runs": []}
+    assert out["current"] is None
+    assert out["stale"] is False
+    assert out["recent_runs"] == []

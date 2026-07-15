@@ -123,6 +123,8 @@ def _recent_runs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def activity_section(config, now: datetime, *, health_verdict: str) -> dict[str, Any]:
+    from ops.dashboard.forecast import next_work
+
     rows = _rows(config)
     current, dangling = _find_current(rows, now)
     stale = False
@@ -130,4 +132,7 @@ def activity_section(config, now: datetime, *, health_verdict: str) -> dict[str,
             and (health_verdict != "RUNNING"
                  or current["age_seconds"] > MAX_CURRENT_AGE_S)):
         current, stale = None, True
-    return {"current": current, "stale": stale, "recent_runs": _recent_runs(rows)}
+    return {
+        "current": current, "stale": stale, "recent_runs": _recent_runs(rows),
+        "next_work": next_work(config, now=now),
+    }

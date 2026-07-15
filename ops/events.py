@@ -238,6 +238,11 @@ AUDIT_ONLY: frozenset[str] = frozenset({
     # dispatcher/POLICY table, so this gate event is audit-only.
     KIND_DAILY_OVERVIEW,
     KIND_DAILY_OVERVIEW_ERROR,
+    # Activity breadcrumbs: dashboard-only bookkeeping (the "now working
+    # on" / recent-runs feed) — they fire constantly during normal
+    # operation and must never notify.
+    KIND_ACTIVITY_STARTED,
+    KIND_ACTIVITY_FINISHED,
 })
 
 

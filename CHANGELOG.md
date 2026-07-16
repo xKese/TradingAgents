@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [Unreleased]
+
+### Added
+
+- **xAI Grok 4.5 in the model catalog.** The CLI and known-model list now
+  expose `grok-4.5` as the default xAI quick/deep option (previous flagship
+  Grok 4.3 remains available). Structured-output smoke defaults to Grok 4.5.
+
 ## [0.3.1] — 2026-07-05
 
 Correctness and stability patch: data look-ahead, graph-router crash-safety,

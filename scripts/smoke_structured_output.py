@@ -36,7 +36,7 @@ PROVIDER_DEFAULTS = {
     "deepseek": ("deepseek-v4-flash", None),
     "qwen": ("qwen3.7-plus", None),
     "glm": ("glm-5", None),
-    "xai": ("grok-4.3", None),
+    "xai": ("grok-4.5", None),
 }
 
 

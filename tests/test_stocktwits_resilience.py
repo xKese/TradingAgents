@@ -75,3 +75,35 @@ class TestStockTwitsCryptoSymbols:
         with patch.object(stocktwits, "urlopen", side_effect=fake_urlopen):
             stocktwits.fetch_stocktwits_messages("BTC-USD")
         assert "/symbol/BTC.X.json" in seen["url"]
+
+
+@pytest.mark.unit
+class TestStockTwitsIndianSymbols:
+    """trading-workspace#66: StockTwits lists NSE/BSE names under its own
+    ``.NSE``/``.BSE`` cashtag suffix, not Yahoo's ``.NS``/``.BO`` -- verified
+    live against RELIANCE.NSE (30 real messages, 2026-07-16). Without this
+    mapping every Indian ticker silently got zero StockTwits coverage."""
+
+    @pytest.mark.parametrize(
+        ("ticker", "expected"),
+        [
+            ("RELIANCE.NS", "RELIANCE.NSE"),
+            ("nbcc.bo", "NBCC.BSE"),
+            ("WIPRO.NS", "WIPRO.NSE"),
+            ("NVDA", "NVDA"),          # US equity: untouched
+            ("BTC-USD", "BTC.X"),      # crypto rule still wins first
+        ],
+    )
+    def test_indian_symbol_mapping(self, ticker, expected):
+        assert stocktwits._stocktwits_symbol(ticker) == expected
+
+    def test_indian_ticker_requests_nse_endpoint(self):
+        seen = {}
+
+        def fake_urlopen(req, timeout=None):
+            seen["url"] = req.full_url
+            raise TimeoutError("stop after capturing the URL")
+
+        with patch.object(stocktwits, "urlopen", side_effect=fake_urlopen):
+            stocktwits.fetch_stocktwits_messages("RELIANCE.NS")
+        assert "/symbol/RELIANCE.NSE.json" in seen["url"]

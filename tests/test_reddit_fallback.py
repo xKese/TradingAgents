@@ -212,3 +212,39 @@ class TestCryptoSearchTerm:
 
     def test_equity_passes_through(self):
         assert self._captured_ticker("NVDA") == "NVDA"
+
+
+@pytest.mark.unit
+class TestIndianSubreddits:
+    """trading-workspace#66: US finance subreddits carry ~zero organic
+    discussion of NSE/BSE-only names, so .NS/.BO tickers default to real
+    Indian-trader subreddits instead, with the Yahoo exchange suffix
+    stripped from the search query (nobody types ".NS" on Reddit)."""
+
+    def _captured(self, ticker, subreddits=None):
+        seen = {"subs": [], "tickers": []}
+
+        def fake_fetch(t, sub, limit, timeout):
+            seen["subs"].append(sub)
+            seen["tickers"].append(t)
+            return []
+
+        with patch.object(reddit, "_fetch_subreddit", side_effect=fake_fetch):
+            reddit.fetch_reddit_posts(ticker, subreddits=subreddits, inter_request_delay=0)
+        return seen
+
+    def test_indian_ticker_defaults_to_indian_subreddits(self):
+        seen = self._captured("RELIANCE.NS")
+        assert tuple(seen["subs"]) == reddit.INDIAN_SUBREDDITS
+
+    def test_us_ticker_still_defaults_to_default_subreddits(self):
+        seen = self._captured("NVDA")
+        assert tuple(seen["subs"]) == reddit.DEFAULT_SUBREDDITS
+
+    def test_indian_ticker_search_strips_exchange_suffix(self):
+        seen = self._captured("NBCC.BO")
+        assert seen["tickers"] == ["NBCC"] * len(reddit.INDIAN_SUBREDDITS)
+
+    def test_explicit_subreddits_override_default(self):
+        seen = self._captured("RELIANCE.NS", subreddits=("stocks",))
+        assert tuple(seen["subs"]) == ("stocks",)

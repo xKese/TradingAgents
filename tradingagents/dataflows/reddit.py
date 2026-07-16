@@ -48,6 +48,22 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
 
+# US finance subreddits carry near-zero organic discussion of NSE/BSE-only
+# names (as opposed to US-listed ADRs like INFY/WIT/HDB/IBN) -- verified live,
+# these three carry real Indian retail-trader discussion instead
+# (trading-workspace#66).
+INDIAN_SUBREDDITS = ("IndianStreetBets", "DalalStreetTalks", "IndiaInvestments")
+
+_INDIAN_EXCHANGE_SUFFIXES = (".NS", ".BO")
+
+
+def _strip_indian_exchange_suffix(ticker: str) -> str:
+    upper = ticker.strip().upper()
+    for suffix in _INDIAN_EXCHANGE_SUFFIXES:
+        if upper.endswith(suffix):
+            return upper[: -len(suffix)]
+    return ticker
+
 
 def _search_qs(ticker: str, limit: int) -> str:
     return urlencode({
@@ -190,7 +206,7 @@ def _fetch_subreddit(
 
 def fetch_reddit_posts(
     ticker: str,
-    subreddits: Iterable[str] = DEFAULT_SUBREDDITS,
+    subreddits: Iterable[str] | None = None,
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 1.0,
@@ -198,13 +214,25 @@ def fetch_reddit_posts(
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
 
+    ``subreddits`` defaults to ``INDIAN_SUBREDDITS`` for ``.NS``/``.BO``
+    tickers and ``DEFAULT_SUBREDDITS`` otherwise -- pass an explicit iterable
+    to override either way.
+
     ``inter_request_delay`` paces the (now RSS-only) per-subreddit requests to
     stay under Reddit's public per-IP rate limit; combined with the RSS-first
     path it makes 429s rare even when several analyses run back-to-back.
     """
+    if subreddits is None:
+        subreddits = (
+            INDIAN_SUBREDDITS
+            if ticker.strip().upper().endswith(_INDIAN_EXCHANGE_SUFFIXES)
+            else DEFAULT_SUBREDDITS
+        )
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
-    ticker = crypto_base(ticker) or ticker
+    # NSE/BSE tickers reach us with Yahoo's exchange suffix, which nobody on
+    # Reddit types when discussing the stock -- strip it the same way.
+    ticker = crypto_base(ticker) or _strip_indian_exchange_suffix(ticker)
     blocks = []
     total_posts = 0
     for i, sub in enumerate(subreddits):

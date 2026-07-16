@@ -27,15 +27,30 @@ _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 
 
+_INDIAN_EXCHANGE_SUFFIXES = {".NS": ".NSE", ".BO": ".BSE"}
+
+
 def _stocktwits_symbol(ticker: str) -> str:
-    """Map a crypto pair to StockTwits' ``<BASE>.X`` convention.
+    """Map a crypto pair or Indian NSE/BSE ticker to StockTwits' own cashtag
+    convention.
 
     StockTwits lists crypto as ``BTC.X`` (Yahoo's ``BTC-USD`` form 404s), so any
-    crypto symbol resolves to its base plus ``.X``; other symbols pass through
-    upper-cased.
+    crypto symbol resolves to its base plus ``.X``. StockTwits separately lists
+    Indian equities as ``<SYMBOL>.NSE``/``<SYMBOL>.BSE`` (Yahoo's ``.NS``/``.BO``
+    form 404s) — verified live against ``RELIANCE.NSE`` (30 real messages,
+    2026-07-16), following its 2022 India launch. Without this mapping every
+    ``.NS``/``.BO`` ticker silently got zero StockTwits coverage even though
+    real Indian retail-sentiment data exists under the platform's own symbol
+    convention (trading-workspace#66). Other symbols pass through upper-cased.
     """
     base = crypto_base(ticker)
-    return f"{base}.X" if base else ticker.strip().upper()
+    if base:
+        return f"{base}.X"
+    upper = ticker.strip().upper()
+    for yahoo_suffix, st_suffix in _INDIAN_EXCHANGE_SUFFIXES.items():
+        if upper.endswith(yahoo_suffix):
+            return upper[: -len(yahoo_suffix)] + st_suffix
+    return upper
 
 
 def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:

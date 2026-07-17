@@ -8,7 +8,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /build
 COPY . .
-RUN pip install --no-cache-dir .
+# Install the web extra too (fastapi + uvicorn) so the same image can serve the
+# local web UI via `tradingagents serve`, not just the interactive CLI.
+RUN pip install --no-cache-dir ".[web]"
 
 FROM python:3.12-slim
 
@@ -24,5 +26,8 @@ USER appuser
 WORKDIR /home/appuser/app
 
 COPY --from=builder --chown=appuser:appuser /build .
+
+# The web UI (`tradingagents serve`) listens here; published by docker-compose.
+EXPOSE 8000
 
 ENTRYPOINT ["tradingagents"]

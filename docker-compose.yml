@@ -8,6 +8,20 @@ services:
     tty: true
     stdin_open: true
 
+  # Local web UI. Start with: docker compose --profile web up
+  # then open http://localhost:8000 (override the host port via TRADINGAGENTS_WEB_PORT).
+  tradingagents-web:
+    build: .
+    env_file:
+      - .env
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
+    ports:
+      - "${TRADINGAGENTS_WEB_PORT:-8000}:8000"
+    volumes:
+      - tradingagents_data:/home/appuser/.tradingagents
+    profiles:
+      - web
+
   ollama:
     image: ollama/ollama:latest
     volumes:

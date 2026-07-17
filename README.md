@@ -194,6 +194,27 @@ It binds to `127.0.0.1` (localhost) only by default — it is a single-user loca
 tool with no auth layer. Point it elsewhere with `--host`/`--port`, and use
 `--no-browser` to skip auto-opening the page.
 
+#### With Docker
+
+The image bundles the web extra, so you can serve the UI with Compose:
+
+```bash
+cp .env.example .env                    # add your API keys (or use Ollama)
+docker compose --profile web up         # then open http://localhost:8000
+```
+
+Change the host port with `TRADINGAGENTS_WEB_PORT` (e.g. `TRADINGAGENTS_WEB_PORT=9000
+docker compose --profile web up`). For a fully local run with a containerized model
+backend, also start the Ollama profile and point the app at it:
+
+```bash
+# in .env: OLLAMA_BASE_URL=http://ollama:11434/v1
+docker compose --profile web --profile ollama up
+```
+
+Then select the **Ollama** provider in the form. (The interactive CLI still runs the
+same way: `docker compose run --rm tradingagents`.)
+
 For a fully local, zero-cost run, pick a local model backend in the provider
 dropdown — no API key required:
 

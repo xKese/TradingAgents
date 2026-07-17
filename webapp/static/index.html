@@ -313,6 +313,13 @@ function renderAnalysts(){
 
 function providerByKey(k){return CATALOG.providers.find(p=>p.key===k);}
 
+// In Docker, a loopback host points at the container, not the host running the
+// model server; prefill host.docker.internal so the default URL actually works.
+function dockerize(url){
+  if(!CATALOG.in_docker || !url) return url;
+  return url.replace(/(^https?:\/\/)(localhost|127\.0\.0\.1)(?=[:\/]|$)/i, "$1host.docker.internal");
+}
+
 async function onProviderChange(){
   const p=providerByKey($("provider").value);
   // note
@@ -324,10 +331,10 @@ async function onProviderChange(){
   // url field: show for local providers that need an endpoint, prefill a sensible default
   $("url-row").style.display = p.needs_url ? "block" : "none";
   if(p.needs_url){
-    const defaultUrl = p.base_url || (p.key==="openai_compatible" ? "http://localhost:1234/v1" : "");
+    const defaultUrl = dockerize(p.base_url || (p.key==="openai_compatible" ? "http://localhost:1234/v1" : ""));
     const placeholder = p.key==="openai_compatible"
-      ? "http://localhost:1234/v1  (LM Studio · vLLM :8000 · llama.cpp)"
-      : (p.base_url || "http://localhost:11434/v1");
+      ? dockerize("http://localhost:1234/v1")+"  (LM Studio · vLLM :8000 · llama.cpp)"
+      : dockerize(p.base_url || "http://localhost:11434/v1");
     $("backend-url").placeholder = placeholder;
     if(!$("backend-url").value) $("backend-url").value = defaultUrl;
   }

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
+from ..runtime import rewrite_loopback_for_docker
 from .api_key_env import get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
@@ -288,6 +289,10 @@ class OpenAIClient(BaseLLMClient):
             # OLLAMA_BASE_URL) > provider default. None means use the SDK default.
             env_base_url = os.environ.get(spec.base_url_env) if spec.base_url_env else None
             base_url = self.base_url or env_base_url or spec.base_url
+            # Inside Docker, a loopback base_url points at the container, not the
+            # host where a local model server (LM Studio, Ollama) runs; rewrite it
+            # to host.docker.internal so the run can actually connect.
+            base_url = rewrite_loopback_for_docker(base_url)
             if spec.require_base_url and not base_url:
                 raise ValueError(
                     f"Provider '{self.provider}' requires a base_url. Set it via "
@@ -319,7 +324,7 @@ class OpenAIClient(BaseLLMClient):
             if spec.use_responses_api and _is_native_openai_base_url(base_url):
                 llm_kwargs["use_responses_api"] = True
         elif self.base_url:
-            llm_kwargs["base_url"] = self.base_url
+            llm_kwargs["base_url"] = rewrite_loopback_for_docker(self.base_url)
 
         # Forward user-provided kwargs
         for key in _PASSTHROUGH_KWARGS:

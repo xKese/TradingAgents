@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradingAgents · Multi-Agenten-Framework lokal betreiben</title>
+<meta name="description" content="TradingAgents ist ein Multi-Agenten-LLM-Framework für Finanzanalyse, das die Dynamik echter Handelsfirmen nachbildet. Vollständig lokal, ohne Cloud-Zwang – mit deinen eigenen API-Keys oder komplett offline über Ollama.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+<style>
+  :root{
+    --bg:#0a0e17;
+    --bg-2:#0f1521;
+    --panel:#131a28;
+    --panel-2:#182234;
+    --border:#233048;
+    --border-soft:#1b2537;
+    --text:#e8edf6;
+    --text-dim:#9fb0c9;
+    --text-mute:#6b7d99;
+    --brand:#37e2a5;
+    --brand-2:#22c3ff;
+    --brand-soft:rgba(55,226,165,.12);
+    --bull:#37e2a5;
+    --bear:#ff6b78;
+    --amber:#ffcf6b;
+    --radius:16px;
+    --maxw:1120px;
+    --font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono','Menlo',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:var(--font);
+    background:var(--bg);
+    color:var(--text);
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  h1,h2,h3{margin:0;line-height:1.15;letter-spacing:-.02em;font-weight:700}
+  p{margin:0}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--mono)}
+  .accent{color:var(--brand)}
+  .grad-text{
+    background:linear-gradient(100deg,var(--brand),var(--brand-2));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+
+  /* ---------- Nav ---------- */
+  header.nav{
+    position:sticky;top:0;z-index:50;
+    background:rgba(10,14,23,.72);
+    backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--border-soft);
+  }
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.02em}
+  .brand .logo{
+    width:30px;height:30px;border-radius:8px;
+    background:linear-gradient(135deg,var(--brand),var(--brand-2));
+    display:grid;place-items:center;color:#04110c;font-weight:800;font-size:15px;
+  }
+  .nav-links{display:flex;align-items:center;gap:30px}
+  .nav-links a{color:var(--text-dim);font-size:14.5px;font-weight:500;transition:color .15s}
+  .nav-links a:hover{color:var(--text)}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:10px 18px;border-radius:10px;font-weight:600;font-size:14.5px;
+    border:1px solid transparent;cursor:pointer;transition:transform .12s,background .15s,border-color .15s;
+    white-space:nowrap;
+  }
+  .btn:hover{transform:translateY(-1px)}
+  .btn-primary{background:linear-gradient(100deg,var(--brand),var(--brand-2));color:#04110c}
+  .btn-ghost{border-color:var(--border);color:var(--text);background:var(--panel)}
+  .btn-ghost:hover{border-color:var(--brand);color:var(--brand)}
+  @media(max-width:820px){.nav-links a:not(.btn){display:none}}
+
+  /* ---------- Hero ---------- */
+  .hero{position:relative;padding:96px 0 72px;overflow:hidden}
+  .hero-bg{
+    position:absolute;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(60% 50% at 78% 8%,rgba(34,195,255,.14),transparent 60%),
+      radial-gradient(55% 45% at 12% 20%,rgba(55,226,165,.13),transparent 60%);
+  }
+  .grid-overlay{
+    position:absolute;inset:0;z-index:0;opacity:.5;
+    background-image:linear-gradient(var(--border-soft) 1px,transparent 1px),linear-gradient(90deg,var(--border-soft) 1px,transparent 1px);
+    background-size:52px 52px;
+    -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%);
+            mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%);
+  }
+  .hero .wrap{position:relative;z-index:1}
+  .pill{
+    display:inline-flex;align-items:center;gap:9px;
+    padding:7px 14px;border-radius:999px;border:1px solid var(--border);
+    background:var(--panel);font-size:13px;color:var(--text-dim);font-weight:500;margin-bottom:26px;
+  }
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 4px var(--brand-soft)}
+  .hero h1{font-size:clamp(38px,6vw,64px);max-width:16ch}
+  .hero .sub{margin-top:22px;font-size:clamp(17px,2.2vw,20px);color:var(--text-dim);max-width:60ch}
+  .hero-cta{margin-top:36px;display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  .hero-note{margin-top:18px;font-size:13.5px;color:var(--text-mute);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .hero-stats{
+    margin-top:56px;display:grid;grid-template-columns:repeat(4,1fr);gap:20px;
+    border-top:1px solid var(--border-soft);padding-top:34px;
+  }
+  .stat .num{font-size:30px;font-weight:700;letter-spacing:-.03em}
+  .stat .lbl{font-size:13.5px;color:var(--text-mute);margin-top:4px}
+  @media(max-width:720px){.hero-stats{grid-template-columns:repeat(2,1fr);gap:26px 20px}}
+
+  /* ---------- Terminal ---------- */
+  .terminal{
+    margin-top:60px;border:1px solid var(--border);border-radius:14px;overflow:hidden;
+    background:linear-gradient(180deg,#0c1220,#0a0f1a);
+    box-shadow:0 30px 80px -30px rgba(0,0,0,.7);
+  }
+  .term-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border-soft);background:#0d1422}
+  .term-bar .dots{display:flex;gap:7px}
+  .term-bar .dots i{width:11px;height:11px;border-radius:50%;display:block}
+  .term-bar .dots i:nth-child(1){background:#ff5f57}
+  .term-bar .dots i:nth-child(2){background:#febc2e}
+  .term-bar .dots i:nth-child(3){background:#28c840}
+  .term-bar .title{font-size:12.5px;color:var(--text-mute);font-family:var(--mono)}
+  .term-body{padding:22px 22px 26px;font-family:var(--mono);font-size:13.5px;line-height:1.85;overflow-x:auto}
+  .term-body .cmt{color:var(--text-mute)}
+  .term-body .prompt{color:var(--brand)}
+  .term-body .cmd{color:var(--text)}
+  .term-body .out{color:var(--text-dim)}
+  .term-body .ok{color:var(--brand)}
+  .term-body .buy{color:var(--bull);font-weight:700}
+  .term-body .warn{color:var(--amber)}
+
+  /* ---------- Sections ---------- */
+  section{position:relative}
+  .section{padding:88px 0}
+  .section-head{max-width:640px;margin-bottom:48px}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--brand)}
+  .section-head h2{font-size:clamp(28px,4vw,42px);margin-top:14px}
+  .section-head p{margin-top:16px;color:var(--text-dim);font-size:17px}
+
+  /* ---------- Steps ---------- */
+  .steps{display:grid;grid-template-columns:1.05fr 1fr;gap:48px;align-items:start}
+  @media(max-width:900px){.steps{grid-template-columns:1fr;gap:36px}}
+  .step{display:flex;gap:18px;padding:20px 0;border-bottom:1px solid var(--border-soft)}
+  .step:last-child{border-bottom:none}
+  .step .n{
+    flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:1px solid var(--border);
+    background:var(--panel);display:grid;place-items:center;font-weight:700;font-size:14px;color:var(--brand);
+  }
+  .step h3{font-size:17px}
+  .step p{color:var(--text-dim);font-size:14.5px;margin-top:5px}
+  .step code{font-family:var(--mono);font-size:13px;background:var(--panel-2);border:1px solid var(--border-soft);padding:2px 7px;border-radius:6px;color:var(--brand)}
+  .code-card{
+    border:1px solid var(--border);border-radius:14px;overflow:hidden;background:#0c1220;position:sticky;top:88px;
+  }
+  .code-tabs{display:flex;border-bottom:1px solid var(--border-soft);background:#0d1422}
+  .code-tabs button{
+    flex:1;padding:12px;background:none;border:none;color:var(--text-mute);
+    font-family:var(--mono);font-size:12.5px;cursor:pointer;font-weight:600;transition:color .15s,background .15s;
+  }
+  .code-tabs button.active{color:var(--brand);background:#0c1220;box-shadow:inset 0 -2px 0 var(--brand)}
+  .code-panes{padding:20px 22px;font-family:var(--mono);font-size:13px;line-height:1.9;min-height:220px;overflow-x:auto}
+  .code-pane{display:none}
+  .code-pane.active{display:block}
+  .code-pane .c{color:var(--text-mute)}
+  .code-pane .p{color:var(--brand)}
+  .code-pane .k{color:var(--brand-2)}
+
+  /* ---------- Agents ---------- */
+  .agent-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  @media(max-width:900px){.agent-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.agent-grid{grid-template-columns:1fr}}
+  .agent{
+    border:1px solid var(--border-soft);border-radius:var(--radius);padding:24px;background:var(--panel);
+    transition:border-color .2s,transform .2s,background .2s;position:relative;overflow:hidden;
+  }
+  .agent:hover{border-color:var(--border);transform:translateY(-3px);background:var(--panel-2)}
+  .agent .ico{width:44px;height:44px;border-radius:11px;display:grid;place-items:center;font-size:22px;margin-bottom:16px;background:var(--brand-soft);border:1px solid var(--border-soft)}
+  .agent h3{font-size:16.5px}
+  .agent .role{font-size:12px;color:var(--brand);font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+  .agent p{margin-top:11px;font-size:14px;color:var(--text-dim)}
+
+  /* ---------- Pipeline / architecture ---------- */
+  .arch{
+    border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--panel);
+  }
+  .arch img{width:100%;display:block;background:#fff}
+  .arch-cap{padding:16px 20px;border-top:1px solid var(--border-soft);color:var(--text-mute);font-size:13.5px;display:flex;gap:8px;align-items:center}
+
+  /* ---------- Features ---------- */
+  .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  @media(max-width:900px){.feat-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.feat-grid{grid-template-columns:1fr}}
+  .feat{border:1px solid var(--border-soft);border-radius:var(--radius);padding:26px;background:var(--panel)}
+  .feat .ico{font-size:22px;margin-bottom:14px}
+  .feat h3{font-size:16.5px}
+  .feat p{margin-top:9px;font-size:14px;color:var(--text-dim)}
+
+  /* ---------- Providers ---------- */
+  .prov-wrap{border:1px solid var(--border-soft);border-radius:var(--radius);padding:34px;background:linear-gradient(180deg,var(--panel),var(--bg-2))}
+  .prov-grid{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
+  .chip{
+    display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:10px;
+    border:1px solid var(--border-soft);background:var(--panel-2);font-size:13.5px;color:var(--text-dim);font-weight:500;
+  }
+  .chip .d{width:7px;height:7px;border-radius:50%;background:var(--brand)}
+  .local-badge{
+    margin-top:26px;display:flex;gap:14px;align-items:flex-start;
+    border:1px solid var(--border);border-radius:12px;padding:18px 20px;background:var(--brand-soft);
+  }
+  .local-badge .ico{font-size:22px}
+  .local-badge b{color:var(--text)}
+  .local-badge p{color:var(--text-dim);font-size:14px;margin-top:3px}
+
+  /* ---------- Markets ---------- */
+  .markets{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+  .market{border:1px solid var(--border-soft);border-radius:12px;padding:16px 18px;background:var(--panel)}
+  .market .m{font-size:13px;color:var(--text-mute)}
+  .market .t{font-family:var(--mono);font-size:14px;color:var(--text);margin-top:4px}
+
+  /* ---------- CTA ---------- */
+  .cta{
+    position:relative;margin:40px 0 0;border:1px solid var(--border);border-radius:24px;overflow:hidden;
+    background:linear-gradient(120deg,#0f1c1a,#0d1626);padding:64px 40px;text-align:center;
+  }
+  .cta::before{content:"";position:absolute;inset:0;background:radial-gradient(50% 90% at 50% 0%,rgba(55,226,165,.16),transparent 60%)}
+  .cta > *{position:relative}
+  .cta h2{font-size:clamp(28px,4vw,40px)}
+  .cta p{margin:16px auto 0;max-width:52ch;color:var(--text-dim);font-size:17px}
+  .cta .hero-cta{justify-content:center;margin-top:32px}
+
+  /* ---------- Disclaimer / footer ---------- */
+  .disclaimer{
+    margin-top:64px;border:1px solid var(--border-soft);border-left:3px solid var(--amber);
+    border-radius:10px;padding:18px 22px;background:var(--panel);color:var(--text-mute);font-size:13.5px;
+  }
+  footer{border-top:1px solid var(--border-soft);margin-top:80px;padding:44px 0}
+  .foot-inner{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:center}
+  .foot-links{display:flex;gap:26px;flex-wrap:wrap}
+  .foot-links a{color:var(--text-dim);font-size:14px}
+  .foot-links a:hover{color:var(--brand)}
+  .foot-copy{color:var(--text-mute);font-size:13px}
+
+  html.js .reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
+  html.js .reveal.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){
+    html.js .reveal{opacity:1;transform:none;transition:none}
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <div class="brand"><span class="logo">TA</span> TradingAgents</div>
+    <nav class="nav-links">
+      <a href="#lokal">Lokal betreiben</a>
+      <a href="#agenten">Agenten</a>
+      <a href="#features">Features</a>
+      <a href="#provider">Provider</a>
+      <a class="btn btn-ghost" href="https://github.com/TauricResearch/TradingAgents" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="grid-overlay"></div>
+  <div class="wrap">
+    <span class="pill"><span class="dot"></span> Open Source · v0.3.1 · Läuft komplett auf deiner Maschine</span>
+    <h1>Deine eigene <span class="grad-text">KI-Handelsfirma</span> – lokal im Terminal.</h1>
+    <p class="sub">TradingAgents ist ein Multi-Agenten-LLM-Framework, das die Dynamik echter Trading-Desks nachbildet. Analysten, Researcher, Trader und Risk-Management debattieren gemeinsam über jeden Titel – und alles läuft auf deiner Hardware, mit deinen Keys oder komplett offline.</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#lokal">Jetzt lokal starten →</a>
+      <a class="btn btn-ghost" href="https://github.com/TauricResearch/TradingAgents" target="_blank" rel="noopener">⭐ Auf GitHub ansehen</a>
+    </div>
+    <div class="hero-note">🔒 Keine Cloud-Pflicht · 🖥️ Ollama für 100 % offline · 🔑 Bring your own API-Key</div>
+
+    <div class="terminal reveal">
+      <div class="term-bar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <span class="title">~/TradingAgents — tradingagents analyze</span>
+      </div>
+      <div class="term-body">
+<span class="cmt"># TradingAgents lokal starten – ein Befehl</span><br>
+<span class="prompt">$</span> <span class="cmd">tradingagents</span><br>
+<span class="out">? Ticker:            </span><span class="ok">NVDA</span><br>
+<span class="out">? Analyse-Datum:     </span><span class="ok">2026-01-15</span><br>
+<span class="out">? LLM-Provider:      </span><span class="ok">ollama  (lokal, offline)</span><br>
+<span class="out">? Research-Tiefe:    </span><span class="ok">tief · 2 Debattenrunden</span><br>
+<br>
+<span class="out">▸ Fundamentals-Analyst  ....... </span><span class="ok">fertig</span><br>
+<span class="out">▸ Sentiment-Analyst     ....... </span><span class="ok">fertig</span><br>
+<span class="out">▸ News-Analyst          ....... </span><span class="ok">fertig</span><br>
+<span class="out">▸ Technical-Analyst     ....... </span><span class="ok">fertig</span><br>
+<span class="out">▸ Bull vs. Bear Debatte ....... </span><span class="ok">fertig</span><br>
+<span class="out">▸ Risk-Management       ....... </span><span class="ok">fertig</span><br>
+<br>
+<span class="out">Portfolio-Manager-Entscheidung:  </span><span class="buy">BUY</span> <span class="out">(Konfidenz 0.72 · Alpha vs. SPY nachgehalten)</span>
+      </div>
+    </div>
+
+    <div class="hero-stats reveal">
+      <div class="stat"><div class="num grad-text">7</div><div class="lbl">spezialisierte Agenten-Rollen</div></div>
+      <div class="stat"><div class="num grad-text">12+</div><div class="lbl">LLM-Provider inkl. lokal</div></div>
+      <div class="stat"><div class="num grad-text">100 %</div><div class="lbl">offline mit Ollama möglich</div></div>
+      <div class="stat"><div class="num grad-text">∞</div><div class="lbl">Märkte über Yahoo Finance</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- LOKAL BETREIBEN -->
+<section class="section" id="lokal">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">In 5 Minuten startklar</div>
+      <h2>TradingAgents lokal betreiben</h2>
+      <p>Klonen, Umgebung anlegen, Provider wählen, loslegen. Kein Account, kein SaaS – der komplette Multi-Agenten-Stack läuft auf deiner Maschine.</p>
+    </div>
+
+    <div class="steps">
+      <div class="reveal">
+        <div class="step">
+          <div class="n">1</div>
+          <div>
+            <h3>Repository klonen</h3>
+            <p>Hol dir den Quellcode und wechsle ins Verzeichnis.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">2</div>
+          <div>
+            <h3>Umgebung anlegen</h3>
+            <p>Python ≥ 3.10 in <code>conda</code>, <code>venv</code> oder deinem Manager der Wahl, dann <code>pip install .</code></p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">3</div>
+          <div>
+            <h3>Provider konfigurieren</h3>
+            <p>Setze den API-Key deines Providers – oder wähle <code>ollama</code> für einen vollständig offline laufenden Durchlauf ohne Kosten.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">4</div>
+          <div>
+            <h3>Analyse starten</h3>
+            <p>Starte die interaktive CLI mit <code>tradingagents</code> und wähle Ticker, Datum, Modell und Research-Tiefe.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="n">5</div>
+          <div>
+            <h3>Oder per Docker</h3>
+            <p>Ein <code>docker compose run</code> genügt – inklusive <code>--profile ollama</code> für den komplett lokalen Betrieb.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="code-card reveal">
+        <div class="code-tabs">
+          <button class="active" data-tab="cli">CLI</button>
+          <button data-tab="docker">Docker</button>
+          <button data-tab="python">Python</button>
+        </div>
+        <div class="code-panes">
+          <div class="code-pane active" id="cli">
+<span class="c"># 1 · Klonen</span><br>
+<span class="p">$</span> git clone https://github.com/TauricResearch/TradingAgents.git<br>
+<span class="p">$</span> cd TradingAgents<br><br>
+<span class="c"># 2 · Umgebung + Installation</span><br>
+<span class="p">$</span> conda create -n tradingagents python=3.12<br>
+<span class="p">$</span> conda activate tradingagents<br>
+<span class="p">$</span> pip install .<br><br>
+<span class="c"># 3 · Key setzen (oder Ollama für offline)</span><br>
+<span class="p">$</span> export <span class="k">ANTHROPIC_API_KEY</span>=...<br><br>
+<span class="c"># 4 · Interaktive CLI starten</span><br>
+<span class="p">$</span> tradingagents
+          </div>
+          <div class="code-pane" id="docker">
+<span class="c"># .env mit deinen Keys befüllen</span><br>
+<span class="p">$</span> cp .env.example .env<br><br>
+<span class="c"># Standard-Durchlauf</span><br>
+<span class="p">$</span> docker compose run --rm tradingagents<br><br>
+<span class="c"># Vollständig lokal mit Ollama</span><br>
+<span class="p">$</span> docker compose --profile ollama \<br>
+&nbsp;&nbsp;&nbsp;&nbsp;run --rm tradingagents-ollama
+          </div>
+          <div class="code-pane" id="python">
+<span class="c"># Direkt aus deinem Code</span><br>
+<span class="k">from</span> tradingagents.graph.trading_graph <span class="k">import</span> TradingAgentsGraph<br>
+<span class="k">from</span> tradingagents.default_config <span class="k">import</span> DEFAULT_CONFIG<br><br>
+config = DEFAULT_CONFIG.copy()<br>
+config[<span class="p">"llm_provider"</span>] = <span class="p">"ollama"</span><br>
+config[<span class="p">"deep_think_llm"</span>] = <span class="p">"qwen3"</span><br><br>
+ta = TradingAgentsGraph(config=config)<br>
+_, decision = ta.propagate(<span class="p">"NVDA"</span>, <span class="p">"2026-01-15"</span>)<br>
+<span class="k">print</span>(decision)
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AGENTEN -->
+<section class="section" id="agenten" style="background:var(--bg-2);border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">Das Team</div>
+      <h2>Ein Handelsdesk aus spezialisierten Agenten</h2>
+      <p>TradingAgents zerlegt die Analyse in klar abgegrenzte Rollen. Jeder Agent hat eigene Werkzeuge und Constraints – gemeinsam bewerten sie den Markt und diskutieren die optimale Strategie.</p>
+    </div>
+
+    <div class="agent-grid">
+      <div class="agent reveal">
+        <div class="ico">📊</div>
+        <div class="role">Analyst-Team</div>
+        <h3>Fundamentals-Analyst</h3>
+        <p>Bewertet Kennzahlen und Bilanzen, ermittelt den inneren Wert und deckt potenzielle Warnsignale auf.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">💬</div>
+        <div class="role">Analyst-Team</div>
+        <h3>Sentiment-Analyst</h3>
+        <p>Verdichtet News-Schlagzeilen, StockTwits und Reddit zu einem Stimmungsbild für die kurzfristige Marktlage.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">🌐</div>
+        <div class="role">Analyst-Team</div>
+        <h3>News-Analyst</h3>
+        <p>Beobachtet globale Nachrichten und Makro-Indikatoren und deutet ihre Wirkung auf die Marktbedingungen.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">📈</div>
+        <div class="role">Analyst-Team</div>
+        <h3>Technical-Analyst</h3>
+        <p>Nutzt Indikatoren wie MACD und RSI, um Muster zu erkennen und Kursbewegungen zu prognostizieren.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">⚖️</div>
+        <div class="role">Researcher-Team</div>
+        <h3>Bull- &amp; Bear-Researcher</h3>
+        <p>Prüfen die Analysen kritisch und wägen in strukturierten Debatten Chancen gegen Risiken ab.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">🎯</div>
+        <div class="role">Execution</div>
+        <h3>Trader-Agent</h3>
+        <p>Fasst alle Berichte zusammen und entscheidet über Zeitpunkt und Größe eines Trades.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">🛡️</div>
+        <div class="role">Risk &amp; Portfolio</div>
+        <h3>Risk-Management-Team</h3>
+        <p>Bewertet Volatilität, Liquidität und weitere Risikofaktoren und passt die Strategie laufend an.</p>
+      </div>
+      <div class="agent reveal">
+        <div class="ico">🏦</div>
+        <div class="role">Risk &amp; Portfolio</div>
+        <h3>Portfolio-Manager</h3>
+        <p>Trifft die finale Entscheidung: Er genehmigt oder verwirft den Handelsvorschlag und gibt die Order frei.</p>
+      </div>
+      <div class="agent reveal" style="background:linear-gradient(135deg,var(--brand-soft),transparent);border-color:var(--border)">
+        <div class="ico">🔁</div>
+        <div class="role">Gedächtnis</div>
+        <h3>Reflexion &amp; Lernen</h3>
+        <p>Jeder Lauf hält seine Entscheidung fest und speist die realisierte Rendite als Lektion in künftige Analysen ein.</p>
+      </div>
+    </div>
+
+    <div class="arch reveal" style="margin-top:40px">
+      <img src="assets/schema.png" alt="TradingAgents Architektur – Analyst-Team, Researcher-Debatte, Trader, Risk-Management und Portfolio-Manager" loading="lazy">
+      <div class="arch-cap">🗺️ Der vollständige Workflow: von den Analysten über die Bull/Bear-Debatte bis zur finalen Freigabe durch den Portfolio-Manager.</div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">Warum lokal</div>
+      <h2>Volle Kontrolle über Daten, Modelle und Kosten</h2>
+      <p>Gebaut mit LangGraph für Modularität – und darauf ausgelegt, unter deiner Kontrolle zu laufen.</p>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat reveal">
+        <div class="ico">🖥️</div>
+        <h3>100 % offline mit Ollama</h3>
+        <p>Über das Ollama-Profil laufen alle Modelle lokal – ohne API-Kosten und ohne dass Daten deine Maschine verlassen.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ico">🔑</div>
+        <h3>Bring your own Key</h3>
+        <p>Auto-Detection der API-Keys per <code>TRADINGAGENTS_*</code>-Env-Vars. Provider wechselst du rein über die <code>.env</code>.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ico">🧠</div>
+        <h3>Persistentes Gedächtnis</h3>
+        <p>Ein Entscheidungs-Log unter <code>~/.tradingagents</code> reflektiert vergangene Trades und verbessert künftige Läufe.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ico">⏯️</div>
+        <h3>Checkpoint-Resume</h3>
+        <p>LangGraph sichert den Zustand nach jedem Schritt – abgebrochene Läufe setzen genau dort wieder auf, statt neu zu starten.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ico">🐳</div>
+        <h3>Docker-ready</h3>
+        <p>Reproduzierbare Umgebung per <code>docker compose</code>, inklusive eigenem Profil für den vollständig lokalen Ollama-Betrieb.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ico">🌍</div>
+        <h3>Globale Märkte</h3>
+        <p>Jeder von Yahoo Finance abgedeckte Markt – US, HK, Tokio, London, China-A-Aktien und Krypto – über die Ticker-Endung.</p>
+      </div>
+    </div>
+
+    <!-- Markets -->
+    <div class="markets reveal" style="margin-top:34px">
+      <div class="market"><div class="m">USA</div><div class="t">AAPL · SPY</div></div>
+      <div class="market"><div class="m">Hongkong</div><div class="t">0700.HK</div></div>
+      <div class="market"><div class="m">Tokio</div><div class="t">7203.T</div></div>
+      <div class="market"><div class="m">London</div><div class="t">AZN.L</div></div>
+      <div class="market"><div class="m">China A</div><div class="t">600519.SS</div></div>
+      <div class="market"><div class="m">Krypto</div><div class="t">BTC-USD</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- PROVIDER -->
+<section class="section" id="provider" style="background:var(--bg-2);border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">LLM-Provider</div>
+      <h2>Dein Modell, deine Regeln</h2>
+      <p>Von führenden Cloud-Modellen bis zum vollständig lokalen Betrieb – alle über eine einheitliche Konfiguration.</p>
+    </div>
+
+    <div class="prov-wrap reveal">
+      <div class="prov-grid">
+        <span class="chip"><span class="d"></span>OpenAI · GPT</span>
+        <span class="chip"><span class="d"></span>Anthropic · Claude</span>
+        <span class="chip"><span class="d"></span>Google · Gemini</span>
+        <span class="chip"><span class="d"></span>xAI · Grok</span>
+        <span class="chip"><span class="d"></span>DeepSeek</span>
+        <span class="chip"><span class="d"></span>Qwen · DashScope</span>
+        <span class="chip"><span class="d"></span>GLM · Zhipu</span>
+        <span class="chip"><span class="d"></span>MiniMax</span>
+        <span class="chip"><span class="d"></span>OpenRouter</span>
+        <span class="chip"><span class="d"></span>NVIDIA · Groq · Mistral</span>
+        <span class="chip"><span class="d"></span>AWS Bedrock</span>
+        <span class="chip"><span class="d"></span>Azure OpenAI</span>
+        <span class="chip"><span class="d"></span>vLLM · LM Studio · llama.cpp</span>
+        <span class="chip" style="border-color:var(--brand);color:var(--brand)"><span class="d"></span>Ollama · lokal &amp; offline</span>
+      </div>
+
+      <div class="local-badge">
+        <div class="ico">🔒</div>
+        <div>
+          <b>Vollständig lokal, ohne Kompromisse.</b>
+          <p>Setze <code style="font-family:var(--mono);color:var(--brand)">llm_provider: "ollama"</code> oder <code style="font-family:var(--mono);color:var(--brand)">"openai_compatible"</code> und richte den Endpoint auf deinen eigenen Server (vLLM, LM Studio, llama.cpp). Kein Key nötig, keine Daten verlassen deine Infrastruktur.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="section" style="padding-top:20px">
+  <div class="wrap">
+    <div class="cta reveal">
+      <h2>Starte deinen ersten lokalen Lauf</h2>
+      <p>Ein Klon, ein Befehl, ein komplettes KI-Handelsdesk in deinem Terminal. Open Source unter Apache 2.0.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/TauricResearch/TradingAgents" target="_blank" rel="noopener">Auf GitHub loslegen →</a>
+        <a class="btn btn-ghost" href="#lokal">Installations-Schritte</a>
+      </div>
+    </div>
+
+    <div class="disclaimer reveal">
+      ⚠️ <b>Hinweis:</b> TradingAgents ist ein Forschungs-Framework. Die Handelsperformance variiert je nach gewähltem Sprachmodell, Temperatur, Handelszeitraum, Datenqualität und weiteren nicht-deterministischen Faktoren. Es ist <b>keine</b> Finanz-, Anlage- oder Handelsberatung.
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <div class="brand"><span class="logo">TA</span> TradingAgents</div>
+    <div class="foot-links">
+      <a href="#lokal">Lokal betreiben</a>
+      <a href="#agenten">Agenten</a>
+      <a href="#features">Features</a>
+      <a href="#provider">Provider</a>
+      <a href="https://github.com/TauricResearch/TradingAgents" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://arxiv.org/abs/2412.20138" target="_blank" rel="noopener">Paper</a>
+    </div>
+    <div class="foot-copy">Multi-Agents LLM Financial Trading Framework · Apache 2.0</div>
+  </div>
+</footer>
+
+<script>
+  // Progressive enhancement: only hide reveal elements once JS is running
+  document.documentElement.classList.add('js');
+
+  // Tab switching
+  document.querySelectorAll('.code-tabs button').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var tab=btn.getAttribute('data-tab');
+      document.querySelectorAll('.code-tabs button').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.code-pane').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(tab).classList.add('active');
+    });
+  });
+
+  // Reveal on scroll
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  },{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>

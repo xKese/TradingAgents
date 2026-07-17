@@ -177,6 +177,25 @@ python -m cli.main     # alternative: run directly from source
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
+### Local Web UI
+
+Prefer a browser over the terminal? TradingAgents ships an optional local web UI
+that runs the exact same pipeline — pick a ticker, provider, models, depth and
+analysts in a form, watch the agents stream their progress live, and read the
+rendered reports and final decision in the page.
+
+```bash
+pip install ".[web]"   # one-time: installs FastAPI + uvicorn
+tradingagents serve    # then open http://127.0.0.1:8000
+```
+
+It binds to `127.0.0.1` (localhost) only by default — it is a single-user local
+tool with no auth layer. Point it elsewhere with `--host`/`--port`, and use
+`--no-browser` to skip auto-opening the page. For a fully local, zero-cost run,
+select the **Ollama** provider (no API key required). The web UI reuses the same
+provider/model catalog, key auto-detection, and report writer as the CLI, so a
+browser run produces the same on-disk reports under `results_dir`.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.

@@ -44,15 +44,22 @@ dev = [
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
+# Local web UI (FastAPI + uvicorn). Optional so the core install stays lean:
+# pip install "tradingagents[web]", then run `tradingagents serve`.
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "webapp*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+webapp = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

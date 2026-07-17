@@ -28,6 +28,7 @@
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
 ## News
+- [2026-07] **Local web UI** added: run the full multi-agent pipeline from your browser with `tradingagents serve` (optional `pip install ".[web]"`). Pick ticker, provider, models, depth and analysts in a form, watch the agents stream live, and read the rendered reports and decision — localhost-only, works fully offline with Ollama or LM Studio. See [Local Web UI](#local-web-ui).
 - [2026-07] **TradingAgents v0.3.1** released with correctness and stability fixes: Alpha Vantage look-ahead filtering, graph-router crash-safety, graph-shape-aware checkpoint resume, working crypto sentiment sources, a configurable LLM retry budget, Bedrock API-key auth, and Claude Sonnet 5 / Fable 5 support. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 - [2026-06] **TradingAgents v0.3.0** released with a verified data-access contract, an expanded provider registry (NVIDIA, Kimi, Groq, Mistral, Bedrock, and any OpenAI-compatible endpoint), FRED and Polymarket data vendors, a current-generation model catalog, and a CI gate.
 - [2026-05] **TradingAgents v0.2.5** released with the grounded Sentiment Analyst, GPT-5.5 etc. model coverage, Qwen/GLM/MiniMax dual-region support, `TRADINGAGENTS_*` env-var configurability with API-key auto-detection, remote Ollama support, non-US alpha benchmarks, and ticker path-traversal hardening.
@@ -53,7 +54,7 @@
 
 <div align="center">
 
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
+🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🖥️ [Local Web UI](#local-web-ui) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
 
 </div>
 
@@ -191,10 +192,41 @@ tradingagents serve    # then open http://127.0.0.1:8000
 
 It binds to `127.0.0.1` (localhost) only by default — it is a single-user local
 tool with no auth layer. Point it elsewhere with `--host`/`--port`, and use
-`--no-browser` to skip auto-opening the page. For a fully local, zero-cost run,
-select the **Ollama** provider (no API key required). The web UI reuses the same
-provider/model catalog, key auto-detection, and report writer as the CLI, so a
-browser run produces the same on-disk reports under `results_dir`.
+`--no-browser` to skip auto-opening the page.
+
+#### With Docker
+
+The image bundles the web extra, so you can serve the UI with Compose:
+
+```bash
+cp .env.example .env                    # add your API keys (or use Ollama)
+docker compose --profile web up         # then open http://localhost:8000
+```
+
+Change the host port with `TRADINGAGENTS_WEB_PORT` (e.g. `TRADINGAGENTS_WEB_PORT=9000
+docker compose --profile web up`). For a fully local run with a containerized model
+backend, also start the Ollama profile and point the app at it:
+
+```bash
+# in .env: OLLAMA_BASE_URL=http://ollama:11434/v1
+docker compose --profile web --profile ollama up
+```
+
+Then select the **Ollama** provider in the form. (The interactive CLI still runs the
+same way: `docker compose run --rm tradingagents`.)
+
+For a fully local, zero-cost run, pick a local model backend in the provider
+dropdown — no API key required:
+
+- **Ollama** — the endpoint is prefilled (`http://localhost:11434/v1`); choose a
+  pulled model or enter a custom model ID.
+- **OpenAI-compatible** — for **LM Studio** (`http://localhost:1234/v1`), vLLM
+  (`http://localhost:8000/v1`), or llama.cpp. The URL is prefilled with the LM
+  Studio default; enter the model ID your server currently serves.
+
+The web UI reuses the same provider/model catalog, key auto-detection, and
+report writer as the CLI, so a browser run produces the same on-disk reports
+under `results_dir`.
 
 ### Markets and tickers
 

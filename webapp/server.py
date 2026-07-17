@@ -96,7 +96,11 @@ def api_symbol_search(q: str = "") -> JSONResponse:
     except AlphaVantageRateLimitError:
         note = {"type": "rate_limit", "text": "Alpha-Vantage-Limit erreicht — kurz warten."}
     except AlphaVantageNotConfiguredError:
-        note = {"type": "no_key", "text": "Symbol-Suche benötigt einen gültigen ALPHA_VANTAGE_API_KEY."}
+        if os.getenv("ALPHA_VANTAGE_API_KEY"):
+            # Key is present but Alpha Vantage rejected it (invalid / bad format).
+            note = {"type": "bad_key", "text": "Alpha Vantage hat den Key abgelehnt (ungültig oder falsches Format)."}
+        else:
+            note = {"type": "no_key", "text": "Kein ALPHA_VANTAGE_API_KEY im Server-Prozess (Container neu erstellen?)."}
     except Exception:
         note = {"type": "error", "text": "Symbol-Suche momentan nicht verfügbar."}
     return JSONResponse({"results": [], "note": note})

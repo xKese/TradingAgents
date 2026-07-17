@@ -28,6 +28,12 @@ class AlphaVantageNotConfiguredError(VendorNotConfiguredError):
 def get_api_key() -> str:
     """Retrieve the API key for Alpha Vantage from environment variables."""
     api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+    if api_key:
+        # Strip whitespace and surrounding quotes: docker-compose's env_file does
+        # NOT strip quotes, so ALPHA_VANTAGE_API_KEY="key" reaches the process
+        # with the quotes attached and Alpha Vantage rejects it. Real keys are
+        # alphanumeric with none of these characters, so this is safe.
+        api_key = api_key.strip().strip('"').strip("'").strip()
     if not api_key:
         raise AlphaVantageNotConfiguredError(
             "ALPHA_VANTAGE_API_KEY environment variable is not set."

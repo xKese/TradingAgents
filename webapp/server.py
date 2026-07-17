@@ -24,6 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cli.stats_handler import StatsCallbackHandler
+from tradingagents.dataflows.alpha_vantage import get_symbol_search
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.llm_clients.api_key_env import get_api_key_env
@@ -67,6 +68,22 @@ def api_models(provider: str) -> JSONResponse:
 @app.get("/api/asset-type")
 def api_asset_type(ticker: str) -> JSONResponse:
     return JSONResponse({"asset_type": catalog.asset_type_for(ticker)})
+
+
+@app.get("/api/symbol-search")
+def api_symbol_search(q: str = "") -> JSONResponse:
+    # Ticker autocomplete via Alpha Vantage SYMBOL_SEARCH. This is a soft,
+    # additive convenience: any failure (no ALPHA_VANTAGE_API_KEY, rate limit,
+    # network blip) degrades to no suggestions — the ticker field still accepts
+    # free text and the run pipeline is unaffected.
+    term = q.strip()
+    if len(term) < 2:
+        return JSONResponse({"results": []})
+    try:
+        results = get_symbol_search(term)
+    except Exception:
+        results = []
+    return JSONResponse({"results": results})
 
 
 # --------------------------------------------------------------------------- #

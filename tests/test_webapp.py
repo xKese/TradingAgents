@@ -3,9 +3,15 @@ SSE streaming endpoint (driven by a fake graph so no LLM is needed)."""
 
 import pytest
 from langchain_core.messages import AIMessage
-from starlette.testclient import TestClient
 
-from webapp import catalog, run_config, server
+# The web UI is an optional extra (pip install ".[web]"). Skip the whole module
+# when FastAPI/Starlette aren't installed so the core test suite still passes.
+pytest.importorskip("fastapi")
+pytest.importorskip("starlette")
+
+from starlette.testclient import TestClient  # noqa: E402
+
+from webapp import catalog, run_config, server  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #

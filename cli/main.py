@@ -1267,6 +1267,40 @@ def run_analysis(checkpoint: bool | None = None):
         display_complete_report(final_state)
 
 
+def _run_analyze(checkpoint: bool | None, clear_checkpoints: bool) -> None:
+    """Shared analyze flow used by both the bare invocation and `analyze`."""
+    if clear_checkpoints:
+        from tradingagents.graph.checkpointer import clear_all_checkpoints
+        n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
+        console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
+    run_analysis(checkpoint=checkpoint)
+
+
+@app.callback(invoke_without_command=True)
+def _default(
+    ctx: typer.Context,
+    checkpoint: bool | None = typer.Option(
+        None,
+        "--checkpoint/--no-checkpoint",
+        help="Enable/disable checkpoint-resume (save state after each node so a "
+        "crashed run can resume). Omit to honor TRADINGAGENTS_CHECKPOINT_ENABLED.",
+    ),
+    clear_checkpoints: bool = typer.Option(
+        False,
+        "--clear-checkpoints",
+        help="Delete all saved checkpoints before running (force fresh start).",
+    ),
+):
+    """Run the interactive analysis when no subcommand is given.
+
+    Keeps `tradingagents` (bare) launching the interactive CLI while allowing
+    subcommands like `tradingagents serve` and `tradingagents analyze`.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_analyze(checkpoint, clear_checkpoints)
+
+
 @app.command()
 def analyze(
     checkpoint: bool | None = typer.Option(
@@ -1281,11 +1315,52 @@ def analyze(
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
 ):
-    if clear_checkpoints:
-        from tradingagents.graph.checkpointer import clear_all_checkpoints
-        n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
-        console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint)
+    """Run an interactive analysis (same as the bare `tradingagents`)."""
+    _run_analyze(checkpoint, clear_checkpoints)
+
+
+@app.command()
+def serve(
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Interface to bind (default localhost only)."
+    ),
+    port: int = typer.Option(8000, "--port", help="Port to listen on."),
+    open_browser: bool = typer.Option(
+        True, "--open-browser/--no-browser", help="Open the UI in a browser on start."
+    ),
+):
+    """Start the local web UI to run TradingAgents from a browser.
+
+    Requires the optional web dependencies: pip install "tradingagents\\[web]".
+    """
+    try:
+        import uvicorn  # noqa: F401
+
+        from webapp.server import app as web_app  # noqa: F401
+    except ModuleNotFoundError as exc:
+        console.print(
+            "[red]The web UI needs extra dependencies.[/red]\n"
+            'Install them with:  [bold]pip install "tradingagents\\[web]"[/bold]\n'
+            f"[dim]({exc})[/dim]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    url = f"http://{host}:{port}"
+    console.print(f"[green]TradingAgents web UI:[/green] [bold]{url}[/bold]")
+    console.print("[dim]Press Ctrl+C to stop.[/dim]")
+
+    if open_browser:
+        import threading
+        import webbrowser
+
+        # Open once uvicorn has had a moment to bind. A daemon timer keeps this
+        # from blocking startup or lingering after the server exits.
+        browser_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
+        threading.Timer(
+            1.0, lambda: webbrowser.open(f"http://{browser_host}:{port}")
+        ).start()
+
+    uvicorn.run("webapp.server:app", host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

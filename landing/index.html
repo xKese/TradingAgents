@@ -361,11 +361,19 @@
             <p>Ein <code>docker compose run</code> genügt – inklusive <code>--profile ollama</code> für den komplett lokalen Betrieb.</p>
           </div>
         </div>
+        <div class="step">
+          <div class="n">6</div>
+          <div>
+            <h3>Lieber im Browser?</h3>
+            <p>Mit <code>pip install ".[web]"</code> und <code>tradingagents serve</code> startest du eine lokale Web-Konsole unter <code>127.0.0.1:8000</code> – Formular, Live-Fortschritt der Agenten und gerenderte Berichte.</p>
+          </div>
+        </div>
       </div>
 
       <div class="code-card reveal">
         <div class="code-tabs">
           <button class="active" data-tab="cli">CLI</button>
+          <button data-tab="web">Web-UI</button>
           <button data-tab="docker">Docker</button>
           <button data-tab="python">Python</button>
         </div>
@@ -382,6 +390,16 @@
 <span class="p">$</span> export <span class="k">ANTHROPIC_API_KEY</span>=...<br><br>
 <span class="c"># 4 · Interaktive CLI starten</span><br>
 <span class="p">$</span> tradingagents
+          </div>
+          <div class="code-pane" id="web">
+<span class="c"># Lokale Web-Konsole (Browser-UI)</span><br>
+<span class="p">$</span> pip install ".<span class="k">[web]</span>"<br><br>
+<span class="c"># Server starten – bindet nur auf localhost</span><br>
+<span class="p">$</span> tradingagents serve<br><br>
+<span class="c"># dann im Browser öffnen:</span><br>
+<span class="p">→</span> http://127.0.0.1:8000<br><br>
+<span class="c"># Provider im Formular wählen –</span><br>
+<span class="c"># Ollama oder LM Studio für 100% lokal.</span>
           </div>
           <div class="code-pane" id="docker">
 <span class="c"># .env mit deinen Keys befüllen</span><br>

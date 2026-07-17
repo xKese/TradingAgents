@@ -54,6 +54,9 @@
   .ac-item .meta{font-size:11.5px;color:var(--text-mute)}
   .ac-item.active,.ac-item:hover{background:var(--brand-soft)}
   .ac-item.active .sym,.ac-item:hover .sym{color:var(--brand)}
+  .ac-note{padding:9px 12px;font-size:12px;color:var(--amber);cursor:default;border-bottom:1px solid var(--border-soft)}
+  .ac-note:last-child{border-bottom:none}
+  .ac-note:hover{background:none}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .provider-note{margin-top:7px;font-size:12px;display:flex;gap:7px;align-items:flex-start}
   .provider-note.ok{color:var(--brand)}
@@ -383,9 +386,9 @@ $("ticker").addEventListener("change",async()=>{
 // ---------- symbol search (autocomplete via Alpha Vantage) ----------
 (function(){
   const inp=$("ticker"), box=$("ticker-results");
-  let items=[], active=-1, timer=null, seq=0;
+  let items=[], note=null, active=-1, timer=null, seq=0;
 
-  function close(){box.classList.remove("open");box.innerHTML="";items=[];active=-1;}
+  function close(){box.classList.remove("open");box.innerHTML="";items=[];note=null;active=-1;}
   function pick(it){
     inp.value=it.symbol;
     close();
@@ -393,6 +396,11 @@ $("ticker").addEventListener("change",async()=>{
   }
   function render(){
     box.innerHTML="";
+    if(note){ // surface why there are no suggestions (rate limit, key, error)
+      const n=document.createElement("div");
+      n.className="ac-item ac-note"; n.textContent=note.text||"Symbol-Suche nicht verfügbar.";
+      box.appendChild(n);
+    }
     items.forEach((it,idx)=>{
       const el=document.createElement("div");
       el.className="ac-item"+(idx===active?" active":"");
@@ -405,15 +413,16 @@ $("ticker").addEventListener("change",async()=>{
       el.addEventListener("mousedown",e=>{e.preventDefault();pick(it);});
       box.appendChild(el);
     });
-    box.classList.toggle("open",items.length>0);
-    if(active>=0 && box.children[active]) box.children[active].scrollIntoView({block:"nearest"});
+    box.classList.toggle("open",items.length>0||!!note);
+    const activeEl=box.querySelector(".ac-item.active");
+    if(activeEl) activeEl.scrollIntoView({block:"nearest"});
   }
   async function search(term){
     const mine=++seq;
     try{
       const r=await(await fetch(`/api/symbol-search?q=${encodeURIComponent(term)}`)).json();
       if(mine!==seq) return; // a newer keystroke already fired
-      items=(r.results||[]).slice(0,10); active=-1; render();
+      items=(r.results||[]).slice(0,10); note=r.note||null; active=-1; render();
     }catch(e){ if(mine===seq) close(); }
   }
   inp.addEventListener("input",()=>{

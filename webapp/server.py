@@ -25,6 +25,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.dataflows.alpha_vantage import get_symbol_search
+from tradingagents.dataflows.alpha_vantage_common import (
+    AlphaVantageNotConfiguredError,
+    AlphaVantageRateLimitError,
+)
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.llm_clients.api_key_env import get_api_key_env
@@ -41,9 +45,15 @@ app = FastAPI(title="TradingAgents — Local Web UI", docs_url=None, redoc_url=N
 # --------------------------------------------------------------------------- #
 # Static + catalog endpoints
 # --------------------------------------------------------------------------- #
+# Serve the SPA with "no-cache" so a rebuilt UI is never masked by a stale
+# browser copy. FileResponse still sends ETag/Last-Modified, so unchanged files
+# revalidate cheaply (304) — this only forces the browser to check.
+_NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
 
 
 @app.get("/assets/{name}")
@@ -52,7 +62,7 @@ def asset(name: str) -> FileResponse:
     target = (STATIC_DIR / name).resolve()
     if target.parent != STATIC_DIR.resolve() or not target.is_file():
         return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(target)
+    return FileResponse(target, headers=_NO_CACHE)
 
 
 @app.get("/api/catalog")
@@ -72,18 +82,24 @@ def api_asset_type(ticker: str) -> JSONResponse:
 
 @app.get("/api/symbol-search")
 def api_symbol_search(q: str = "") -> JSONResponse:
-    # Ticker autocomplete via Alpha Vantage SYMBOL_SEARCH. This is a soft,
-    # additive convenience: any failure (no ALPHA_VANTAGE_API_KEY, rate limit,
-    # network blip) degrades to no suggestions — the ticker field still accepts
-    # free text and the run pipeline is unaffected.
+    # Ticker autocomplete via Alpha Vantage SYMBOL_SEARCH. Additive convenience:
+    # the ticker field still accepts free text and the run pipeline is
+    # unaffected. Any failure degrades to no results, but we surface *why* via
+    # ``note`` so a missing/invalid key or rate limit isn't silently
+    # indistinguishable from "no matches".
     term = q.strip()
     if len(term) < 2:
-        return JSONResponse({"results": []})
+        return JSONResponse({"results": [], "note": None})
     try:
         results = get_symbol_search(term)
+        return JSONResponse({"results": results, "note": None})
+    except AlphaVantageRateLimitError:
+        note = {"type": "rate_limit", "text": "Alpha-Vantage-Limit erreicht — kurz warten."}
+    except AlphaVantageNotConfiguredError:
+        note = {"type": "no_key", "text": "Symbol-Suche benötigt einen gültigen ALPHA_VANTAGE_API_KEY."}
     except Exception:
-        results = []
-    return JSONResponse({"results": results})
+        note = {"type": "error", "text": "Symbol-Suche momentan nicht verfügbar."}
+    return JSONResponse({"results": [], "note": note})
 
 
 # --------------------------------------------------------------------------- #

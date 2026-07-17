@@ -27,6 +27,20 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_ANTHROPIC_EFFORT":        "anthropic_effort",
 }
 
+# Data-vendor selection via environment. These map to nested keys under the
+# ``data_vendors`` config dict, so a category can be switched to Alpha Vantage
+# (or given an ordered fallback like "yfinance,alpha_vantage") straight from a
+# .env file / docker-compose without editing code. Values pass through verbatim
+# — the vendor chain is used exactly as written (see ``data_vendors`` below).
+_VENDOR_ENV_OVERRIDES = {
+    "TRADINGAGENTS_VENDOR_CORE_STOCK_APIS":      "core_stock_apis",
+    "TRADINGAGENTS_VENDOR_TECHNICAL_INDICATORS": "technical_indicators",
+    "TRADINGAGENTS_VENDOR_FUNDAMENTAL_DATA":     "fundamental_data",
+    "TRADINGAGENTS_VENDOR_NEWS_DATA":            "news_data",
+    "TRADINGAGENTS_VENDOR_MACRO_DATA":           "macro_data",
+    "TRADINGAGENTS_VENDOR_PREDICTION_MARKETS":   "prediction_markets",
+}
+
 
 _BOOL_TRUE = ("true", "1", "yes", "on")
 _BOOL_FALSE = ("false", "0", "no", "off")
@@ -65,6 +79,14 @@ def _apply_env_overrides(config: dict) -> dict:
             config[key] = _coerce(raw, config.get(key))
         except ValueError as exc:
             raise ValueError(f"Invalid value for {env_var}: {exc}") from exc
+
+    vendors = config.get("data_vendors")
+    if isinstance(vendors, dict):
+        for env_var, category in _VENDOR_ENV_OVERRIDES.items():
+            raw = os.environ.get(env_var)
+            if raw is None or raw.strip() == "":
+                continue
+            vendors[category] = raw.strip()
     return config
 
 

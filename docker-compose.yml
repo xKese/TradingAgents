@@ -3,6 +3,12 @@ services:
     build: .
     env_file:
       - .env
+    # Reach a local model server (LM Studio, vLLM, llama.cpp) running on the
+    # host: use http://host.docker.internal:<port>/v1 as the backend URL. The
+    # mapping below makes that name resolve on Linux too (already automatic on
+    # Docker Desktop for Mac/Windows).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
     tty: true
@@ -17,6 +23,10 @@ services:
     command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
     ports:
       - "${TRADINGAGENTS_WEB_PORT:-8000}:8000"
+    # Same host-gateway mapping so a browser run can target LM Studio / vLLM on
+    # the host via http://host.docker.internal:<port>/v1.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
     profiles:

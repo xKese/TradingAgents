@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [Unreleased]
+
+### Added
+
+- **Data vendors are selectable from the environment.** New
+  `TRADINGAGENTS_VENDOR_*` variables (`CORE_STOCK_APIS`, `TECHNICAL_INDICATORS`,
+  `FUNDAMENTAL_DATA`, `NEWS_DATA`, `MACRO_DATA`, `PREDICTION_MARKETS`) route each
+  data category through a chosen vendor without editing `default_config.py`, so
+  an **Alpha Vantage** key can be wired up entirely from `.env` / docker-compose.
+  Values pass through verbatim, so ordered fallback chains
+  (`yfinance,alpha_vantage`) still work. `ALPHA_VANTAGE_API_KEY` and these vars
+  are now documented in `.env.example`.
+- **LM Studio (and other host-local model servers) reachable from Docker.** The
+  `tradingagents` and `tradingagents-web` compose services now map
+  `host.docker.internal` to the host gateway (needed on Linux), so a
+  containerised run can target a model server on the host at
+  `http://host.docker.internal:<port>/v1`.
+
 ## [0.3.1] — 2026-07-05
 
 Correctness and stability patch: data look-ahead, graph-router crash-safety,

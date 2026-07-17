@@ -162,7 +162,21 @@ For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_pro
 
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 
-For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), use `llm_provider: "openai_compatible"` and set the endpoint via `backend_url` (or `TRADINGAGENTS_LLM_BACKEND_URL`), e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; set `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one.
+For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), use `llm_provider: "openai_compatible"` and set the endpoint via `backend_url` (or `TRADINGAGENTS_LLM_BACKEND_URL`), e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; set `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one. When the app runs in Docker but LM Studio runs on the host, use `http://host.docker.internal:1234/v1` instead of `localhost` (the compose file maps that name on Linux too).
+
+#### Data vendors (Alpha Vantage)
+
+Each data category (stock prices, technical indicators, fundamentals, news, macro) is served by a configurable vendor. The defaults use `yfinance` (keyless) for market data and `fred` for macro. To route a category through your **Alpha Vantage** key, set the key and pick the vendor — no code change needed:
+
+```bash
+export ALPHA_VANTAGE_API_KEY=...                          # your key
+export TRADINGAGENTS_VENDOR_CORE_STOCK_APIS=alpha_vantage # stock prices
+export TRADINGAGENTS_VENDOR_FUNDAMENTAL_DATA=alpha_vantage
+export TRADINGAGENTS_VENDOR_TECHNICAL_INDICATORS=alpha_vantage
+export TRADINGAGENTS_VENDOR_NEWS_DATA=alpha_vantage
+```
+
+Setting the key alone changes nothing — a category is only queried against Alpha Vantage once its `TRADINGAGENTS_VENDOR_*` var selects it. Each value is the exact vendor chain; list several for ordered fallback, e.g. `TRADINGAGENTS_VENDOR_NEWS_DATA=yfinance,alpha_vantage`. These map onto the `data_vendors` block in `tradingagents/default_config.py`, which you can still edit directly (or override per-tool via `tool_vendors`).
 
 Alternatively, copy `.env.example` to `.env` and fill in your keys:
 ```bash
@@ -214,6 +228,14 @@ docker compose --profile web --profile ollama up
 
 Then select the **Ollama** provider in the form. (The interactive CLI still runs the
 same way: `docker compose run --rm tradingagents`.)
+
+To use **LM Studio** (or any OpenAI-compatible server) running on your host from the
+Docker web UI, select the **OpenAI-compatible** provider and set the backend URL to
+`http://host.docker.internal:1234/v1` — the compose file already maps
+`host.docker.internal` to the host gateway (on Linux too), so the container can reach
+the server. You can also preset it in `.env` with
+`TRADINGAGENTS_LLM_PROVIDER=openai_compatible` and
+`TRADINGAGENTS_LLM_BACKEND_URL=http://host.docker.internal:1234/v1`.
 
 For a fully local, zero-cost run, pick a local model backend in the provider
 dropdown — no API key required:

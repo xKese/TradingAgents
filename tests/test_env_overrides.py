@@ -13,6 +13,8 @@ def _reload_with_env(monkeypatch, **overrides):
     """Set/clear env vars then reload default_config to re-evaluate DEFAULT_CONFIG."""
     for key in list(default_config_module._ENV_OVERRIDES):
         monkeypatch.delenv(key, raising=False)
+    for key in list(default_config_module._VENDOR_ENV_OVERRIDES):
+        monkeypatch.delenv(key, raising=False)
     for key, val in overrides.items():
         monkeypatch.setenv(key, val)
     return importlib.reload(default_config_module)
@@ -127,3 +129,43 @@ def test_unknown_env_var_is_ignored(monkeypatch):
         TRADINGAGENTS_NONEXISTENT_KEY="oops",
     )
     assert "nonexistent_key" not in dc.DEFAULT_CONFIG
+
+
+def test_vendor_defaults_without_env(monkeypatch):
+    """Unset vendor vars keep the built-in data_vendors defaults."""
+    dc = _reload_with_env(monkeypatch)
+    assert dc.DEFAULT_CONFIG["data_vendors"]["core_stock_apis"] == "yfinance"
+    assert dc.DEFAULT_CONFIG["data_vendors"]["macro_data"] == "fred"
+
+
+def test_vendor_override_selects_alpha_vantage(monkeypatch):
+    """A single category can be switched to Alpha Vantage via env, others untouched."""
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_VENDOR_CORE_STOCK_APIS="alpha_vantage",
+        TRADINGAGENTS_VENDOR_FUNDAMENTAL_DATA="alpha_vantage",
+    )
+    vendors = dc.DEFAULT_CONFIG["data_vendors"]
+    assert vendors["core_stock_apis"] == "alpha_vantage"
+    assert vendors["fundamental_data"] == "alpha_vantage"
+    # Untouched categories keep their defaults.
+    assert vendors["technical_indicators"] == "yfinance"
+    assert vendors["news_data"] == "yfinance"
+
+
+def test_vendor_override_accepts_ordered_fallback_chain(monkeypatch):
+    """The value passes through verbatim, so an ordered chain is preserved."""
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_VENDOR_NEWS_DATA="yfinance,alpha_vantage",
+    )
+    assert dc.DEFAULT_CONFIG["data_vendors"]["news_data"] == "yfinance,alpha_vantage"
+
+
+def test_vendor_override_empty_value_is_passthrough(monkeypatch):
+    """An empty vendor value must not clobber the built-in default."""
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_VENDOR_CORE_STOCK_APIS="",
+    )
+    assert dc.DEFAULT_CONFIG["data_vendors"]["core_stock_apis"] == "yfinance"

@@ -19,6 +19,7 @@ from cli.utils import (
 )
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import MODEL_OPTIONS, get_model_options
+from tradingagents.runtime import running_in_docker
 
 # Research-depth options mirror cli.utils.select_research_depth's DEPTH_OPTIONS.
 # Kept here as data (the CLI defines them inline inside a questionary prompt).
@@ -143,6 +144,10 @@ def catalog(asset_type: str = "stock") -> dict:
         "depths": depths(),
         "analysts": analysts(asset_type),
         "default_analysts": default_analyst_values(),
+        # When the server runs inside a container, the form prefills local
+        # backend URLs with host.docker.internal instead of localhost so a
+        # browser run reaches a model server on the Docker host.
+        "in_docker": running_in_docker(),
     }
 
 

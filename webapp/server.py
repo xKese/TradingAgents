@@ -18,6 +18,7 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -27,6 +28,7 @@ from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.reporting import write_report_tree
+from tradingagents.runtime import running_in_docker
 from webapp import catalog
 from webapp.run_config import RunRequestError, build_run
 
@@ -288,6 +290,44 @@ def _preflight_key_error(provider: str) -> str | None:
     return None
 
 
+def _is_loopback_url(url: str | None) -> bool:
+    """Whether ``url``'s host is a loopback address (localhost / 127.0.0.1)."""
+    if not url:
+        return False
+    to_parse = url if "://" in url else "http://" + url
+    host = (urlparse(to_parse).hostname or "").lower()
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def _friendly_error_message(exc: Exception, spec: dict) -> str:
+    """Turn an SDK exception into an actionable message for the UI.
+
+    A bare ``APIConnectionError: Connection error.`` tells the user nothing;
+    when the LLM endpoint is unreachable, name the backend URL that failed and
+    the two usual causes (server not running / Docker loopback), in German to
+    match the rest of the UI.
+    """
+    raw = f"{type(exc).__name__}: {exc}"
+    if type(exc).__name__ != "APIConnectionError":
+        return raw
+
+    backend_url = spec.get("config", {}).get("backend_url") or "(Standard-Endpunkt)"
+    lines = [
+        f"Verbindung zum LLM-Endpunkt fehlgeschlagen: {backend_url}",
+        "Läuft der Modell-Server (z. B. LM Studio, Ollama, vLLM) und ist ein "
+        "Modell geladen?",
+    ]
+    if _is_loopback_url(backend_url) and running_in_docker():
+        lines.append(
+            "Hinweis: Die App läuft in Docker. 'localhost' zeigt dort auf den "
+            "Container, nicht auf den Host. Verwende "
+            "'http://host.docker.internal:<Port>/v1' als Backend-URL, damit der "
+            "Server auf dem Host erreichbar ist."
+        )
+    lines.append(f"Details: {raw}")
+    return "\n".join(lines)
+
+
 def _run_worker(spec: dict, q: queue.Queue):
     """Execute the graph in a worker thread, pushing SSE events onto ``q``."""
 
@@ -393,9 +433,10 @@ def _run_worker(spec: dict, q: queue.Queue):
             },
         )
     except Exception as exc:  # noqa: BLE001 — surface any run failure to the UI
+        message = _friendly_error_message(exc, spec)
         emit(
             "error",
-            {"message": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc()},
+            {"message": message, "trace": traceback.format_exc()},
         )
     finally:
         q.put(("done", {}))

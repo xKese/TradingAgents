@@ -69,6 +69,33 @@ _ALIASES = {
     "FRA40": "^FCHI", "EU50": "^STOXX50E", "HK50": "^HSI",
 }
 
+# Alpha Vantage's SYMBOL_SEARCH returns international tickers with its own
+# exchange suffixes (``ADS.FRK``, ``ADS.DEX``, ``TSCO.LON``), which Yahoo does
+# not recognise — Yahoo uses a different suffix per exchange (``.F``, ``.DE``,
+# ``.L``). Users pick an Alpha Vantage symbol from the web UI's search but often
+# fetch prices via yfinance, so translate the exchange suffix here. Only the
+# suffix is remapped; the base ticker is untouched. Unknown suffixes are left
+# alone (fail loudly rather than mapping to the wrong exchange), and Yahoo-native
+# suffixes (``.DE``, ``.B``) are not keys here, so already-correct symbols pass
+# through unchanged. Extend by adding rows.
+_AV_YAHOO_SUFFIX = {
+    "LON": "L",    # London Stock Exchange
+    "DEX": "DE",   # XETRA
+    "FRK": "F",    # Frankfurt
+    "PAR": "PA",   # Euronext Paris
+    "AMS": "AS",   # Euronext Amsterdam
+    "BRU": "BR",   # Euronext Brussels
+    "LIS": "LS",   # Euronext Lisbon
+    "MIL": "MI",   # Borsa Italiana (Milan)
+    "MAD": "MC",   # BME (Madrid)
+    "SAO": "SA",   # B3 (São Paulo)
+    "SHH": "SS",   # Shanghai
+    "SHZ": "SZ",   # Shenzhen
+    "TRT": "TO",   # Toronto (TSX)
+    "TRV": "V",    # TSX Venture
+    "BSE": "BO",   # Bombay Stock Exchange
+}
+
 # Yahoo symbols may contain letters, digits, and these structural characters.
 _YAHOO_SAFE = re.compile(r"^[A-Za-z0-9._\-\^=]+$")
 
@@ -109,7 +136,8 @@ def normalize_symbol(raw: str) -> str:
       2. Crypto rule: a known crypto base quoted in USD/USDT/USDC (dashed or
          not) -> ``BASE-USD``.
       3. Forex rule: six letters that are two ISO currency codes -> ``PAIR=X``.
-      4. Otherwise the upper-cased symbol is returned unchanged (plain
+      4. Alpha Vantage exchange suffix -> Yahoo suffix (``ADS.FRK`` -> ``ADS.F``).
+      5. Otherwise the upper-cased symbol is returned unchanged (plain
          equities, ETFs, Yahoo-native symbols like ``GC=F`` or ``^GSPC``).
 
     A trailing ``+`` (broker CFD marker, e.g. ``XAUUSD+``) is stripped before
@@ -124,12 +152,16 @@ def normalize_symbol(raw: str) -> str:
     s = s.rstrip("+")
 
     crypto = _normalize_crypto(s)
+    av_suffix = s.rsplit(".", 1)[1] if "." in s else None
     if s in _ALIASES:
         canonical = _ALIASES[s]
     elif crypto is not None:
         canonical = crypto
     elif len(s) == 6 and s[:3] in _FOREX_CURRENCIES and s[3:] in _FOREX_CURRENCIES:
         canonical = f"{s}=X"
+    elif av_suffix in _AV_YAHOO_SUFFIX:
+        # Alpha Vantage exchange suffix -> Yahoo suffix (e.g. ADS.FRK -> ADS.F).
+        canonical = f"{s.rsplit('.', 1)[0]}.{_AV_YAHOO_SUFFIX[av_suffix]}"
     else:
         canonical = s
 

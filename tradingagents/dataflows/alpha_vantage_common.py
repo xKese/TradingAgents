@@ -5,6 +5,7 @@ from io import StringIO
 
 import pandas as pd
 import requests
+from dateutil import parser as date_parser
 
 from .errors import VendorNotConfiguredError, VendorRateLimitError
 
@@ -40,26 +41,27 @@ def get_api_key() -> str:
         )
     return api_key
 
+def parse_date(value) -> datetime:
+    """Leniently parse an LLM/app-supplied date into a ``datetime``.
+
+    Date arguments to the market/news tools are produced by the LLM and may
+    carry a trailing time or whitespace (``"2024-01-15 00:00:00"``,
+    ``"2024-01-15T00:00:00"``). A bare ``datetime.strptime(value, "%Y-%m-%d")``
+    rejects any trailing data with "unconverted data remains", which crashed the
+    Alpha Vantage stock path while the yfinance path (``pd.to_datetime``)
+    tolerated the same input. Parse leniently so both vendors behave alike.
+    """
+    if isinstance(value, datetime):
+        return value
+    return date_parser.parse(str(value).strip())
+
+
 def format_datetime_for_api(date_input) -> str:
-    """Convert various date formats to YYYYMMDDTHHMM format required by Alpha Vantage API."""
-    if isinstance(date_input, str):
-        # If already in correct format, return as-is
-        if len(date_input) == 13 and 'T' in date_input:
-            return date_input
-        # Try to parse common date formats
-        try:
-            dt = datetime.strptime(date_input, "%Y-%m-%d")
-            return dt.strftime("%Y%m%dT0000")
-        except ValueError:
-            try:
-                dt = datetime.strptime(date_input, "%Y-%m-%d %H:%M")
-                return dt.strftime("%Y%m%dT%H%M")
-            except ValueError:
-                raise ValueError(f"Unsupported date format: {date_input}") from None
-    elif isinstance(date_input, datetime):
-        return date_input.strftime("%Y%m%dT%H%M")
-    else:
-        raise ValueError(f"Date must be string or datetime object, got {type(date_input)}")
+    """Convert a date/datetime to the YYYYMMDDTHHMM format Alpha Vantage expects."""
+    # Already in the API's own YYYYMMDDTHHMM shape.
+    if isinstance(date_input, str) and len(date_input) == 13 and "T" in date_input:
+        return date_input
+    return parse_date(date_input).strftime("%Y%m%dT%H%M")
 
 class AlphaVantageRateLimitError(VendorRateLimitError):
     """Raised when the Alpha Vantage API rate limit is exceeded."""

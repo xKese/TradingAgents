@@ -1,4 +1,4 @@
-from .alpha_vantage_common import _make_api_request, format_datetime_for_api
+from .alpha_vantage_common import _make_api_request, format_datetime_for_api, parse_date
 
 
 def get_news(ticker, start_date, end_date) -> dict[str, str] | str:
@@ -36,10 +36,10 @@ def get_global_news(curr_date, look_back_days: int = 7, limit: int = 50) -> dict
     Returns:
         Dictionary containing global news sentiment data or JSON string.
     """
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     # Calculate start date
-    curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    curr_dt = parse_date(curr_date)
     start_dt = curr_dt - timedelta(days=look_back_days)
     start_date = start_dt.strftime("%Y-%m-%d")
 

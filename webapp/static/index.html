@@ -319,11 +319,13 @@ $("date").max = new Date().toISOString().slice(0,10);
 async function loadCatalog(assetType){
   const r = await fetch(`/api/catalog?asset_type=${assetType}`);
   CATALOG = await r.json();
-  // providers
+  // providers — preselect the configured default (TRADINGAGENTS_LLM_PROVIDER)
   const psel=$("provider"); psel.innerHTML="";
   CATALOG.providers.forEach(p=>{
     const o=document.createElement("option"); o.value=p.key; o.textContent=p.label; psel.appendChild(o);
   });
+  const defs=CATALOG.defaults||{};
+  if(defs.llm_provider && CATALOG.providers.some(p=>p.key===defs.llm_provider)) psel.value=defs.llm_provider;
   // depth
   const dsel=$("depth"); dsel.innerHTML="";
   CATALOG.depths.forEach(d=>{const o=document.createElement("option");o.value=d.value;o.textContent=d.label;dsel.appendChild(o);});
@@ -360,10 +362,16 @@ async function onProviderChange(){
   else if(p.local){note.className="provider-note ok";note.innerHTML="🔒 Läuft lokal – kein API-Key nötig.";}
   else if(p.key_present){note.className="provider-note ok";note.innerHTML=`✓ API-Key gefunden (${p.key_env}).`;}
   else{note.className="provider-note warn";note.innerHTML=`⚠ Kein Key gesetzt – bitte <span class="mono">${p.key_env||'Provider-Zugang'}</span> als Umgebungsvariable setzen.`;}
+  // Defaults from DEFAULT_CONFIG (env-overridable) apply only when the
+  // selected provider IS the configured one — a Qwen model id must not leak
+  // into e.g. the OpenAI form when the user switches providers manually.
+  const defs=(CATALOG.defaults&&CATALOG.defaults.llm_provider===p.key)?CATALOG.defaults:{};
   // url field: show for local providers that need an endpoint, prefill a sensible default
   $("url-row").style.display = p.needs_url ? "block" : "none";
   if(p.needs_url){
-    const defaultUrl = dockerize(p.base_url || (p.key==="openai_compatible" ? "http://localhost:1234/v1" : ""));
+    const defaultUrl = defs.backend_url
+      ? dockerize(defs.backend_url)
+      : dockerize(p.base_url || (p.key==="openai_compatible" ? "http://localhost:1234/v1" : ""));
     const placeholder = p.key==="openai_compatible"
       ? dockerize("http://localhost:1234/v1")+"  (LM Studio · vLLM :8000 · llama.cpp)"
       : dockerize(p.base_url || "http://localhost:11434/v1");
@@ -373,6 +381,26 @@ async function onProviderChange(){
   // models
   const m = await (await fetch(`/api/models?provider=${p.key}`)).json();
   fillModels("quick", m.quick); fillModels("deep", m.deep);
+  applyDefaultModel("quick", defs.quick_think_llm);
+  applyDefaultModel("deep", defs.deep_think_llm);
+}
+
+// Preselect a configured model id: pick the matching option, or — when the
+// provider only offers a "Custom model ID" entry (openai_compatible) — select
+// that and prefill the free-text field with the id.
+function applyDefaultModel(which, modelId){
+  if(!modelId) return;
+  const sel=$(which);
+  const opts=[...sel.options];
+  if(opts.some(o=>o.value===modelId)){
+    sel.value=modelId;
+  }else{
+    const custom=opts.find(o=>o.dataset.custom==="1");
+    if(!custom) return;
+    sel.value=custom.value;
+    $(which+"-custom").value=modelId;
+  }
+  toggleCustom(which);
 }
 
 function fillModels(which, opts){

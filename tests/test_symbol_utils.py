@@ -52,21 +52,15 @@ class TestNormalizeSymbol(unittest.TestCase):
     def test_empty_input_passthrough(self):
         self.assertEqual(normalize_symbol(""), "")
 
-    def test_alpha_vantage_exchange_suffix_maps_to_yahoo(self):
-        # Symbols from Alpha Vantage's SYMBOL_SEARCH carry AV exchange suffixes
-        # that Yahoo doesn't recognise; translate them so a search result works
-        # with the yfinance data path.
-        self.assertEqual(normalize_symbol("ADS.FRK"), "ADS.F")     # Frankfurt
-        self.assertEqual(normalize_symbol("ADS.DEX"), "ADS.DE")    # XETRA
-        self.assertEqual(normalize_symbol("TSCO.LON"), "TSCO.L")   # London
-        self.assertEqual(normalize_symbol("AIR.PAR"), "AIR.PA")    # Euronext Paris
-        self.assertEqual(normalize_symbol("ads.frk"), "ADS.F")     # case-insensitive
-
-    def test_yahoo_native_and_unknown_suffixes_unchanged(self):
-        # Yahoo-native suffixes and codes not in the AV map must pass through
-        # untouched (fail loudly rather than mapping to the wrong exchange).
-        for sym in ("ADS.DE", "TSCO.L", "0700.HK", "BRK.B", "FOO.XYZ"):
+    def test_exchange_suffixed_symbols_pass_through_unchanged(self):
+        # Exchange-suffixed symbols keep the dialect the user picked — an
+        # Alpha Vantage search result (ADS.FRK) must reach an all-AV data setup
+        # untranslated, and Yahoo-native suffixes stay Yahoo-native. No
+        # cross-vendor suffix rewriting.
+        for sym in ("ADS.FRK", "ADS.DEX", "TSCO.LON", "ADS.DE", "TSCO.L",
+                    "0700.HK", "BRK.B", "FOO.XYZ"):
             self.assertEqual(normalize_symbol(sym), sym)
+        self.assertEqual(normalize_symbol("ads.frk"), "ADS.FRK")  # upper-cased only
 
 
 @pytest.mark.unit

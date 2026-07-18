@@ -21,6 +21,26 @@ def _sample_ohlcv() -> pd.DataFrame:
     })
 
 
+def _av_csv() -> str:
+    """Alpha Vantage TIME_SERIES_DAILY_ADJUSTED dialect: lowercase, newest first."""
+    dates = pd.bdate_range("2026-04-01", "2026-05-20")
+    lines = ["timestamp,open,high,low,close,adjusted_close,volume"]
+    for i, d in reversed(list(enumerate(dates))):
+        c = 100 + i
+        lines.append(f"{d.date()},{c - 0.5},{c + 1.0},{c - 1.0},{c},{c},{1_000_000 + i}")
+    return "\n".join(lines) + "\n"
+
+
+@pytest.fixture(autouse=True)
+def _routing_unavailable(monkeypatch):
+    # Hermetic unit tests: the routed vendor path must never hit the network.
+    # Tests that exercise the routed path override this stub.
+    def _raise(*args, **kwargs):
+        raise RuntimeError("vendor routing disabled in unit tests")
+
+    monkeypatch.setattr(validator, "route_to_vendor", _raise)
+
+
 @pytest.mark.unit
 class TestVerifiedSnapshot:
     def test_excludes_future_rows(self, monkeypatch):
@@ -64,6 +84,48 @@ class TestVerifiedSnapshot:
 
 
 @pytest.mark.unit
+class TestRoutedVendorPath:
+    def test_snapshot_uses_routed_vendor_csv(self, monkeypatch):
+        # The snapshot must honor the configured data_vendors chain: an
+        # Alpha-Vantage CSV (native symbol, lowercase columns, newest-first)
+        # feeds the snapshot without ever touching the yfinance loader.
+        calls = {}
+
+        def fake_route(method, symbol, start, end):
+            calls["args"] = (method, symbol)
+            return _av_csv()
+
+        def no_fallback(*args, **kwargs):
+            raise AssertionError("must not fall back to the yfinance loader")
+
+        monkeypatch.setattr(validator, "route_to_vendor", fake_route)
+        monkeypatch.setattr(validator, "load_ohlcv", no_fallback)
+
+        snap = validator.build_verified_market_snapshot("ADS.DEX", "2026-05-13")
+        assert calls["args"] == ("get_stock_data", "ADS.DEX")
+        assert "Verified market data snapshot for ADS.DEX" in snap
+        assert "Latest trading row used: 2026-05-13" in snap
+        assert "boll_lb" in snap
+
+    def test_no_data_sentinel_falls_back_to_loader(self, monkeypatch):
+        # The router's NO_DATA sentinel is prose, not data — fall back.
+        monkeypatch.setattr(
+            validator, "route_to_vendor", lambda *a, **k: "NO_DATA_AVAILABLE: nope"
+        )
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: _sample_ohlcv())
+        snap = validator.build_verified_market_snapshot("COF", "2026-05-13")
+        assert "Latest trading row used: 2026-05-13" in snap
+
+    def test_unparsable_vendor_payload_falls_back(self, monkeypatch):
+        monkeypatch.setattr(
+            validator, "route_to_vendor", lambda *a, **k: {"not": "a csv string"}
+        )
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: _sample_ohlcv())
+        snap = validator.build_verified_market_snapshot("COF", "2026-05-13")
+        assert "Latest trading row used: 2026-05-13" in snap
+
+
+@pytest.mark.unit
 class TestTool:
     def test_tool_delegates_to_builder(self, monkeypatch):
         from tradingagents.agents.utils.market_data_validation_tools import (
@@ -74,3 +136,19 @@ class TestTool:
             {"symbol": "COF", "curr_date": "2026-05-20"}
         )
         assert "Verified market data snapshot for COF" in out
+
+    def test_tool_degrades_instead_of_aborting_the_run(self, monkeypatch):
+        # No vendor can serve the symbol: the tool must return an explicit
+        # sentinel instead of raising (a raised NoMarketDataError previously
+        # killed the whole analysis run).
+        from tradingagents.agents.utils import market_data_validation_tools as tools
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("no vendor could serve OHLCV")
+
+        monkeypatch.setattr(tools, "build_verified_market_snapshot", boom)
+        out = tools.get_verified_market_snapshot.invoke(
+            {"symbol": "ADS.DEX", "curr_date": "2026-05-20"}
+        )
+        assert "VERIFIED_SNAPSHOT_UNAVAILABLE" in out
+        assert "ADS.DEX" in out

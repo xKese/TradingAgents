@@ -94,3 +94,35 @@ def test_fundamentals_no_curr_date_passes_through(monkeypatch):
 def test_fundamentals_non_json_body_unchanged(monkeypatch):
     monkeypatch.setattr(avf, "_make_api_request", lambda fn, params: "not-json")
     assert avf.get_cashflow("AAPL", curr_date="2024-01-01") == "not-json"
+
+
+@pytest.mark.unit
+class TestParseDate:
+    """LLM-supplied date arguments: tolerate time suffixes and free-text noise.
+
+    The tools receive their date arguments from the LLM, which may append a
+    time ("2026-04-18 00:00:00") or free text ("2026-04-18 约3 months back)").
+    parse_date extracts the embedded ISO date instead of crashing the vendor
+    call — only a string with no recognizable date still raises.
+    """
+
+    def test_plain_forms_parse(self):
+        from datetime import datetime
+        assert av.parse_date("2026-04-18") == datetime(2026, 4, 18)
+        assert av.parse_date("2026-04-18T09:30:00") == datetime(2026, 4, 18, 9, 30)
+        assert av.parse_date("2026-04-18 00:00:00") == datetime(2026, 4, 18)
+        assert av.parse_date(datetime(2026, 4, 18)) == datetime(2026, 4, 18)
+
+    def test_free_text_noise_around_date(self):
+        from datetime import datetime
+        # The exact string from the failed run (Chinese "approx. 3 months back").
+        assert av.parse_date("2026-04-18 约3 months back)") == datetime(2026, 4, 18)
+        assert av.parse_date("from 2026-04-18") == datetime(2026, 4, 18)
+        assert av.parse_date("2026-04-18 (approx)") == datetime(2026, 4, 18)
+
+    def test_pure_garbage_still_raises(self):
+        with pytest.raises((ValueError, OverflowError)):
+            av.parse_date("next quarter")
+
+    def test_format_datetime_for_api_survives_noise(self):
+        assert av.format_datetime_for_api("2026-04-18 约3 months back)") == "20260418T0000"

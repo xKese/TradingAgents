@@ -11,10 +11,12 @@ claim. Deterministic, no LLM involved.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from io import StringIO
 
 import pandas as pd
 from stockstats import wrap
 
+from tradingagents.dataflows.interface import route_to_vendor
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
@@ -24,15 +26,67 @@ DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
     "macd", "macds", "macdh", "atr",
 )
 
+# Calendar-day window requested from the vendor: enough trading rows to warm up
+# the slowest snapshot indicator (200 SMA) with margin.
+_OHLCV_WINDOW_DAYS = 450
+
+# get_stock_data returns a CSV string whose dialect depends on the vendor —
+# Alpha Vantage: lowercase ``timestamp,open,...,adjusted_close,volume``;
+# yfinance: capitalized columns behind a ``#`` comment preamble. Map both onto
+# the capitalized OHLCV frame the validator (and stockstats) works with.
+_CSV_COLUMN_ALIASES = {
+    "timestamp": "Date", "date": "Date",
+    "open": "Open", "high": "High", "low": "Low", "close": "Close",
+    "adjusted_close": "Adj Close", "adj close": "Adj Close",
+    "volume": "Volume",
+}
+
+
+def _parse_vendor_csv(raw) -> pd.DataFrame | None:
+    """Parse a get_stock_data vendor CSV into an OHLCV frame; None if unusable."""
+    if not isinstance(raw, str) or raw.lstrip().startswith("NO_DATA_AVAILABLE"):
+        return None
+    try:
+        df = pd.read_csv(StringIO(raw), comment="#", skip_blank_lines=True)
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    df = df.rename(
+        columns={c: _CSV_COLUMN_ALIASES.get(str(c).strip().lower(), c) for c in df.columns}
+    )
+    if "Date" not in df.columns or "Close" not in df.columns:
+        return None
+    return df
+
+
+def _routed_rows(symbol: str, curr_date: str) -> pd.DataFrame | None:
+    """OHLCV via the configured data_vendors chain; None when unavailable.
+
+    The snapshot must verify against the same source the analyst's data tools
+    use, so route through ``get_stock_data`` (honoring an all-Alpha-Vantage
+    setup and its native symbols) instead of assuming the yfinance loader.
+    """
+    start = (
+        pd.to_datetime(curr_date) - pd.Timedelta(days=_OHLCV_WINDOW_DAYS)
+    ).strftime("%Y-%m-%d")
+    try:
+        raw = route_to_vendor("get_stock_data", symbol, start, curr_date)
+    except Exception:
+        return None
+    return _parse_vendor_csv(raw)
+
 
 def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     """OHLCV on or before curr_date, date-sorted. Raises if nothing usable.
 
-    ``load_ohlcv`` already normalizes the Date column and filters out
-    look-ahead rows, but we re-apply the cutoff defensively — this is a
-    verification path, so it must not trust its input to be pre-filtered.
+    Prefers the configured vendor chain and falls back to the legacy yfinance
+    loader. The Date cutoff is re-applied defensively — this is a verification
+    path, so it must not trust its input to be pre-filtered.
     """
-    data = load_ohlcv(symbol, curr_date)
+    data = _routed_rows(symbol, curr_date)
+    if data is None or data.empty:
+        data = load_ohlcv(symbol, curr_date)
     if data is None or data.empty:
         raise ValueError(f"No OHLCV data available for {symbol}.")
 

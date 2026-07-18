@@ -392,3 +392,33 @@ def test_collect_reports_derivations():
     assert out["bull_history"] == "B+" and out["bear_history"] == "B-"
     empty = server._collect_reports({})
     assert all(v is None for v in empty.values())
+
+
+# --------------------------------------------------------------------------- #
+# Form defaults (provider/model preselection from DEFAULT_CONFIG)
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_catalog_exposes_form_defaults(monkeypatch):
+    monkeypatch.setitem(DEFAULT_CONFIG, "llm_provider", "openai_compatible")
+    monkeypatch.setitem(DEFAULT_CONFIG, "quick_think_llm", "qwen3.6-27b")
+    monkeypatch.setitem(DEFAULT_CONFIG, "deep_think_llm", "qwen3.6-27b")
+    monkeypatch.setitem(DEFAULT_CONFIG, "backend_url", "http://host.docker.internal:1234/v1")
+
+    client = TestClient(server.app)
+    data = client.get("/api/catalog").json()
+    defaults = data["defaults"]
+    assert defaults["llm_provider"] == "openai_compatible"
+    assert defaults["quick_think_llm"] == "qwen3.6-27b"
+    assert defaults["deep_think_llm"] == "qwen3.6-27b"
+    assert defaults["backend_url"] == "http://host.docker.internal:1234/v1"
+    # the default provider must actually exist in the provider list
+    assert any(p["key"] == "openai_compatible" for p in data["providers"])
+
+
+@pytest.mark.unit
+def test_form_defaults_without_env_reflect_builtin_config(monkeypatch):
+    monkeypatch.setitem(DEFAULT_CONFIG, "llm_provider", "openai")
+    monkeypatch.setitem(DEFAULT_CONFIG, "backend_url", None)
+    defaults = catalog.form_defaults()
+    assert defaults["llm_provider"] == "openai"
+    assert defaults["backend_url"] is None

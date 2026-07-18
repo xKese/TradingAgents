@@ -17,6 +17,7 @@ from cli.utils import (
     _llm_provider_table,
     detect_asset_type,
 )
+from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import MODEL_OPTIONS, get_model_options
 from tradingagents.runtime import running_in_docker
@@ -137,6 +138,24 @@ def requires_api_key(provider: str) -> bool:
     return get_api_key_env(provider) is not None
 
 
+def form_defaults() -> dict:
+    """Pre-selection defaults for the form, from DEFAULT_CONFIG.
+
+    DEFAULT_CONFIG already absorbs the TRADINGAGENTS_LLM_PROVIDER /
+    TRADINGAGENTS_QUICK_THINK_LLM / TRADINGAGENTS_DEEP_THINK_LLM /
+    TRADINGAGENTS_LLM_BACKEND_URL env overrides (same as the CLI, which skips
+    the matching interactive prompts). Surfacing them here lets the browser
+    form open with the user's configured provider and model ids preselected
+    instead of the first provider in the list.
+    """
+    return {
+        "llm_provider": (DEFAULT_CONFIG.get("llm_provider") or "").lower() or None,
+        "quick_think_llm": DEFAULT_CONFIG.get("quick_think_llm"),
+        "deep_think_llm": DEFAULT_CONFIG.get("deep_think_llm"),
+        "backend_url": DEFAULT_CONFIG.get("backend_url"),
+    }
+
+
 def catalog(asset_type: str = "stock") -> dict:
     """Full catalog payload for the front-end to build its form."""
     return {
@@ -144,6 +163,7 @@ def catalog(asset_type: str = "stock") -> dict:
         "depths": depths(),
         "analysts": analysts(asset_type),
         "default_analysts": default_analyst_values(),
+        "defaults": form_defaults(),
         # When the server runs inside a container, the form prefills local
         # backend URLs with host.docker.internal instead of localhost so a
         # browser run reaches a model server on the Docker host.

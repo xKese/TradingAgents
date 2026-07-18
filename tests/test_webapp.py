@@ -236,3 +236,159 @@ def test_sse_run_reports_missing_key(monkeypatch):
     events = _parse_sse(resp.text)
     err = next((d for n, d in events if n == "error"), None)
     assert err is not None and "OPENAI_API_KEY" in err
+
+
+# --------------------------------------------------------------------------- #
+# Report archive (run.json sidecar + list/detail endpoints)
+# --------------------------------------------------------------------------- #
+import json as _json  # noqa: E402
+
+from tradingagents.default_config import DEFAULT_CONFIG  # noqa: E402
+
+# NOTE: results_dir is resolved from TRADINGAGENTS_RESULTS_DIR at import time,
+# so setenv is a no-op here — patch the DEFAULT_CONFIG dict entry instead
+# (build_run copies it per request, and the endpoints read it directly).
+
+
+def _run_payload():
+    return {
+        "ticker": "AAPL",
+        "analysis_date": "2026-01-15",
+        "llm_provider": "ollama",
+        "shallow_thinker": "qwen3:latest",
+        "deep_thinker": "qwen3:latest",
+        "research_depth": 1,
+        "analysts": ["market"],
+    }
+
+
+def _seed_sidecar(root, run_id, ticker, created_at, body="Bericht"):
+    d = root / "reports" / run_id
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(
+        _json.dumps({
+            "schema_version": 1,
+            "id": run_id,
+            "ticker": ticker,
+            "analysis_date": "2026-01-15",
+            "asset_type": "stock",
+            "provider": "ollama",
+            "decision": "Buy",
+            "created_at": created_at,
+            "reports": {"market_report": body},
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.unit
+def test_run_writes_sidecar_archive(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "TradingAgentsGraph", _FakeGraph)
+    monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))
+
+    client = TestClient(server.app)
+    resp = client.post("/api/run", json=_run_payload())
+    assert resp.status_code == 200
+
+    sidecars = list((tmp_path / "reports").glob("AAPL_*/run.json"))
+    assert len(sidecars) == 1
+    data = _json.loads(sidecars[0].read_text(encoding="utf-8"))
+    assert data["schema_version"] == 1
+    assert data["id"] == sidecars[0].parent.name
+    assert data["ticker"] == "AAPL"
+    assert data["analysis_date"] == "2026-01-15"
+    assert data["decision"] == "Buy"
+    # previously-missing final sections must be archived too
+    assert data["reports"]["bull_history"] == "BULL"
+    assert data["reports"]["bear_history"] == "BEAR"
+    assert "A" in data["reports"]["risk_analysis"]
+
+    events = _parse_sse(resp.text)
+    final = _json.loads(next(d for n, d in events if n == "final"))
+    assert final["run_id"] == data["id"]
+    assert final["reports"]["bull_history"] == "BULL"
+    assert final["reports"]["risk_analysis"]
+
+
+@pytest.mark.unit
+def test_archive_write_failure_does_not_fail_run(monkeypatch, tmp_path):
+    def broken_writer(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(server, "TradingAgentsGraph", _FakeGraph)
+    monkeypatch.setattr(server, "write_report_tree", broken_writer)
+    monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))
+
+    client = TestClient(server.app)
+    resp = client.post("/api/run", json=_run_payload())
+    events = _parse_sse(resp.text)
+    names = [e[0] for e in events]
+    assert "error" not in names
+    final = _json.loads(next(d for n, d in events if n == "final"))
+    assert final["decision"] == "Buy"
+    assert final["run_id"] is None
+    assert final["report_path"] is None
+
+
+@pytest.mark.unit
+def test_reports_list_endpoint(monkeypatch, tmp_path):
+    monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))
+    _seed_sidecar(tmp_path, "AAPL_20260115_090000", "AAPL",
+                  "2026-01-15T09:00:00+01:00")
+    _seed_sidecar(tmp_path, "NVDA_20260116_100000", "NVDA",
+                  "2026-01-16T10:00:00+01:00", body="Kursziel erhöht — Prognose übertroffen")
+    (tmp_path / "reports" / "OLD_20250101_000000").mkdir()  # legacy: no sidecar
+    corrupt = tmp_path / "reports" / "BAD_20260101_000000"
+    corrupt.mkdir()
+    (corrupt / "run.json").write_text("{not json", encoding="utf-8")
+
+    client = TestClient(server.app)
+    runs = client.get("/api/reports").json()["runs"]
+    assert [r["id"] for r in runs] == ["NVDA_20260116_100000", "AAPL_20260115_090000"]
+    assert runs[0]["ticker"] == "NVDA" and runs[0]["decision"] == "Buy"
+    assert "reports" not in runs[0]  # list carries summaries only
+
+    detail = client.get("/api/reports/NVDA_20260116_100000").json()
+    assert detail["reports"]["market_report"] == "Kursziel erhöht — Prognose übertroffen"
+
+
+@pytest.mark.unit
+def test_report_detail_traversal_guard_and_empty_root(monkeypatch, tmp_path):
+    monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))
+
+    client = TestClient(server.app)
+    # fresh install: no reports dir at all
+    assert client.get("/api/reports").json() == {"runs": []}
+
+    _seed_sidecar(tmp_path, "AAPL_20260115_090000", "AAPL", "2026-01-15T09:00:00+01:00")
+    assert client.get("/api/reports/AAPL_20260115_090000").json()["ticker"] == "AAPL"
+
+    # Over HTTP: hostile ids must never resolve. ("." and ".." are collapsed
+    # away by path normalization before routing, so they are asserted at the
+    # handler level below instead.)
+    for bad in ("...", "..%2f..%2fetc", "a/b", "AAPL_x!", "NOPE_20990101_000000"):
+        r = client.get(f"/api/reports/{bad}")
+        assert r.status_code == 404, bad
+
+    # Handler level: the dot-only guard itself (defense in depth — the charset
+    # regex alone would admit "." and "..").
+    for bad in (".", "..", "..."):
+        assert server.api_report(bad).status_code == 404, bad
+
+
+@pytest.mark.unit
+def test_collect_reports_derivations():
+    state = {
+        "market_report": "MKT",
+        "investment_debate_state": {"bull_history": "B+", "bear_history": "B-",
+                                    "judge_decision": "JUDGE"},
+        "risk_debate_state": {"aggressive_history": "AGG",
+                              "conservative_history": "CON",
+                              "neutral_history": "NEU"},
+    }
+    out = server._collect_reports(state)
+    assert out["risk_analysis"] == "AGG\n\nCON\n\nNEU"  # fixed join order
+    assert out["investment_plan"] == "JUDGE"  # fallback to judge_decision
+    assert out["bull_history"] == "B+" and out["bear_history"] == "B-"
+    empty = server._collect_reports({})
+    assert all(v is None for v in empty.values())

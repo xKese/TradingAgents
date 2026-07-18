@@ -67,6 +67,15 @@
   .check input{accent-color:var(--brand);width:15px;height:15px}
   .check.on{border-color:var(--border);color:var(--text);background:var(--panel-2)}
 
+  .history{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto}
+  .hist-item{display:flex;align-items:center;gap:10px;border:1px solid var(--border-soft);border-radius:8px;padding:8px 11px;background:var(--bg-2);cursor:pointer;font-size:13px}
+  .hist-item:hover{border-color:var(--brand)}
+  .hist-item .sym{font-weight:700;color:var(--text);min-width:52px}
+  .hist-item .meta{color:var(--text-mute);font-size:11.5px;flex:1}
+  .hist-item .badge{font-size:11px;padding:2px 9px;font-weight:700}
+  .hist-item.disabled{opacity:.45;cursor:not-allowed}
+  .hist-item.disabled:hover{border-color:var(--border-soft)}
+
   .btn{width:100%;margin-top:6px;padding:12px;border-radius:10px;border:none;cursor:pointer;font-weight:700;font-size:15px;background:linear-gradient(100deg,var(--brand),var(--brand-2));color:#04110c;transition:transform .1s,opacity .15s}
   .btn:hover:not(:disabled){transform:translateY(-1px)}
   .btn:disabled{opacity:.5;cursor:not-allowed}
@@ -148,7 +157,8 @@
 </header>
 
 <div class="shell">
-  <!-- LEFT: config form -->
+  <!-- LEFT: config form + report archive -->
+  <div class="stage">
   <div class="card">
     <h2>Neue Analyse</h2>
     <div class="hint">Läuft vollständig lokal auf dieser Maschine.</div>
@@ -205,6 +215,13 @@
       <button class="btn secondary" id="stop-btn" type="button" style="display:none">Abbrechen</button>
       <div class="disclaimer">⚠️ Forschungs-Framework, keine Anlageberatung. Ein Lauf ruft je nach Provider kostenpflichtige LLM-APIs auf. Für einen kostenlosen lokalen Lauf Ollama wählen.</div>
     </form>
+  </div>
+
+  <div class="card" id="history-card" style="display:none">
+    <h2>Frühere Analysen</h2>
+    <div class="hint">Gespeicherte Berichte erneut öffnen — ohne neuen Lauf.</div>
+    <div class="history" id="history"></div>
+  </div>
   </div>
 
   <!-- RIGHT: live + results -->
@@ -461,6 +478,7 @@ function resetUI(){
   $("idle").style.display="none"; $("live").style.display="block";
   $("log-card").style.display="block"; $("log").innerHTML="";
   $("reports-card").style.display="none"; $("reports").innerHTML="";
+  $("reports-hint").textContent="Gerenderte Berichte der einzelnen Teams.";
   $("error-card").style.display="none";
   for(const k in reportEls) delete reportEls[k];
   $("stats").innerHTML=""; $("teams").innerHTML=""; $("runmeta").innerHTML="";
@@ -529,6 +547,52 @@ function decisionBadge(decision){
   return `<span class="badge ${cls}">${decision}</span>`;
 }
 
+// ---------- report archive (list + reload past runs) ----------
+let runActive=false;
+
+async function loadHistory(){
+  try{
+    const r=await(await fetch("/api/reports")).json();
+    renderHistory(r.runs||[]);
+  }catch(e){}
+}
+function renderHistory(runs){
+  const box=$("history"); box.innerHTML="";
+  $("history-card").style.display=runs.length?"block":"none";
+  runs.forEach(run=>{
+    const el=document.createElement("div");
+    el.className="hist-item"+(runActive?" disabled":"");
+    el.innerHTML='<span class="sym"></span><span class="meta"></span>'+decisionBadge(run.decision||"?");
+    el.querySelector(".sym").textContent=run.ticker||run.id;
+    el.querySelector(".meta").textContent=[run.analysis_date,(run.created_at||"").replace("T"," ").slice(0,16)].filter(Boolean).join(" · ");
+    el.addEventListener("click",()=>openArchived(run.id));
+    box.appendChild(el);
+  });
+}
+function setHistoryDisabled(disabled){
+  document.querySelectorAll(".hist-item").forEach(e=>e.classList.toggle("disabled",disabled));
+}
+async function openArchived(id){
+  if(runActive) return; // never clobber a live run
+  let d;
+  try{d=await(await fetch(`/api/reports/${encodeURIComponent(id)}`)).json();}catch(e){return;}
+  if(!d||d.error) return;
+  showArchived(d);
+}
+function showArchived(d){
+  $("idle").style.display="none"; $("live").style.display="block";
+  $("log-card").style.display="none"; $("error-card").style.display="none";
+  $("stats").innerHTML=""; $("teams").innerHTML="";
+  $("reports").innerHTML=""; for(const k in reportEls) delete reportEls[k];
+  $("runmeta").innerHTML=`<span><span class="k">Ticker</span> <b>${escapeHtml(d.ticker||"")}</b></span>
+    <span><span class="k">Datum</span> <b>${escapeHtml(d.analysis_date||"")}</b></span>
+    <span><span class="k">Typ</span> <b>${escapeHtml(d.asset_type||"")}</b></span>
+    ${d.provider?`<span><span class="k">Provider</span> <b>${escapeHtml(d.provider)}</b></span>`:""}
+    <span>${decisionBadge(d.decision||"?")}</span>`;
+  $("reports-hint").textContent=`Geladener Bericht aus dem Archiv vom ${(d.created_at||"").replace("T"," ").slice(0,16)} — kein neuer Lauf.`;
+  REPORT_ORDER.forEach(([sec,title])=>{ if(d.reports&&d.reports[sec]) upsertReport(sec,title,d.reports[sec]); });
+}
+
 function showError(msg){
   $("error-card").style.display="block";
   $("error-box").innerHTML=`<b>Lauf fehlgeschlagen.</b><br>${escapeHtml(msg)}`;
@@ -537,10 +601,12 @@ function showError(msg){
 function finishRun(){
   $("run-btn").disabled=false; $("run-btn").innerHTML="Analyse starten";
   $("stop-btn").style.display="none"; reader=null; aborter=null;
+  runActive=false; setHistoryDisabled(false);
 }
 
 async function startRun(payload){
   resetUI();
+  runActive=true; setHistoryDisabled(true);
   $("run-btn").disabled=true; $("run-btn").innerHTML='<span class="spinner"></span> Läuft …';
   $("stop-btn").style.display="block";
   aborter=new AbortController();
@@ -595,6 +661,7 @@ function handleFrame(frame){
       // ensure all report sections present in final
       REPORT_ORDER.forEach(([sec,title])=>{ if(p.reports&&p.reports[sec]) upsertReport(sec,title,p.reports[sec]); });
       if(p.report_path) $("reports-hint").innerHTML=`Gerenderte Berichte · gespeichert unter <span class="mono">${escapeHtml(p.report_path)}</span>`;
+      loadHistory(); // the just-archived run appears in the list immediately
       break;
     case "error": showError(p.message||"Unbekannter Fehler"); break;
     case "done": break;
@@ -624,6 +691,7 @@ $("run-form").addEventListener("submit",e=>{
 $("stop-btn").addEventListener("click",()=>{ if(aborter) aborter.abort(); finishRun(); });
 
 loadCatalog("stock");
+loadHistory();
 </script>
 </body>
 </html>

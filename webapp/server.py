@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import threading
 import traceback
 from datetime import datetime
@@ -30,6 +31,7 @@ from tradingagents.dataflows.alpha_vantage_common import (
     AlphaVantageRateLimitError,
 )
 from tradingagents.dataflows.utils import safe_ticker_component
+from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.reporting import write_report_tree
@@ -104,6 +106,66 @@ def api_symbol_search(q: str = "") -> JSONResponse:
     except Exception:
         note = {"type": "error", "text": "Symbol-Suche momentan nicht verfügbar."}
     return JSONResponse({"results": [], "note": note})
+
+
+# --------------------------------------------------------------------------- #
+# Report archive (list + reload past runs)
+# --------------------------------------------------------------------------- #
+# Run IDs are <safe_ticker>_<YYYYMMDD_HHMMSS> directory names. The charset also
+# admits dot-only names ("." / ".."), so those are excluded explicitly below.
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+
+
+def _reports_root() -> Path:
+    return Path(DEFAULT_CONFIG["results_dir"]) / "reports"
+
+
+@app.get("/api/reports")
+def api_reports() -> JSONResponse:
+    """List archived runs (newest first) from the run.json sidecars.
+
+    Directories without a (valid) sidecar — e.g. runs from before this feature
+    or partially written archives — are skipped silently: the list must never
+    500 over one bad entry.
+    """
+    runs = []
+    root = _reports_root()
+    if root.is_dir():
+        for sidecar in root.glob("*/run.json"):
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            runs.append({
+                "id": sidecar.parent.name,
+                "ticker": data.get("ticker"),
+                "analysis_date": data.get("analysis_date"),
+                "asset_type": data.get("asset_type"),
+                "provider": data.get("provider"),
+                "decision": data.get("decision"),
+                "created_at": data.get("created_at"),
+            })
+    # The id ends in a lexicographically sortable timestamp; sorting by id is
+    # stable across mixed timezone offsets in created_at.
+    runs.sort(key=lambda r: r["id"], reverse=True)
+    return JSONResponse({"runs": runs})
+
+
+@app.get("/api/reports/{run_id}")
+def api_report(run_id: str) -> JSONResponse:
+    # Guard like /assets: strict charset, no dot-only names, resolved inside root.
+    if not _RUN_ID_RE.match(run_id) or set(run_id) <= {"."}:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    root = _reports_root().resolve()
+    sidecar = (root / run_id / "run.json").resolve()
+    if sidecar.parent.parent != root or not sidecar.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    try:
+        return JSONResponse(json.loads(sidecar.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return JSONResponse({"error": "not found"}, status_code=404)
 
 
 # --------------------------------------------------------------------------- #
@@ -365,6 +427,73 @@ def _friendly_error_message(exc: Exception, spec: dict) -> str:
     return "\n".join(lines)
 
 
+def _collect_reports(final_state: dict) -> dict:
+    """All 10 SSE section keys -> markdown (None where absent).
+
+    Single source of truth for the ``final`` event AND the run.json sidecar.
+    Replicates ProgressTracker's derivations: the risk join (aggressive/
+    conservative/neutral) and the investment_plan fallback to the research
+    judge's decision. Building the full map here also fixes the ``final``
+    event previously carrying only 7 of the 10 REPORT_ORDER sections
+    (bull/bear/risk arrived via incremental events only).
+    """
+    debate = final_state.get("investment_debate_state") or {}
+    risk = final_state.get("risk_debate_state") or {}
+    risk_text = "\n\n".join(
+        part for part in (
+            risk.get("aggressive_history"),
+            risk.get("conservative_history"),
+            risk.get("neutral_history"),
+        ) if part
+    )
+    return {
+        "market_report": final_state.get("market_report"),
+        "sentiment_report": final_state.get("sentiment_report"),
+        "news_report": final_state.get("news_report"),
+        "fundamentals_report": final_state.get("fundamentals_report"),
+        "bull_history": debate.get("bull_history"),
+        "bear_history": debate.get("bear_history"),
+        "investment_plan": final_state.get("investment_plan") or debate.get("judge_decision"),
+        "trader_investment_plan": final_state.get("trader_investment_plan"),
+        "risk_analysis": risk_text or None,
+        "final_trade_decision": final_state.get("final_trade_decision"),
+    }
+
+
+def _write_run_archive(
+    spec: dict, final_state: dict, decision: str, reports: dict
+) -> tuple[str | None, str | None]:
+    """Write the report tree plus a run.json sidecar for the archive.
+
+    The sidecar stores the run metadata (decision, analysis date, asset type)
+    and the SSE-shaped section map, so /api/reports can re-serve a past run
+    exactly as the live UI rendered it. Returns (run_id, report_path);
+    (None, None) on any failure — archiving must never fail the run.
+    """
+    try:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = f"{safe_ticker_component(spec['ticker'])}_{stamp}"
+        save_path = Path(spec["config"]["results_dir"]) / "reports" / run_id
+        report_path = str(write_report_tree(final_state, spec["ticker"], save_path))
+        sidecar = {
+            "schema_version": 1,
+            "id": run_id,
+            "ticker": spec["ticker"],
+            "analysis_date": spec["analysis_date"],
+            "asset_type": spec["asset_type"],
+            "provider": spec["config"]["llm_provider"],
+            "decision": decision,
+            "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "reports": {k: v for k, v in reports.items() if v},
+        }
+        (save_path / "run.json").write_text(
+            json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return run_id, report_path
+    except Exception:  # noqa: BLE001 — archiving must not fail the run
+        return None, None
+
+
 def _run_worker(spec: dict, q: queue.Queue):
     """Execute the graph in a worker thread, pushing SSE events onto ``q``."""
 
@@ -439,33 +568,17 @@ def _run_worker(spec: dict, q: queue.Queue):
 
         decision = graph.process_signal(final_state["final_trade_decision"])
 
-        # Write the shared report tree to disk.
-        report_path = None
-        try:
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = (
-                Path(spec["config"]["results_dir"])
-                / "reports"
-                / f"{safe_ticker_component(spec['ticker'])}_{stamp}"
-            )
-            report_path = str(write_report_tree(final_state, spec["ticker"], save_path))
-        except Exception:  # noqa: BLE001 — report writing must not fail the run
-            report_path = None
+        # Write the report tree + run.json sidecar for the archive.
+        reports = _collect_reports(final_state)
+        run_id, report_path = _write_run_archive(spec, final_state, decision, reports)
 
         emit(
             "final",
             {
                 "decision": decision,
+                "run_id": run_id,
                 "report_path": report_path,
-                "reports": {
-                    "market_report": final_state.get("market_report"),
-                    "sentiment_report": final_state.get("sentiment_report"),
-                    "news_report": final_state.get("news_report"),
-                    "fundamentals_report": final_state.get("fundamentals_report"),
-                    "investment_plan": final_state.get("investment_plan"),
-                    "trader_investment_plan": final_state.get("trader_investment_plan"),
-                    "final_trade_decision": final_state.get("final_trade_decision"),
-                },
+                "reports": reports,
                 "stats": stats.get_stats(),
             },
         )

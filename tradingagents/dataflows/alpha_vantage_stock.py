@@ -1,6 +1,10 @@
 from datetime import datetime
 
-from .alpha_vantage_common import _filter_csv_by_date_range, _make_api_request
+from .alpha_vantage_common import (
+    _filter_csv_by_date_range,
+    _make_api_request,
+    parse_date,
+)
 
 
 def get_stock(
@@ -20,8 +24,9 @@ def get_stock(
     Returns:
         CSV string containing the daily adjusted time series data filtered to the date range.
     """
-    # Parse dates to determine the range
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    # Parse dates to determine the range (lenient: the LLM may pass a trailing
+    # time, e.g. "2024-01-15 00:00:00", which strict strptime would reject).
+    start_dt = parse_date(start_date)
     today = datetime.now()
 
     # Choose outputsize based on whether the requested range is within the latest 100 days

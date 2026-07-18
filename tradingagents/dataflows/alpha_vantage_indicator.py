@@ -1,4 +1,8 @@
-from .alpha_vantage_common import AlphaVantageNotConfiguredError, _make_api_request
+from .alpha_vantage_common import (
+    AlphaVantageNotConfiguredError,
+    _make_api_request,
+    parse_date,
+)
 
 
 def get_indicator(
@@ -64,7 +68,7 @@ def get_indicator(
             f"Indicator {indicator} is not supported. Please choose from: {list(supported_indicators.keys())}"
         )
 
-    curr_date_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    curr_date_dt = parse_date(curr_date)
     before = curr_date_dt - relativedelta(days=look_back_days)
 
     # Get the full data for the period instead of making individual calls
@@ -197,7 +201,7 @@ def get_indicator(
             ind_string = "No data available for the specified date range.\n"
 
         result_str = (
-            f"## {indicator.upper()} values from {before.strftime('%Y-%m-%d')} to {curr_date}:\n\n"
+            f"## {indicator.upper()} values from {before.strftime('%Y-%m-%d')} to {curr_date_dt.strftime('%Y-%m-%d')}:\n\n"
             + ind_string
             + "\n\n"
             + indicator_descriptions.get(indicator, "No description available.")

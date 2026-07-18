@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from io import StringIO
 
@@ -41,19 +42,32 @@ def get_api_key() -> str:
         )
     return api_key
 
+# First embedded ISO date (optionally with a time part) inside a noisy string.
+_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?")
+
+
 def parse_date(value) -> datetime:
     """Leniently parse an LLM/app-supplied date into a ``datetime``.
 
     Date arguments to the market/news tools are produced by the LLM and may
     carry a trailing time or whitespace (``"2024-01-15 00:00:00"``,
-    ``"2024-01-15T00:00:00"``). A bare ``datetime.strptime(value, "%Y-%m-%d")``
-    rejects any trailing data with "unconverted data remains", which crashed the
-    Alpha Vantage stock path while the yfinance path (``pd.to_datetime``)
-    tolerated the same input. Parse leniently so both vendors behave alike.
+    ``"2024-01-15T00:00:00"``) or even free text around the date
+    (``"2026-04-18 约3 months back)"``). When full-string parsing fails,
+    extract the first embedded ISO date instead — deterministic, unlike
+    dateutil's ``fuzzy=True``, which can misread loose digits from the noise
+    as a day or month. Only a string with no recognizable date at all still
+    raises, so garbage fails loudly rather than being silently guessed.
     """
     if isinstance(value, datetime):
         return value
-    return date_parser.parse(str(value).strip())
+    text = str(value).strip()
+    try:
+        return date_parser.parse(text)
+    except (ValueError, OverflowError):
+        match = _ISO_DATE_RE.search(text)
+        if match:
+            return date_parser.parse(match.group(0))
+        raise
 
 
 def format_datetime_for_api(date_input) -> str:

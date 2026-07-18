@@ -3,6 +3,10 @@ from typing import Annotated
 from langchain_core.tools import tool
 
 from tradingagents.dataflows.interface import route_to_vendor
+from tradingagents.dataflows.news_fallback import (
+    get_news_by_company_name,
+    news_result_is_empty,
+)
 
 
 @tool
@@ -21,7 +25,21 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    result = route_to_vendor("get_news", ticker, start_date, end_date)
+    # Ticker-based news fails structurally for exchange-suffixed (European)
+    # symbols — Yahoo's news endpoint rejects dotted tickers and Alpha
+    # Vantage's feed is US-centric. When the configured vendor produced no
+    # usable articles, retry by company name (resolved via the Alpha Vantage
+    # symbol search); any failure degrades back to the vendor's original
+    # result so this can only add coverage, never remove it.
+    try:
+        if news_result_is_empty(result):
+            fallback = get_news_by_company_name(ticker, start_date, end_date)
+            if fallback:
+                return fallback
+    except Exception:
+        pass
+    return result
 
 @tool
 def get_global_news(

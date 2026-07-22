@@ -10,6 +10,28 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ### Added
 
+- **Reproducibility & stability options, selectable in the web UI.** A new
+  "Erweiterte Einstellungen" section exposes five levers against run-to-run
+  rating flips (e.g. Overweight → Underweight on back-to-back runs):
+  sampling **temperature**, a provider-gated sampling **seed**
+  (`TRADINGAGENTS_SEED`; Azure + OpenAI-compatible Chat Completions only —
+  Anthropic/Bedrock/Google and the native OpenAI Responses API ignore it with
+  a warning), a **memory toggle** (`TRADINGAGENTS_MEMORY_ENABLED`) that
+  disables cross-run past-decision injection *and* storage, an opt-in
+  **per-day data cache** (`TRADINGAGENTS_DATA_CACHE_DAILY`) freezing
+  news/macro/fundamentals per calendar day, and **ensemble mode**
+  (`TRADINGAGENTS_ENSEMBLE_RUNS`, 1–5 runs) that takes the median rating
+  across N full runs with per-run badges and a vote summary in the UI.
+  Programmatic callers get `TradingAgentsGraph.propagate_ensemble(...)`.
+
+### Fixed
+
+- **CLI and web runs now use the memory log.** Both UIs bypass `propagate()`
+  and previously neither injected past-decision context nor stored decisions;
+  they now share `prepare_run_context()` / `record_decision()` with the
+  programmatic path, so cross-run memory (and the new toggle) behaves
+  identically everywhere.
+
 - **Data vendors are selectable from the environment.** New
   `TRADINGAGENTS_VENDOR_*` variables (`CORE_STOCK_APIS`, `TECHNICAL_INDICATORS`,
   `FUNDAMENTAL_DATA`, `NEWS_DATA`, `MACRO_DATA`, `PREDICTION_MARKETS`) route each

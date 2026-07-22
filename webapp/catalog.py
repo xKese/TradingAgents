@@ -153,6 +153,12 @@ def form_defaults() -> dict:
         "quick_think_llm": DEFAULT_CONFIG.get("quick_think_llm"),
         "deep_think_llm": DEFAULT_CONFIG.get("deep_think_llm"),
         "backend_url": DEFAULT_CONFIG.get("backend_url"),
+        # Reproducibility / stability options ("Erweiterte Einstellungen").
+        "temperature": DEFAULT_CONFIG.get("temperature"),
+        "seed": DEFAULT_CONFIG.get("seed"),
+        "memory_enabled": bool(DEFAULT_CONFIG.get("memory_enabled", True)),
+        "data_cache_daily": bool(DEFAULT_CONFIG.get("data_cache_daily", False)),
+        "ensemble_runs": int(DEFAULT_CONFIG.get("ensemble_runs") or 1),
     }
 
 

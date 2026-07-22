@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cli.stats_handler import StatsCallbackHandler
+from tradingagents.agents.utils.rating import aggregate_ratings, rating_ordinal
 from tradingagents.dataflows.alpha_vantage import get_symbol_search
 from tradingagents.dataflows.alpha_vantage_common import (
     AlphaVantageNotConfiguredError,
@@ -461,7 +462,11 @@ def _collect_reports(final_state: dict) -> dict:
 
 
 def _write_run_archive(
-    spec: dict, final_state: dict, decision: str, reports: dict
+    spec: dict,
+    final_state: dict,
+    decision: str,
+    reports: dict,
+    ensemble: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """Write the report tree plus a run.json sidecar for the archive.
 
@@ -486,6 +491,8 @@ def _write_run_archive(
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "reports": {k: v for k, v in reports.items() if v},
         }
+        if ensemble:
+            sidecar["ensemble"] = ensemble
         (save_path / "run.json").write_text(
             json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -494,8 +501,56 @@ def _write_run_archive(
         return None, None
 
 
+def _stream_single_run(graph, spec: dict, stats, emit) -> dict:
+    """Stream one full graph run, emitting SSE events; return the final state."""
+    tracker = ProgressTracker(spec["analysts"])
+    past_context, instrument_context = spec["_run_context"]
+    init_state = graph.propagator.create_initial_state(
+        spec["ticker"],
+        spec["analysis_date"],
+        asset_type=spec["asset_type"],
+        past_context=past_context,
+        instrument_context=instrument_context,
+    )
+    args = graph.propagator.get_graph_args(callbacks=[stats])
+
+    seen_msg_ids: set = set()
+    trace = []
+    for chunk in graph.graph.stream(init_state, **args):
+        # Messages + tool calls
+        for message in chunk.get("messages", []):
+            mid = getattr(message, "id", None)
+            if mid is not None and mid in seen_msg_ids:
+                continue
+            if mid is not None:
+                seen_msg_ids.add(mid)
+            mtype, content = _classify(message)
+            if content and content.strip():
+                emit("message", {"mtype": mtype, "content": content})
+            for tc in getattr(message, "tool_calls", None) or []:
+                emit("tool", {"name": tc.get("name", ""), "args": tc.get("args", {})})
+
+        for event, payload in tracker.process(chunk):
+            emit(event, payload)
+
+        emit("stats", stats.get_stats())
+        trace.append(chunk)
+
+    # Merge chunks into the final state (same as the CLI).
+    final_state: dict = {}
+    for chunk in trace:
+        final_state.update(chunk)
+    return final_state
+
+
 def _run_worker(spec: dict, q: queue.Queue):
-    """Execute the graph in a worker thread, pushing SSE events onto ``q``."""
+    """Execute the graph in a worker thread, pushing SSE events onto ``q``.
+
+    With ``ensemble_runs > 1`` the full graph runs N times sequentially and the
+    final decision is the median rating across runs. Memory is read once before
+    the first run and written once after aggregation, so every run sees
+    identical inputs and the log gains a single entry.
+    """
 
     def emit(event: str, payload: dict):
         q.put((event, payload))
@@ -507,6 +562,10 @@ def _run_worker(spec: dict, q: queue.Queue):
             emit("error", {"message": key_msg})
             return
 
+        n_runs = int(spec["config"].get("ensemble_runs") or 1)
+        base_seed = spec["config"].get("seed")
+
+        # One stats handler across all runs: token/cost stats stay cumulative.
         stats = StatsCallbackHandler()
         tracker = ProgressTracker(spec["analysts"])
 
@@ -518,59 +577,75 @@ def _run_worker(spec: dict, q: queue.Queue):
                 "asset_type": spec["asset_type"],
                 "provider": provider,
                 "agents": tracker.initial_agents(),
+                "total_runs": n_runs,
             },
         )
 
-        graph = TradingAgentsGraph(
-            selected_analysts=spec["analysts"],
-            debug=False,
-            config=spec["config"],
-            callbacks=[stats],
-        )
+        def build_graph(run_idx: int) -> TradingAgentsGraph:
+            config = spec["config"]
+            if n_runs > 1 and base_seed not in (None, ""):
+                # Offset the seed per run: reproducible as a whole, but the
+                # runs stay distinct instead of collapsing to N copies.
+                config = dict(config)
+                config["seed"] = int(base_seed) + run_idx
+            return TradingAgentsGraph(
+                selected_analysts=spec["analysts"],
+                debug=False,
+                config=config,
+                callbacks=[stats],
+            )
 
-        instrument_context = graph.resolve_instrument_context(
+        graph = build_graph(0)
+
+        # Memory (and pending-outcome resolution) once for all runs.
+        spec["_run_context"] = graph.prepare_run_context(
             spec["ticker"], spec["asset_type"]
         )
-        init_state = graph.propagator.create_initial_state(
-            spec["ticker"],
-            spec["analysis_date"],
-            asset_type=spec["asset_type"],
-            instrument_context=instrument_context,
+
+        results: list[tuple[dict, str]] = []
+        for run_idx in range(n_runs):
+            if run_idx > 0:
+                graph = build_graph(run_idx)
+            if n_runs > 1:
+                emit(
+                    "run_start",
+                    {
+                        "run": run_idx + 1,
+                        "total": n_runs,
+                        "agents": ProgressTracker(spec["analysts"]).initial_agents(),
+                    },
+                )
+            final_state = _stream_single_run(graph, spec, stats, emit)
+            run_decision = graph.process_signal(final_state["final_trade_decision"])
+            results.append((final_state, run_decision))
+            if n_runs > 1:
+                emit("run_result", {"run": run_idx + 1, "decision": run_decision})
+
+        if n_runs > 1:
+            decisions = [d for _, d in results]
+            ensemble = aggregate_ratings(decisions)
+            target = rating_ordinal(ensemble["rating"])
+            rep_idx = next(
+                (i for i, d in enumerate(decisions) if rating_ordinal(d) == target), 0
+            )
+            final_state, _ = results[rep_idx]
+            decision = ensemble["rating"]
+            ensemble["decisions"] = decisions
+            ensemble["representative_run"] = rep_idx + 1
+        else:
+            final_state, decision = results[0]
+            ensemble = None
+
+        # Persist the (single, aggregated) decision to the memory log.
+        graph.record_decision(
+            spec["ticker"], spec["analysis_date"], final_state["final_trade_decision"]
         )
-        args = graph.propagator.get_graph_args(callbacks=[stats])
-
-        seen_msg_ids: set = set()
-        trace = []
-        for chunk in graph.graph.stream(init_state, **args):
-            # Messages + tool calls
-            for message in chunk.get("messages", []):
-                mid = getattr(message, "id", None)
-                if mid is not None and mid in seen_msg_ids:
-                    continue
-                if mid is not None:
-                    seen_msg_ids.add(mid)
-                mtype, content = _classify(message)
-                if content and content.strip():
-                    emit("message", {"mtype": mtype, "content": content})
-                for tc in getattr(message, "tool_calls", None) or []:
-                    emit("tool", {"name": tc.get("name", ""), "args": tc.get("args", {})})
-
-            for event, payload in tracker.process(chunk):
-                emit(event, payload)
-
-            emit("stats", stats.get_stats())
-            trace.append(chunk)
-
-        # Merge chunks into the final state (same as the CLI).
-        final_state: dict = {}
-        for chunk in trace:
-            final_state.update(chunk)
-
-        decision = graph.process_signal(final_state["final_trade_decision"])
 
         # Write the report tree + run.json sidecar for the archive.
         reports = _collect_reports(final_state)
-        run_id, report_path = _write_run_archive(spec, final_state, decision, reports)
+        run_id, report_path = _write_run_archive(
+            spec, final_state, decision, reports, ensemble=ensemble
+        )
 
         emit(
             "final",
@@ -580,6 +655,7 @@ def _run_worker(spec: dict, q: queue.Queue):
                 "report_path": report_path,
                 "reports": reports,
                 "stats": stats.get_stats(),
+                "ensemble": ensemble,
             },
         )
     except Exception as exc:  # noqa: BLE001 — surface any run failure to the UI

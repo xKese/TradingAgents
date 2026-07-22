@@ -39,7 +39,7 @@
 
   form .row{margin-bottom:14px}
   label.lbl{display:block;font-size:12.5px;font-weight:600;color:var(--text-dim);margin-bottom:6px;letter-spacing:.02em}
-  input[type=text],input[type=date],select{
+  input[type=text],input[type=date],input[type=number],select{
     width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);
     background:var(--bg-2);color:var(--text);font-size:14px;font-family:inherit;
   }
@@ -141,6 +141,22 @@
   .md th{background:var(--panel-2);color:var(--text)}
   .md blockquote{border-left:3px solid var(--border);margin:8px 0;padding:2px 12px;color:var(--text-mute)}
 
+  details.adv{border:1px solid var(--border-soft);border-radius:10px;background:var(--bg-2);margin-bottom:14px}
+  details.adv>summary{cursor:pointer;padding:11px 14px;font-weight:600;font-size:13px;color:var(--text-dim);list-style:none;display:flex;align-items:center;justify-content:space-between}
+  details.adv>summary::-webkit-details-marker{display:none}
+  details.adv>summary::after{content:"▸";color:var(--text-mute);transition:transform .15s}
+  details.adv[open]>summary::after{transform:rotate(90deg)}
+  .adv-body{padding:2px 14px 12px}
+  .adv-body .row:last-child{margin-bottom:0}
+  .field-hint{font-size:11.5px;color:var(--text-mute);margin-top:5px;line-height:1.5}
+  .field-hint.warn{color:var(--amber)}
+  .check.single{margin-bottom:0}
+
+  .ensemble-box{border:1px solid var(--border-soft);border-radius:10px;background:var(--bg-2);padding:13px 15px;margin-bottom:12px;font-size:13px}
+  .eb-title{font-weight:700;margin-bottom:9px;color:var(--text)}
+  .eb-votes{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--text-dim)}
+  .eb-note{margin-top:9px;color:var(--text-mute);font-size:12px}
+
   .errbox{border:1px solid rgba(255,107,120,.4);background:rgba(255,107,120,.08);color:#ffb3ba;border-radius:10px;padding:14px 16px;font-size:13.5px}
   .errbox b{color:#ff9aa3}
   .spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.25);border-top-color:#04110c;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px}
@@ -211,6 +227,45 @@
           <option>한국어</option><option>Português</option><option>Русский</option>
         </select>
       </div>
+      <details class="adv" id="advanced">
+        <summary>Erweiterte Einstellungen</summary>
+        <div class="adv-body">
+          <div class="row two">
+            <div>
+              <label class="lbl" for="temperature">Temperatur</label>
+              <input type="number" id="temperature" min="0" max="2" step="0.1" placeholder="Provider-Standard">
+            </div>
+            <div>
+              <label class="lbl" for="seed">Seed</label>
+              <input type="number" id="seed" step="1" placeholder="zufällig">
+            </div>
+          </div>
+          <div class="row">
+            <div class="field-hint">Temperatur 0 und ein fester Seed machen Läufe ähnlicher (nicht identisch). Seed wirkt nur bei OpenAI-kompatiblen Providern &amp; Azure — Anthropic, Bedrock, Google und natives OpenAI (Responses-API) ignorieren ihn.</div>
+          </div>
+          <div class="row">
+            <label class="check single" for="memory-enabled">
+              <input type="checkbox" id="memory-enabled" checked> Lernfunktion (Memory)
+            </label>
+            <div class="field-hint">Frühere Entscheidungen und deren Ergebnis fließen als Kontext in den Portfolio Manager ein. Deaktivieren, damit direkt aufeinanderfolgende Läufe identische Eingaben sehen.</div>
+          </div>
+          <div class="row">
+            <label class="check single" for="data-cache">
+              <input type="checkbox" id="data-cache"> Tages-Cache für News/Makrodaten
+            </label>
+            <div class="field-hint">News, Makro- und Fundamentaldaten werden pro Kalendertag zwischengespeichert — wiederholte Läufe am selben Tag sehen identische Daten.</div>
+          </div>
+          <div class="row">
+            <label class="lbl" for="ensemble">Anzahl Läufe (Ensemble)</label>
+            <select id="ensemble">
+              <option value="1">1 — Einzellauf</option>
+              <option value="3">3 — Median aus 3 Läufen</option>
+              <option value="5">5 — Median aus 5 Läufen</option>
+            </select>
+            <div class="field-hint warn">⚠ Vervielfacht Laufzeit und Token-Kosten (~N×). Das finale Rating ist der Median der Einzelläufe.</div>
+          </div>
+        </div>
+      </details>
       <button class="btn" id="run-btn" type="submit">Analyse starten</button>
       <button class="btn secondary" id="stop-btn" type="button" style="display:none">Abbrechen</button>
       <div class="disclaimer">⚠️ Forschungs-Framework, keine Anlageberatung. Ein Lauf ruft je nach Provider kostenpflichtige LLM-APIs auf. Für einen kostenlosen lokalen Lauf Ollama wählen.</div>
@@ -251,6 +306,7 @@
     <div class="card" id="reports-card" style="display:none">
       <h2>Berichte &amp; Entscheidung</h2>
       <div class="hint" id="reports-hint">Gerenderte Berichte der einzelnen Teams.</div>
+      <div id="ensemble-box" style="display:none"></div>
       <div class="reports" id="reports"></div>
     </div>
   </div>
@@ -330,8 +386,23 @@ async function loadCatalog(assetType){
   const dsel=$("depth"); dsel.innerHTML="";
   CATALOG.depths.forEach(d=>{const o=document.createElement("option");o.value=d.value;o.textContent=d.label;dsel.appendChild(o);});
   dsel.value=3;
+  prefillAdvanced(defs);
   renderAnalysts();
   await onProviderChange();
+}
+
+// Prefill the advanced (reproducibility) settings once from the env-aware
+// defaults; loadCatalog re-runs on asset-type changes and must not clobber
+// what the user already adjusted.
+let advPrefilled=false;
+function prefillAdvanced(defs){
+  if(advPrefilled) return; advPrefilled=true;
+  if(defs.temperature!==null&&defs.temperature!==undefined) $("temperature").value=defs.temperature;
+  if(defs.seed!==null&&defs.seed!==undefined) $("seed").value=defs.seed;
+  $("memory-enabled").checked = defs.memory_enabled!==false;
+  $("data-cache").checked = defs.data_cache_daily===true;
+  const runs=String(defs.ensemble_runs||1);
+  if([...$("ensemble").options].some(o=>o.value===runs)) $("ensemble").value=runs;
 }
 
 function renderAnalysts(){
@@ -508,8 +579,10 @@ function resetUI(){
   $("reports-card").style.display="none"; $("reports").innerHTML="";
   $("reports-hint").textContent="Gerenderte Berichte der einzelnen Teams.";
   $("error-card").style.display="none";
+  $("ensemble-box").style.display="none"; $("ensemble-box").innerHTML="";
   for(const k in reportEls) delete reportEls[k];
   $("stats").innerHTML=""; $("teams").innerHTML=""; $("runmeta").innerHTML="";
+  RUNMETA_BASE=""; currentRun=1; totalRuns=1; runDecisions=[];
 }
 
 function setStats(s){
@@ -575,6 +648,31 @@ function decisionBadge(decision){
   return `<span class="badge ${cls}">${decision}</span>`;
 }
 
+// ---------- ensemble (multi-run) state ----------
+let RUNMETA_BASE="", currentRun=1, totalRuns=1, runDecisions=[];
+function updateRunMeta(){
+  let html=RUNMETA_BASE;
+  if(totalRuns>1){
+    html+=` <span><span class="k">Lauf</span> <b>${currentRun}/${totalRuns}</b></span>`;
+    runDecisions.forEach(r=>{html+=` <span title="Lauf ${r.run}">${decisionBadge(r.decision)}</span>`;});
+  }
+  $("runmeta").innerHTML=html;
+}
+function renderEnsemble(e){
+  if(!e) return;
+  const box=$("ensemble-box");
+  const votes=Object.entries(e.votes||{})
+    .map(([r,c])=>`<span>${decisionBadge(r)} × ${c}</span>`).join(" ");
+  const runs=(e.decisions||[]).map((d,i)=>`Lauf ${i+1}: ${escapeHtml(d)}`).join(" · ");
+  box.innerHTML=`<div class="ensemble-box">
+    <div class="eb-title">Ensemble-Ergebnis — Median aus ${e.n} Läufen: ${decisionBadge(e.rating||"?")}</div>
+    <div class="eb-votes">${votes}</div>
+    <div class="eb-note">${runs}${e.representative_run?` — die Berichte unten stammen aus Lauf ${e.representative_run}.`:""}</div>
+  </div>`;
+  box.style.display="block";
+  $("reports-card").style.display="block";
+}
+
 // ---------- report archive (list + reload past runs) ----------
 let runActive=false;
 
@@ -611,6 +709,7 @@ function showArchived(d){
   $("idle").style.display="none"; $("live").style.display="block";
   $("log-card").style.display="none"; $("error-card").style.display="none";
   $("stats").innerHTML=""; $("teams").innerHTML="";
+  $("ensemble-box").style.display="none"; $("ensemble-box").innerHTML="";
   $("reports").innerHTML=""; for(const k in reportEls) delete reportEls[k];
   $("runmeta").innerHTML=`<span><span class="k">Ticker</span> <b>${escapeHtml(d.ticker||"")}</b></span>
     <span><span class="k">Datum</span> <b>${escapeHtml(d.analysis_date||"")}</b></span>
@@ -618,6 +717,7 @@ function showArchived(d){
     ${d.provider?`<span><span class="k">Provider</span> <b>${escapeHtml(d.provider)}</b></span>`:""}
     <span>${decisionBadge(d.decision||"?")}</span>`;
   $("reports-hint").textContent=`Geladener Bericht aus dem Archiv vom ${(d.created_at||"").replace("T"," ").slice(0,16)} — kein neuer Lauf.`;
+  renderEnsemble(d.ensemble);
   REPORT_ORDER.forEach(([sec,title])=>{ if(d.reports&&d.reports[sec]) upsertReport(sec,title,d.reports[sec]); });
 }
 
@@ -672,11 +772,28 @@ function handleFrame(frame){
   let p; try{p=JSON.parse(data);}catch(e){return;}
   switch(ev){
     case "run":
-      $("runmeta").innerHTML=`<span><span class="k">Ticker</span> <b>${p.ticker}</b></span>
+      RUNMETA_BASE=`<span><span class="k">Ticker</span> <b>${p.ticker}</b></span>
         <span><span class="k">Datum</span> <b>${p.analysis_date}</b></span>
         <span><span class="k">Typ</span> <b>${p.asset_type}</b></span>
         <span><span class="k">Provider</span> <b>${p.provider}</b></span>`;
+      totalRuns=p.total_runs||1; currentRun=1; runDecisions=[];
+      updateRunMeta();
       buildTeams(p.agents); setStats({});
+      break;
+    case "run_start":
+      // A new ensemble run begins: the live panels show run i's progress and
+      // reports (previous runs' outcomes persist as badges via run_result).
+      currentRun=p.run; totalRuns=p.total||totalRuns;
+      buildTeams(p.agents);
+      for(const k in reportEls) delete reportEls[k];
+      $("reports").innerHTML="";
+      updateRunMeta();
+      if(p.run>1) addLog("System",`— Lauf ${p.run}/${p.total} gestartet —`);
+      break;
+    case "run_result":
+      runDecisions.push({run:p.run,decision:p.decision});
+      updateRunMeta();
+      addLog("System",`— Lauf ${p.run}: ${p.decision} —`);
       break;
     case "status": setStatus(p.agent,p.status); break;
     case "message": addLog(p.mtype,p.content); break;
@@ -685,7 +802,9 @@ function handleFrame(frame){
     case "stats": setStats(p); break;
     case "final":
       setStats(p.stats||{});
+      updateRunMeta();
       $("runmeta").innerHTML+=` <span>${decisionBadge(p.decision)}</span>`;
+      renderEnsemble(p.ensemble);
       // ensure all report sections present in final
       REPORT_ORDER.forEach(([sec,title])=>{ if(p.reports&&p.reports[sec]) upsertReport(sec,title,p.reports[sec]); });
       if(p.report_path) $("reports-hint").innerHTML=`Gerenderte Berichte · gespeichert unter <span class="mono">${escapeHtml(p.report_path)}</span>`;
@@ -711,6 +830,11 @@ $("run-form").addEventListener("submit",e=>{
     research_depth:parseInt($("depth").value,10),
     analysts,
     output_language:$("language").value,
+    temperature:$("temperature").value.trim(),
+    seed:$("seed").value.trim(),
+    memory_enabled:$("memory-enabled").checked,
+    data_cache_daily:$("data-cache").checked,
+    ensemble_runs:parseInt($("ensemble").value,10),
   };
   if(!payload.shallow_thinker||!payload.deep_thinker){alert("Bitte Quick- und Deep-Modell angeben.");return;}
   startRun(payload);

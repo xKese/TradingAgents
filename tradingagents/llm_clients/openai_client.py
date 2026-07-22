@@ -1,5 +1,6 @@
 import os
 import re
+import warnings
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -165,7 +166,7 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort", "temperature",
+    "timeout", "max_retries", "reasoning_effort", "temperature", "seed",
     "api_key", "callbacks", "http_client", "http_async_client",
 )
 
@@ -331,6 +332,16 @@ class OpenAIClient(BaseLLMClient):
             if key not in self.kwargs:
                 continue
             if key == "reasoning_effort" and not _supports_reasoning_effort(self.model):
+                continue
+            if key == "seed" and llm_kwargs.get("use_responses_api"):
+                # The Responses API (native OpenAI) has no seed parameter, and
+                # langchain-openai forwards ChatOpenAI.seed into the request
+                # payload unfiltered — the request would 400.
+                warnings.warn(
+                    "The native OpenAI Responses API does not support a sampling "
+                    "seed; ignoring the configured seed for this run.",
+                    stacklevel=2,
+                )
                 continue
             llm_kwargs[key] = self.kwargs[key]
 

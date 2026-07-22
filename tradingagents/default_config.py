@@ -204,6 +204,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".T":   "^N225",       # Tokyo (Nikkei 225)
         ".HK":  "^HSI",        # Hong Kong (Hang Seng)
         ".L":   "^FTSE",       # London (FTSE 100)
+        ".DE":  "^GDAXI",      # XETRA (DAX)
+        ".F":   "^GDAXI",      # Frankfurt floor (DAX)
         ".TO":  "^GSPTSE",     # Toronto (TSX Composite)
         ".AX":  "^AXJO",       # Australia (ASX 200)
         ".SS":  "000001.SS",   # Shanghai (SSE Composite)

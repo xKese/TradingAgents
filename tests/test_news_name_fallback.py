@@ -61,6 +61,19 @@ class TestResolveCompanyName:
         )
         assert fb._resolve_company_name("ENR.DEX") == "Siemens Energy AG"
 
+    def test_queries_search_in_av_dialect(self, monkeypatch):
+        # The pipeline holds the canonical Yahoo symbol (ENR.DE); the AV
+        # SYMBOL_SEARCH endpoint must be queried in its own dialect (ENR.DEX).
+        queried = []
+
+        def capture(q):
+            queried.append(q)
+            return [{"symbol": "ENR.DEX", "name": "Siemens Energy AG"}]
+
+        monkeypatch.setattr(fb, "get_symbol_search", capture)
+        assert fb._resolve_company_name("ENR.DE") == "Siemens Energy AG"
+        assert queried == ["ENR.DEX"]
+
     def test_no_match_or_error_gives_none(self, monkeypatch):
         monkeypatch.setattr(fb, "get_symbol_search", lambda q: [])
         assert fb._resolve_company_name("ENR.DEX") is None

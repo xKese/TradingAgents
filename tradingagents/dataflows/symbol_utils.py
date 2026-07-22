@@ -10,6 +10,8 @@ differ from the broker / TradingView / MT5 style symbols users often type:
     EURUSD            EURUSD=X          spot forex pairs take a ``=X`` suffix
     BTCUSD            BTC-USD           crypto pairs use a ``-`` separator
     SPX500, US500     ^GSPC             index CFDs map to Yahoo index symbols
+    MBG.FRK           MBG.F             Alpha Vantage exchange suffixes map
+                                        to their Yahoo equivalents
 
 Passing the raw broker symbol to Yahoo returns an empty result, which the
 agents previously received as free text and could hallucinate a price
@@ -69,6 +71,43 @@ _ALIASES = {
     "FRA40": "^FCHI", "EU50": "^STOXX50E", "HK50": "^HSI",
 }
 
+# Alpha Vantage <-> Yahoo Finance exchange-suffix dialects (suffixes WITHOUT
+# the leading dot). AV documents its non-US coverage with 3-letter market
+# codes; Yahoo uses 1-2 letter suffixes, so the two directions can never
+# collide. Keep Frankfurt floor (.FRK -> .F) distinct from XETRA
+# (.DEX -> .DE). Extend by adding rows — both directions derive from here.
+_AV_TO_YAHOO_SUFFIX = {
+    "LON": "L",   # London Stock Exchange
+    "TRT": "TO",  # Toronto Stock Exchange
+    "TRV": "V",   # TSX Venture Exchange
+    "DEX": "DE",  # XETRA (Deutsche Boerse electronic)
+    "FRK": "F",   # Frankfurt floor (Boerse Frankfurt)
+    "BSE": "BO",  # Bombay Stock Exchange
+    "NSE": "NS",  # National Stock Exchange of India (seen in AV search results)
+    "SHH": "SS",  # Shanghai Stock Exchange
+    "SHZ": "SZ",  # Shenzhen Stock Exchange
+    "SAO": "SA",  # B3 / Sao Paulo (seen in AV search results)
+}
+_YAHOO_TO_AV_SUFFIX = {y: a for a, y in _AV_TO_YAHOO_SUFFIX.items()}
+
+
+def _translate_suffix(symbol: str, table: dict[str, str]) -> str:
+    base, dot, suffix = symbol.rpartition(".")
+    if not dot or not base or suffix not in table:
+        return symbol  # no suffix, empty base (".DEX"), or unknown suffix
+    return f"{base}.{table[suffix]}"
+
+
+def av_symbol_to_yahoo(symbol: str) -> str:
+    """``MBG.FRK`` -> ``MBG.F``; symbols without a known AV suffix pass through."""
+    return _translate_suffix(symbol, _AV_TO_YAHOO_SUFFIX)
+
+
+def yahoo_symbol_to_av(symbol: str) -> str:
+    """``MBG.F`` -> ``MBG.FRK``; symbols without a known Yahoo suffix pass through."""
+    return _translate_suffix(symbol, _YAHOO_TO_AV_SUFFIX)
+
+
 # Yahoo symbols may contain letters, digits, and these structural characters.
 _YAHOO_SAFE = re.compile(r"^[A-Za-z0-9._\-\^=]+$")
 
@@ -109,13 +148,18 @@ def normalize_symbol(raw: str) -> str:
       2. Crypto rule: a known crypto base quoted in USD/USDT/USDC (dashed or
          not) -> ``BASE-USD``.
       3. Forex rule: six letters that are two ISO currency codes -> ``PAIR=X``.
-      4. Otherwise the upper-cased symbol is returned unchanged (plain
-         equities, ETFs, exchange-suffixed symbols like ``ADS.FRK`` or
-         ``0700.HK``, and Yahoo-native symbols like ``GC=F`` or ``^GSPC``).
-         Exchange suffixes are deliberately NOT translated between vendor
-         dialects: the pipeline keeps the symbol the user picked (e.g. an
-         Alpha Vantage search result) so an all-Alpha-Vantage setup queries
-         with the native AV symbol.
+      4. Otherwise: known Alpha Vantage exchange suffixes are canonicalized
+         to the Yahoo dialect (``MBG.FRK`` -> ``MBG.F``, ``TSCO.LON`` ->
+         ``TSCO.L``); everything else is returned upper-cased but unchanged
+         (plain equities, ETFs, Yahoo-suffixed symbols like ``0700.HK``, and
+         Yahoo-native symbols like ``GC=F`` or ``^GSPC``). The pipeline's
+         canonical dialect is Yahoo's — benchmark mapping, instrument
+         identity, memory keys, and caches all key on it. All-Alpha-Vantage
+         setups keep working: the vendor router translates the canonical
+         symbol back to the AV dialect at dispatch time (see interface.py).
+         Note: memory-log/report/cache entries created before this
+         canonicalization under an AV-dialect key (e.g. ``ADS.DEX``) will not
+         match the new canonical key (``ADS.DE``) — a one-time discontinuity.
 
     A trailing ``+`` (broker CFD marker, e.g. ``XAUUSD+``) is stripped before
     matching. The function is purely syntactic — it performs no network
@@ -136,7 +180,7 @@ def normalize_symbol(raw: str) -> str:
     elif len(s) == 6 and s[:3] in _FOREX_CURRENCIES and s[3:] in _FOREX_CURRENCIES:
         canonical = f"{s}=X"
     else:
-        canonical = s
+        canonical = av_symbol_to_yahoo(s)
 
     if canonical != raw.strip().upper():
         logger.info("Resolved symbol %r to Yahoo symbol %r", raw, canonical)

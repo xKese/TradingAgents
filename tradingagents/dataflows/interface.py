@@ -12,6 +12,7 @@ from .alpha_vantage import (
     get_stock as get_alpha_vantage_stock,
 )
 from .config import get_config
+from .daily_cache import cached_vendor_call
 from .errors import (
     NoMarketDataError,
     VendorNotConfiguredError,
@@ -166,6 +167,20 @@ def get_vendor(category: str, method: str = None) -> str:
     return config.get("data_vendors", {}).get(category, "default")
 
 def route_to_vendor(method: str, *args, **kwargs):
+    """Route method calls to the appropriate vendor implementation.
+
+    When ``data_cache_daily`` is enabled, cacheable methods (news, macro,
+    fundamentals, …) are served from a per-day on-disk cache so repeated runs
+    within a day see identical data; everything else always fetches live.
+    """
+    return cached_vendor_call(
+        method,
+        lambda: _route_to_vendor_uncached(method, *args, **kwargs),
+        args,
+        kwargs,
+    )
+
+def _route_to_vendor_uncached(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)

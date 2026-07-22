@@ -28,6 +28,7 @@ from tradingagents.agents.utils.agent_utils import (
     resolve_instrument_identity,
 )
 from tradingagents.agents.utils.memory import TradingMemoryLog
+from tradingagents.agents.utils.rating import aggregate_ratings, rating_ordinal
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -176,6 +177,21 @@ class TradingAgentsGraph:
         temperature = self.config.get("temperature")
         if temperature is not None and temperature != "":
             kwargs["temperature"] = float(temperature)
+
+        # Sampling seed is only supported by OpenAI-compatible Chat Completions
+        # and Azure. Anthropic, Bedrock, and Google have no seed parameter, so
+        # forwarding it there would either crash or silently mislead — drop it
+        # with a warning instead. int() for the same env-string reason as
+        # temperature above.
+        seed = self.config.get("seed")
+        if seed is not None and seed != "":
+            if provider in ("anthropic", "bedrock", "google"):
+                logger.warning(
+                    "Provider %r does not support a sampling seed; ignoring seed=%s.",
+                    provider, seed,
+                )
+            else:
+                kwargs["seed"] = int(seed)
 
         # SDK retry budget is cross-provider. Forward it only when explicitly set
         # so each provider keeps its own default (usually 2) otherwise (#1091).
@@ -333,6 +349,38 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
+    def _memory_on(self) -> bool:
+        """Whether cross-run memory (context injection + persistence) is active."""
+        return bool(self.config.get("memory_enabled", True))
+
+    def prepare_run_context(self, ticker: str, asset_type: str = "stock") -> tuple[str, str]:
+        """Return ``(past_context, instrument_context)`` for a new run.
+
+        Single entry point shared by ``propagate()``, the CLI stream loop, and
+        the web worker, so cross-run memory behaves identically on all three
+        paths. With ``memory_enabled`` off, no past decisions are injected and
+        pending-outcome resolution (which costs reflection LLM calls) is
+        skipped — back-to-back runs then see identical inputs.
+        """
+        past_context = ""
+        if self._memory_on():
+            self._resolve_pending_entries(ticker)
+            past_context = self.memory_log.get_past_context(ticker)
+        return past_context, self.resolve_instrument_context(ticker, asset_type)
+
+    def record_decision(self, ticker: str, trade_date, final_trade_decision: str) -> None:
+        """Persist a finished run's decision to the memory log (if enabled).
+
+        Counterpart to ``prepare_run_context`` for the CLI/web stream paths,
+        which bypass ``_run_graph``.
+        """
+        if self._memory_on():
+            self.memory_log.store_decision(
+                ticker=ticker,
+                trade_date=trade_date,
+                final_trade_decision=final_trade_decision,
+            )
+
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
         """Resolve ticker identity once and return the full instrument context.
 
@@ -371,9 +419,6 @@ class TradingAgentsGraph:
         """
         self.ticker = company_name
 
-        # Resolve any pending memory-log entries for this ticker before the pipeline runs.
-        self._resolve_pending_entries(company_name)
-
         # Recompile with a checkpointer if the user opted in.
         if self.config.get("checkpoint_enabled"):
             self._checkpointer_ctx = get_checkpointer(
@@ -401,6 +446,82 @@ class TradingAgentsGraph:
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
+    def propagate_ensemble(
+        self, company_name, trade_date, asset_type: str = "stock", runs: int | None = None
+    ):
+        """Run the graph N times and aggregate the ratings (ensemble mode).
+
+        Returns ``(final_state, decision, ensemble)`` where ``final_state`` is
+        the representative run (the first whose rating equals the ensemble
+        median), ``decision`` is the aggregated rating, and ``ensemble`` is the
+        ``aggregate_ratings`` dict extended with the per-run ``decisions`` list
+        and 1-based ``representative_run`` (``None`` when ``runs <= 1``).
+
+        Memory is read once before the first run and written once after
+        aggregation, so all runs see identical inputs and the log gains a
+        single entry. Checkpointing is forced off for the duration — its
+        thread ID is keyed on ticker+date and would collide across runs.
+        """
+        if runs is None:
+            runs = self.config.get("ensemble_runs") or 1
+        runs = int(runs)
+        if runs <= 1:
+            final_state, decision = self.propagate(
+                company_name, trade_date, asset_type=asset_type
+            )
+            return final_state, decision, None
+
+        if self.config.get("seed") not in (None, ""):
+            logger.warning(
+                "A fixed seed is set while ensemble_runs=%d; on providers that "
+                "honor the seed the runs may collapse to identical outputs.",
+                runs,
+            )
+
+        self.ticker = company_name
+        past_context, instrument_context = self.prepare_run_context(
+            company_name, asset_type
+        )
+
+        checkpoint_before = self.config.get("checkpoint_enabled")
+        self.config["checkpoint_enabled"] = False
+        results = []
+        try:
+            for run_idx in range(runs):
+                logger.info(
+                    "Ensemble run %d/%d for %s on %s",
+                    run_idx + 1, runs, company_name, trade_date,
+                )
+                results.append(
+                    self._run_graph(
+                        company_name,
+                        trade_date,
+                        asset_type=asset_type,
+                        past_context=past_context,
+                        instrument_context=instrument_context,
+                        record=False,
+                    )
+                )
+        finally:
+            self.config["checkpoint_enabled"] = checkpoint_before
+
+        decisions = [decision for _, decision in results]
+        ensemble = aggregate_ratings(decisions)
+        target = rating_ordinal(ensemble["rating"])
+        rep_idx = next(
+            (i for i, d in enumerate(decisions) if rating_ordinal(d) == target), 0
+        )
+        rep_state, _ = results[rep_idx]
+        ensemble["decisions"] = decisions
+        ensemble["representative_run"] = rep_idx + 1
+
+        self.curr_state = rep_state
+        self._log_state(trade_date, rep_state)
+        self.record_decision(
+            company_name, trade_date, rep_state["final_trade_decision"]
+        )
+        return rep_state, ensemble["rating"], ensemble
+
     def save_reports(self, final_state, ticker, save_path=None) -> Path:
         """Write the markdown report tree for a completed run, like the CLI does.
 
@@ -416,12 +537,27 @@ class TradingAgentsGraph:
             )
         return write_report_tree(final_state, ticker, save_path)
 
-    def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
-        """Execute the graph and write the resulting state to disk and memory log."""
+    def _run_graph(
+        self,
+        company_name,
+        trade_date,
+        asset_type: str = "stock",
+        past_context: str | None = None,
+        instrument_context: str | None = None,
+        record: bool = True,
+    ):
+        """Execute the graph and write the resulting state to disk and memory log.
+
+        ``past_context``/``instrument_context`` can be precomputed (ensemble
+        mode reads them once and reuses them for every run); ``record=False``
+        skips the memory-log write so an ensemble stores one decision, not N.
+        """
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
-        past_context = self.memory_log.get_past_context(company_name)
-        instrument_context = self.resolve_instrument_context(company_name, asset_type)
+        if past_context is None or instrument_context is None:
+            past_context, instrument_context = self.prepare_run_context(
+                company_name, asset_type
+            )
         init_agent_state = self.propagator.create_initial_state(
             company_name,
             trade_date,
@@ -466,11 +602,10 @@ class TradingAgentsGraph:
         self._log_state(trade_date, final_state)
 
         # Store decision for deferred reflection on the next same-ticker run.
-        self.memory_log.store_decision(
-            ticker=company_name,
-            trade_date=trade_date,
-            final_trade_decision=final_state["final_trade_decision"],
-        )
+        if record:
+            self.record_decision(
+                company_name, trade_date, final_state["final_trade_decision"]
+            )
 
         # Clear checkpoint on successful completion to avoid stale state.
         if self.config.get("checkpoint_enabled"):

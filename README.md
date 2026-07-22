@@ -350,14 +350,28 @@ Language model sampling is non-deterministic. Even at a fixed temperature, provi
 
 Live data moves. News, StockTwits, and Reddit return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but the social and news sources still reflect "now".
 
-To reduce variation you can lower the sampling temperature. Set `temperature` in your config (or `TRADINGAGENTS_TEMPERATURE` in `.env`); lower values make models that honor it more repeatable. The current curated models are reasoning-first and largely ignore temperature, so for tighter reproducibility use a non-reasoning model, which you can set explicitly via the Custom model ID option.
+Cross-run memory changes the second run. With the learning function enabled (default), each finished run stores its decision in a memory log, and the next run on the same ticker sees it — plus reflections on realized outcomes — as extra context. Two back-to-back runs therefore do not receive identical prompts even when the market data is identical.
+
+Four levers reduce variation, all selectable in the web UI under **Erweiterte Einstellungen** and settable via config/env:
+
+- **Temperature** — `temperature` / `TRADINGAGENTS_TEMPERATURE`. Lower values make models that honor it more repeatable. The curated default models are reasoning-first and largely ignore temperature; for tighter reproducibility use a non-reasoning model via the Custom model ID option.
+- **Seed** — `seed` / `TRADINGAGENTS_SEED`. Forwarded only to providers whose API accepts one: Azure and OpenAI-compatible Chat Completions (deepseek, groq, ollama, custom endpoints, or `openai` with a custom base URL). Anthropic, Bedrock, Google, and the native OpenAI Responses API have no seed parameter and ignore it (with a warning). Even where supported, a seed makes runs more similar, not bit-identical.
+- **Memory toggle** — `memory_enabled` / `TRADINGAGENTS_MEMORY_ENABLED`. Off means no past-decision context is injected and nothing is stored, so consecutive runs see identical inputs.
+- **Per-day data cache** — `data_cache_daily` / `TRADINGAGENTS_DATA_CACHE_DAILY`. On means news/macro/fundamentals responses are cached per calendar day, so repeated runs on the same day see identical data (prices already have their own cache).
+
+For a stable verdict rather than a stable transcript, use **ensemble mode** (`ensemble_runs` / `TRADINGAGENTS_ENSEMBLE_RUNS`, or "Anzahl Läufe" in the web UI): the full analysis runs N times and the final rating is the median of the per-run ratings, with vote counts reported alongside. Memory is read once before the first run and written once after aggregation, so all N runs see the same inputs. Note that N runs cost roughly N× the runtime and tokens, and a fixed seed can collapse the ensemble to near-identical runs on providers that honor it (the web UI offsets the seed per run to avoid this). Programmatic callers can use `TradingAgentsGraph.propagate_ensemble(...)`.
 
 ```python
 config = DEFAULT_CONFIG.copy()
 config["llm_provider"] = "openai"
 config["temperature"] = 0.0
+config["memory_enabled"] = False    # identical inputs for back-to-back runs
+config["data_cache_daily"] = True   # freeze news/macro/fundamentals per day
 # Reasoning models ignore temperature. For tighter reproducibility, set a
 # non-reasoning deep/quick model explicitly (e.g. via the Custom model ID option).
+
+ta = TradingAgentsGraph(config=config)
+final_state, decision, ensemble = ta.propagate_ensemble("NVDA", "2026-01-15", runs=3)
 ```
 
 What does not vary anymore: the analyzed company identity is resolved deterministically from the ticker before any agent runs, and the market analyst grounds exact price and indicator claims in a verified data snapshot. Earlier reports of "different companies" or fabricated price levels across runs are addressed by these two mechanisms.

@@ -18,7 +18,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_SEED":                 "seed",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
+    "TRADINGAGENTS_MEMORY_ENABLED":       "memory_enabled",
+    "TRADINGAGENTS_DATA_CACHE_DAILY":     "data_cache_daily",
+    "TRADINGAGENTS_ENSEMBLE_RUNS":        "ensemble_runs",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -118,6 +122,29 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # variation on models that honor it; reasoning models largely ignore it
     # and no setting makes LLM output bit-identical across runs (see README).
     "temperature": None,
+    # Sampling seed, forwarded only to providers whose API accepts one
+    # (OpenAI-compatible Chat Completions and Azure). Anthropic, Bedrock,
+    # Google, and the native OpenAI Responses API have no seed parameter —
+    # for those it is dropped with a warning. Even where supported, a seed
+    # makes runs *more* similar, not bit-identical. None = provider default
+    # (random sampling).
+    "seed": None,
+    # Cross-run memory switch. When False, past decisions are neither
+    # injected as context nor stored, and pending-outcome resolution (which
+    # costs reflection LLM calls) is skipped. Storage location itself is
+    # controlled by ``memory_log_path``. Turning this off makes back-to-back
+    # runs see identical inputs.
+    "memory_enabled": True,
+    # When True, news/macro/fundamentals vendor responses are cached on disk
+    # per calendar day (under ``data_cache_dir``/daily), so repeated runs on
+    # the same day see identical data. Price/indicator data has its own
+    # cache and is unaffected. Off by default to keep intraday data fresh.
+    "data_cache_daily": False,
+    # Number of full analysis runs per request. Values > 1 enable ensemble
+    # mode: the graph runs N times and the final rating is the median of the
+    # per-run ratings (vote counts reported alongside). Multiplies runtime
+    # and token cost by ~N.
+    "ensemble_runs": 1,
     # SDK retry budget forwarded to every provider chat client. None leaves each
     # provider/SDK at its own default (usually 2). Raise it to ride out bursty
     # 429 throttling on rate-limited deployments instead of aborting a run (#1091).

@@ -151,6 +151,12 @@ class _FakeGraph:
     def resolve_instrument_context(self, ticker, asset_type):
         return {}
 
+    def prepare_run_context(self, ticker, asset_type):
+        return "", {}
+
+    def record_decision(self, ticker, trade_date, final_trade_decision):
+        pass
+
     def process_signal(self, text):
         return "Buy"
 
@@ -422,3 +428,129 @@ def test_form_defaults_without_env_reflect_builtin_config(monkeypatch):
     defaults = catalog.form_defaults()
     assert defaults["llm_provider"] == "openai"
     assert defaults["backend_url"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Reproducibility options (advanced settings) + ensemble mode
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_build_run_advanced_options_mapping():
+    spec = run_config.build_run({
+        **_run_payload(),
+        "temperature": "0.2",
+        "seed": "42",
+        "memory_enabled": False,
+        "data_cache_daily": True,
+        "ensemble_runs": 3,
+    })
+    cfg = spec["config"]
+    assert cfg["temperature"] == 0.2
+    assert cfg["seed"] == 42
+    assert cfg["memory_enabled"] is False
+    assert cfg["data_cache_daily"] is True
+    assert cfg["ensemble_runs"] == 3
+
+
+@pytest.mark.unit
+def test_build_run_advanced_blank_and_absent():
+    # Blank inputs mean "provider default" / "random".
+    spec = run_config.build_run({**_run_payload(), "temperature": "", "seed": ""})
+    assert spec["config"]["temperature"] is None
+    assert spec["config"]["seed"] is None
+    # Keys absent from the payload keep the config defaults (older clients).
+    spec2 = run_config.build_run(_run_payload())
+    assert spec2["config"]["ensemble_runs"] == DEFAULT_CONFIG["ensemble_runs"]
+    assert spec2["config"]["memory_enabled"] == DEFAULT_CONFIG["memory_enabled"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("temperature", "3.0"),
+        ("temperature", "abc"),
+        ("temperature", -0.5),
+        ("seed", "x"),
+        ("ensemble_runs", 0),
+        ("ensemble_runs", 7),
+        ("memory_enabled", "vielleicht"),
+    ],
+)
+def test_build_run_rejects_bad_advanced_input(field, value):
+    with pytest.raises(run_config.RunRequestError):
+        run_config.build_run({**_run_payload(), field: value})
+
+
+@pytest.mark.unit
+def test_form_defaults_include_advanced_keys():
+    defaults = catalog.form_defaults()
+    for key in ("temperature", "seed", "memory_enabled", "data_cache_daily", "ensemble_runs"):
+        assert key in defaults
+    assert defaults["memory_enabled"] is True
+    assert defaults["data_cache_daily"] is False
+    assert defaults["ensemble_runs"] == 1
+
+
+class _FakeEnsembleGraph(_FakeGraph):
+    """Fake graph whose per-run decisions differ, to exercise aggregation."""
+
+    decisions = ["Buy", "Underweight", "Overweight"]
+    _idx = 0
+
+    def process_signal(self, text):
+        d = _FakeEnsembleGraph.decisions[_FakeEnsembleGraph._idx % len(self.decisions)]
+        _FakeEnsembleGraph._idx += 1
+        return d
+
+
+@pytest.mark.unit
+def test_sse_ensemble_run_streams_and_aggregates(monkeypatch, tmp_path):
+    _FakeEnsembleGraph._idx = 0
+    monkeypatch.setattr(server, "TradingAgentsGraph", _FakeEnsembleGraph)
+    monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))
+
+    client = TestClient(server.app)
+    resp = client.post("/api/run", json={**_run_payload(), "ensemble_runs": 3})
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    names = [e[0] for e in events]
+
+    assert names.count("run_start") == 3
+    assert names.count("run_result") == 3
+    run_ev = _json.loads(next(d for n, d in events if n == "run"))
+    assert run_ev["total_runs"] == 3
+
+    final = _json.loads(next(d for n, d in events if n == "final"))
+    ens = final["ensemble"]
+    # Median of Buy/Underweight/Overweight is Overweight (ordinal median).
+    assert final["decision"] == ens["rating"] == "Overweight"
+    assert ens["n"] == 3 and ens["method"] == "median"
+    assert ens["decisions"] == ["Buy", "Underweight", "Overweight"]
+    assert ens["representative_run"] == 3
+    assert ens["votes"] == {"Buy": 1, "Underweight": 1, "Overweight": 1}
+
+    # The archive sidecar carries the ensemble block additively.
+    sidecars = list((tmp_path / "reports").glob("AAPL_*/run.json"))
+    assert len(sidecars) == 1
+    data = _json.loads(sidecars[0].read_text(encoding="utf-8"))
+    assert data["decision"] == "Overweight"
+    assert data["ensemble"]["n"] == 3
+
+
+@pytest.mark.unit
+def test_sse_single_run_has_no_ensemble(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "TradingAgentsGraph", _FakeGraph)
+    monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))
+
+    client = TestClient(server.app)
+    resp = client.post("/api/run", json={**_run_payload(), "ensemble_runs": 1})
+    events = _parse_sse(resp.text)
+    names = [e[0] for e in events]
+    assert "run_start" not in names and "run_result" not in names
+    final = _json.loads(next(d for n, d in events if n == "final"))
+    assert final["ensemble"] is None
+    # Sidecar has no ensemble key for single runs (wire format unchanged).
+    data = _json.loads(
+        next((tmp_path / "reports").glob("AAPL_*/run.json")).read_text(encoding="utf-8")
+    )
+    assert "ensemble" not in data

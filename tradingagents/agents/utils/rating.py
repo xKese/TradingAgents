@@ -46,3 +46,53 @@ def parse_rating(text: str, default: str = "Hold") -> str:
                 return clean.capitalize()
 
     return default
+
+
+def rating_ordinal(rating: str) -> int:
+    """Map a rating string to its ordinal on the 5-tier scale (Buy=0 … Sell=4).
+
+    Unknown strings map to Hold — the same neutral default ``parse_rating``
+    falls back to.
+    """
+    try:
+        return RATINGS_5_TIER.index(rating.strip().capitalize())
+    except (ValueError, AttributeError):
+        return RATINGS_5_TIER.index("Hold")
+
+
+def median_rating(ratings: list[str]) -> str:
+    """Median rating across runs, computed on the ordinal scale.
+
+    With an even count, the lower median is nudged toward Hold so a tie
+    between adjacent tiers resolves conservatively rather than bullishly.
+    """
+    if not ratings:
+        raise ValueError("median_rating() requires at least one rating")
+    ordinals = sorted(rating_ordinal(r) for r in ratings)
+    n = len(ordinals)
+    if n % 2 == 1:
+        return RATINGS_5_TIER[ordinals[n // 2]]
+    lo, hi = ordinals[n // 2 - 1], ordinals[n // 2]
+    hold = RATINGS_5_TIER.index("Hold")
+    # Pick whichever of the two middle values sits closer to Hold (ties → lo).
+    pick = lo if abs(lo - hold) <= abs(hi - hold) else hi
+    return RATINGS_5_TIER[pick]
+
+
+def aggregate_ratings(ratings: list[str]) -> dict:
+    """Aggregate N per-run ratings into an ensemble result.
+
+    Returns ``{"rating", "votes", "n", "method"}`` where ``votes`` maps each
+    5-tier rating to its count (only tiers that received votes).
+    """
+    result = median_rating(ratings)  # raises on empty input
+    votes: dict[str, int] = {}
+    for r in ratings:
+        tier = RATINGS_5_TIER[rating_ordinal(r)]
+        votes[tier] = votes.get(tier, 0) + 1
+    return {
+        "rating": result,
+        "votes": votes,
+        "n": len(ratings),
+        "method": "median",
+    }

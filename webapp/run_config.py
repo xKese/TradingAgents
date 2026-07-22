@@ -22,6 +22,8 @@ from tradingagents.default_config import DEFAULT_CONFIG
 
 _VALID_DEPTHS = {1, 3, 5}
 
+_MAX_ENSEMBLE_RUNS = 5
+
 
 class RunRequestError(ValueError):
     """Raised when the submitted run form is invalid."""
@@ -66,6 +68,63 @@ def _validate_analysts(values, asset_type: AssetType) -> list[AnalystType]:
     if not filtered:
         raise RunRequestError("Mindestens ein Analyst muss ausgewählt sein.")
     return filtered
+
+
+def _is_blank(raw) -> bool:
+    return raw is None or (isinstance(raw, str) and not raw.strip())
+
+
+def _validate_temperature(raw) -> float | None:
+    if _is_blank(raw):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise RunRequestError(
+            "Ungültige Temperatur. Bitte eine Zahl zwischen 0 und 2 angeben."
+        ) from exc
+    if not 0.0 <= value <= 2.0:
+        raise RunRequestError("Die Temperatur muss zwischen 0 und 2 liegen.")
+    return value
+
+
+def _validate_seed(raw) -> int | None:
+    if _is_blank(raw):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RunRequestError(
+            "Ungültiger Seed. Bitte eine ganze Zahl angeben."
+        ) from exc
+
+
+def _validate_flag(raw, label: str) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in ("true", "1", "yes", "on"):
+            return True
+        if value in ("false", "0", "no", "off", ""):
+            return False
+    raise RunRequestError(f"Ungültiger Wert für {label}.")
+
+
+def _validate_ensemble_runs(raw) -> int:
+    if _is_blank(raw):
+        return 1
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RunRequestError(
+            "Ungültige Anzahl Läufe. Bitte eine ganze Zahl angeben."
+        ) from exc
+    if not 1 <= value <= _MAX_ENSEMBLE_RUNS:
+        raise RunRequestError(
+            f"Die Anzahl Läufe muss zwischen 1 und {_MAX_ENSEMBLE_RUNS} liegen."
+        )
+    return value
 
 
 # (label, AnalystType) — local copy of the full set for the default case.
@@ -125,6 +184,25 @@ def build_run(payload: dict) -> dict:
     config["openai_reasoning_effort"] = payload.get("openai_reasoning_effort") or None
     config["anthropic_effort"] = payload.get("anthropic_effort") or None
     config["output_language"] = payload.get("output_language") or "English"
+
+    # Reproducibility / stability options. The form is prefilled from the
+    # env-aware defaults (catalog.form_defaults), so a submitted value is
+    # authoritative; keys absent from the payload keep the config default so
+    # older clients stay unaffected.
+    if "temperature" in payload:
+        config["temperature"] = _validate_temperature(payload.get("temperature"))
+    if "seed" in payload:
+        config["seed"] = _validate_seed(payload.get("seed"))
+    if "memory_enabled" in payload:
+        config["memory_enabled"] = _validate_flag(
+            payload.get("memory_enabled"), "Lernfunktion (Memory)"
+        )
+    if "data_cache_daily" in payload:
+        config["data_cache_daily"] = _validate_flag(
+            payload.get("data_cache_daily"), "Tages-Cache"
+        )
+    if "ensemble_runs" in payload:
+        config["ensemble_runs"] = _validate_ensemble_runs(payload.get("ensemble_runs"))
 
     return {
         "config": config,

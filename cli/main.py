@@ -1098,16 +1098,19 @@ def run_analysis(checkpoint: bool | None = None):
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
         # Initialize state and get graph args with callbacks.
-        # Resolve the instrument identity once here so all agents anchor to
-        # the real company (#814); the CLI builds state directly rather than
-        # going through propagate(), so this must happen on the CLI path too.
-        instrument_context = graph.resolve_instrument_context(
+        # The CLI builds state directly rather than going through propagate(),
+        # so run preparation must happen on this path too: resolve the
+        # instrument identity once so all agents anchor to the real company
+        # (#814), and read the memory-log context (honoring memory_enabled)
+        # so cross-run memory behaves the same as on the propagate() path.
+        past_context, instrument_context = graph.prepare_run_context(
             selections["ticker"], selections["asset_type"]
         )
         init_agent_state = graph.propagator.create_initial_state(
             selections["ticker"],
             selections["analysis_date"],
             asset_type=selections["asset_type"],
+            past_context=past_context,
             instrument_context=instrument_context,
         )
         # Pass callbacks to graph config for tool execution tracking
@@ -1223,6 +1226,15 @@ def run_analysis(checkpoint: bool | None = None):
         final_state = {}
         for chunk in trace:
             final_state.update(chunk)
+
+        # Persist the decision to the memory log (mirrors _run_graph; the CLI
+        # bypasses it, so the write must happen here or CLI runs never learn).
+        if final_state.get("final_trade_decision"):
+            graph.record_decision(
+                selections["ticker"],
+                selections["analysis_date"],
+                final_state["final_trade_decision"],
+            )
 
         # Update all agent statuses to completed
         for agent in message_buffer.agent_status:

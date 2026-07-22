@@ -554,3 +554,29 @@ def test_sse_single_run_has_no_ensemble(monkeypatch, tmp_path):
         next((tmp_path / "reports").glob("AAPL_*/run.json")).read_text(encoding="utf-8")
     )
     assert "ensemble" not in data
+
+
+# --------------------------------------------------------------------------- #
+# Symbol-search autocomplete: AV dialect -> canonical Yahoo dialect
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_symbol_search_canonicalizes_av_dialect(monkeypatch):
+    monkeypatch.setattr(
+        server, "get_symbol_search",
+        lambda term: [
+            {"symbol": "MBG.FRK", "name": "Mercedes-Benz Group AG",
+             "type": "Equity", "region": "Frankfurt", "currency": "EUR", "score": "1.0"},
+            {"symbol": "MBG.DEX", "name": "Mercedes-Benz Group AG",
+             "type": "Equity", "region": "XETRA", "currency": "EUR", "score": "0.9"},
+            {"symbol": "AAPL", "name": "Apple Inc",
+             "type": "Equity", "region": "United States", "currency": "USD", "score": "0.5"},
+        ],
+    )
+    client = TestClient(server.app)
+    data = client.get("/api/symbol-search?q=mercedes").json()
+    results = data["results"]
+    # AV suffixes are mapped to the pipeline's canonical Yahoo dialect, with
+    # the AV original kept for display; US symbols stay untouched.
+    assert results[0]["symbol"] == "MBG.F" and results[0]["av_symbol"] == "MBG.FRK"
+    assert results[1]["symbol"] == "MBG.DE" and results[1]["av_symbol"] == "MBG.DEX"
+    assert results[2]["symbol"] == "AAPL" and "av_symbol" not in results[2]

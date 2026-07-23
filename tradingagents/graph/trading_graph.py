@@ -13,6 +13,7 @@ from langgraph.prebuilt import ToolNode
 # Import the abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    format_factor_context,
     get_balance_sheet,
     get_cashflow,
     get_fundamentals,
@@ -353,7 +354,12 @@ class TradingAgentsGraph:
         """Whether cross-run memory (context injection + persistence) is active."""
         return bool(self.config.get("memory_enabled", True))
 
-    def prepare_run_context(self, ticker: str, asset_type: str = "stock") -> tuple[str, str]:
+    def prepare_run_context(
+        self,
+        ticker: str,
+        asset_type: str = "stock",
+        factor_context: dict | None = None,
+    ) -> tuple[str, str]:
         """Return ``(past_context, instrument_context)`` for a new run.
 
         Single entry point shared by ``propagate()``, the CLI stream loop, and
@@ -361,12 +367,18 @@ class TradingAgentsGraph:
         paths. With ``memory_enabled`` off, no past decisions are injected and
         pending-outcome resolution (which costs reflection LLM calls) is
         skipped — back-to-back runs then see identical inputs.
+
+        ``factor_context`` is an optional external quantitative pre-rating
+        (e.g. from a multi-factor screening model); it is appended to the
+        instrument context so every agent sees it as a prior to validate.
         """
         past_context = ""
         if self._memory_on():
             self._resolve_pending_entries(ticker)
             past_context = self.memory_log.get_past_context(ticker)
-        return past_context, self.resolve_instrument_context(ticker, asset_type)
+        return past_context, self.resolve_instrument_context(
+            ticker, asset_type, factor_context=factor_context
+        )
 
     def record_decision(self, ticker: str, trade_date, final_trade_decision: str) -> None:
         """Persist a finished run's decision to the memory log (if enabled).
@@ -381,17 +393,26 @@ class TradingAgentsGraph:
                 final_trade_decision=final_trade_decision,
             )
 
-    def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
+    def resolve_instrument_context(
+        self,
+        ticker: str,
+        asset_type: str = "stock",
+        factor_context: dict | None = None,
+    ) -> str:
         """Resolve ticker identity once and return the full instrument context.
 
         Deterministic yfinance lookup (cached, fail-open) injected into a
         context string so every agent anchors to the real company instead of
         hallucinating one from the price chart (#814). Both the propagate()
         path and the CLI call this so the resolved identity reaches the whole
-        graph regardless of entry point.
+        graph regardless of entry point. An optional ``factor_context``
+        (external quantitative pre-rating) is appended so it reaches every
+        agent through the same channel.
         """
         identity = resolve_instrument_identity(ticker)
-        return build_instrument_context(ticker, asset_type, identity)
+        return build_instrument_context(ticker, asset_type, identity) + (
+            format_factor_context(factor_context)
+        )
 
     def _run_signature(self, asset_type: str) -> str:
         """Graph-shape inputs that must invalidate a checkpoint if changed.
@@ -407,7 +428,13 @@ class TradingAgentsGraph:
             f"asset={asset_type}",
         ])
 
-    def propagate(self, company_name, trade_date, asset_type: str = "stock"):
+    def propagate(
+        self,
+        company_name,
+        trade_date,
+        asset_type: str = "stock",
+        factor_context: dict | None = None,
+    ):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -416,6 +443,8 @@ class TradingAgentsGraph:
         ``checkpoint_enabled`` is set in config, the graph is recompiled with
         a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
+        ``factor_context`` optionally injects an external quantitative
+        pre-rating into every agent's instrument context.
         """
         self.ticker = company_name
 
@@ -439,7 +468,12 @@ class TradingAgentsGraph:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
         try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
+            return self._run_graph(
+                company_name,
+                trade_date,
+                asset_type=asset_type,
+                factor_context=factor_context,
+            )
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
@@ -545,6 +579,7 @@ class TradingAgentsGraph:
         past_context: str | None = None,
         instrument_context: str | None = None,
         record: bool = True,
+        factor_context: dict | None = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log.
 
@@ -556,7 +591,7 @@ class TradingAgentsGraph:
         # deterministically resolved instrument identity for all agents.
         if past_context is None or instrument_context is None:
             past_context, instrument_context = self.prepare_run_context(
-                company_name, asset_type
+                company_name, asset_type, factor_context=factor_context
             )
         init_agent_state = self.propagator.create_initial_state(
             company_name,

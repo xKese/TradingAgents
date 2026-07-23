@@ -250,6 +250,34 @@ The web UI reuses the same provider/model catalog, key auto-detection, and
 report writer as the CLI, so a browser run produces the same on-disk reports
 under `results_dir`.
 
+#### External factor pre-rating (`factor_context`)
+
+`POST /api/run` accepts an optional `factor_context` object — a quantitative
+pre-rating from an external screening model (e.g. the
+[multi_factor](https://github.com/xKese/multi_factor) app). It is validated
+(whitelisted keys, size-capped), rendered into the instrument context so
+**every agent** sees it as a prior to validate or challenge, and archived in
+the run's `run.json` for auditability:
+
+```jsonc
+{
+  "ticker": "MBG.F", "analysis_date": "2026-07-23", // ... usual run fields ...
+  "factor_context": {
+    "source": "multi_factor", "as_of": "2026-07-23",
+    "total_score": 78.2, "classification": "B+",
+    "factor_scores": {"value": 45.1, "quality": 88.0, "growth": 71.3,
+                       "momentum": 65.0, "lowvol": 59.9},
+    "filter_ok": "JA", "recommendation": "BUY",
+    "piotroski": 7, "altman_z": 4.2,
+    "signals": {"sma_signal": "Golden Cross", "trend_phase": "bull"},
+    "identity": {"name": "Mercedes-Benz Group AG", "region": "Germany"}
+  }
+}
+```
+
+Programmatic parity: `TradingAgentsGraph.propagate(ticker, date,
+factor_context={...})`.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.

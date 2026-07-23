@@ -505,6 +505,9 @@ def _write_run_archive(
         }
         if ensemble:
             sidecar["ensemble"] = ensemble
+        if spec.get("factor_context"):
+            # Audit trail: record the external pre-rating this run saw.
+            sidecar["factor_context"] = spec["factor_context"]
         (save_path / "run.json").write_text(
             json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -611,7 +614,9 @@ def _run_worker(spec: dict, q: queue.Queue):
 
         # Memory (and pending-outcome resolution) once for all runs.
         spec["_run_context"] = graph.prepare_run_context(
-            spec["ticker"], spec["asset_type"]
+            spec["ticker"],
+            spec["asset_type"],
+            factor_context=spec.get("factor_context"),
         )
 
         results: list[tuple[dict, str]] = []

@@ -7,6 +7,7 @@ input instead of calling ``exit()``, so the web layer can return HTTP 400.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 
@@ -23,6 +24,25 @@ from tradingagents.default_config import DEFAULT_CONFIG
 _VALID_DEPTHS = {1, 3, 5}
 
 _MAX_ENSEMBLE_RUNS = 5
+
+# Whitelisted keys of the external quantitative pre-rating payload; anything
+# else is dropped so callers can evolve their schema without breaking us.
+_FACTOR_CONTEXT_KEYS = {
+    "source",
+    "as_of",
+    "total_score",
+    "classification",
+    "factor_scores",
+    "filter_ok",
+    "recommendation",
+    "piotroski",
+    "altman_z",
+    "signals",
+    "identity",
+    "source_ticker",
+}
+
+_MAX_FACTOR_CONTEXT_BYTES = 8192
 
 
 class RunRequestError(ValueError):
@@ -127,6 +147,63 @@ def _validate_ensemble_runs(raw) -> int:
     return value
 
 
+def _coerce_number(value):
+    """Best-effort numeric coercion; returns None for non-numeric input."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "."))
+        except ValueError:
+            return None
+    return None
+
+
+def _validate_factor_context(raw) -> dict | None:
+    """Validate the optional external factor pre-rating attached to a run.
+
+    Field-level coercion is fail-open (a bad number is dropped, not fatal),
+    but a payload that is not a dict or exceeds the size cap is rejected —
+    that indicates a broken client rather than a missing metric.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RunRequestError(
+            "factor_context muss ein Objekt sein (Schlüssel/Wert-Paare)."
+        )
+
+    if len(json.dumps(raw, ensure_ascii=False)) > _MAX_FACTOR_CONTEXT_BYTES:
+        raise RunRequestError("factor_context ist zu groß (max. 8 KB).")
+
+    cleaned: dict = {}
+    for key in _FACTOR_CONTEXT_KEYS & set(raw):
+        value = raw[key]
+        if value is None:
+            continue
+        if key in ("total_score", "piotroski", "altman_z"):
+            value = _coerce_number(value)
+            if value is None:
+                continue
+        elif key == "factor_scores":
+            if not isinstance(value, dict):
+                continue
+            value = {
+                k: n
+                for k, v in value.items()
+                if (n := _coerce_number(v)) is not None
+            }
+        elif key in ("signals", "identity"):
+            if not isinstance(value, dict):
+                continue
+        else:
+            value = str(value)
+        cleaned[key] = value
+    return cleaned or None
+
+
 # (label, AnalystType) — local copy of the full set for the default case.
 _ALL_ANALYSTS = [
     ("Market Analyst", AnalystType.MARKET),
@@ -210,4 +287,5 @@ def build_run(payload: dict) -> dict:
         "analysis_date": analysis_date,
         "asset_type": asset_type.value,
         "analysts": [a.value for a in analysts],
+        "factor_context": _validate_factor_context(payload.get("factor_context")),
     }

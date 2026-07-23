@@ -17,7 +17,7 @@ from cli.utils import (
     filter_analysts_for_asset_type,
     is_valid_ticker_input,
     normalize_ticker_symbol,
-    provider_default_url,
+    resolve_backend_url,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
 
@@ -242,9 +242,13 @@ def build_run(payload: dict) -> dict:
 
     analysts = _validate_analysts(payload.get("analysts"), asset_type)
 
-    # Backend URL: explicit custom value wins, else the provider default.
-    backend_url = (payload.get("backend_url") or "").strip() or provider_default_url(
-        provider
+    # Backend URL: explicit custom value wins, then the env override
+    # (TRADINGAGENTS_LLM_BACKEND_URL via DEFAULT_CONFIG), then the provider
+    # default — same precedence as the CLI (#978). Without the env fallback,
+    # clients that omit backend_url (e.g. API callers) would lose a configured
+    # endpoint for providers with no default URL (openai_compatible).
+    backend_url = (payload.get("backend_url") or "").strip() or resolve_backend_url(
+        provider, None, DEFAULT_CONFIG.get("backend_url")
     )
 
     # --- Build config, mirroring cli.main._build_run_config env-precedence. ---

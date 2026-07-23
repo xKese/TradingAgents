@@ -148,10 +148,10 @@ class _FakeGraph:
         self.propagator = _FakePropagator()
         self.graph = _FakeInner()
 
-    def resolve_instrument_context(self, ticker, asset_type):
+    def resolve_instrument_context(self, ticker, asset_type, factor_context=None):
         return {}
 
-    def prepare_run_context(self, ticker, asset_type):
+    def prepare_run_context(self, ticker, asset_type, factor_context=None):
         return "", {}
 
     def record_decision(self, ticker, trade_date, final_trade_decision):

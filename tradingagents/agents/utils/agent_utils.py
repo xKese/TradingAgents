@@ -169,6 +169,82 @@ def build_instrument_context(
     return context
 
 
+_FACTOR_LABELS = {
+    "value": "Value",
+    "quality": "Quality",
+    "growth": "Growth",
+    "momentum": "Momentum",
+    "lowvol": "Low-Vol",
+}
+
+
+def format_factor_context(factor_context: Mapping[str, Any] | None) -> str:
+    """Render an external quantitative pre-rating as an instrument-context block.
+
+    The block is framed explicitly as a prior to validate or challenge — not
+    ground truth — so agents build on the dry factor evaluation without
+    over-anchoring on it. Returns "" when no factor context was supplied.
+    """
+    if not factor_context:
+        return ""
+
+    lines = []
+    as_of = factor_context.get("as_of")
+    source = factor_context.get("source") or "an external deterministic factor model"
+    lines.append(
+        f"A quantitative multi-factor pre-rating from `{source}`"
+        + (f" (as of {as_of})" if as_of else "")
+        + " is available for this instrument:"
+    )
+
+    total = factor_context.get("total_score")
+    classification = factor_context.get("classification")
+    if total is not None or classification:
+        parts = []
+        if total is not None:
+            parts.append(f"total score {total:g}/100")
+        if classification:
+            parts.append(f"classification {classification}")
+        lines.append("- Overall: " + ", ".join(parts) + ".")
+
+    scores = factor_context.get("factor_scores") or {}
+    if scores:
+        rendered = ", ".join(
+            f"{_FACTOR_LABELS.get(k, k)} {v:g}"
+            for k, v in scores.items()
+            if isinstance(v, (int, float))
+        )
+        if rendered:
+            lines.append(f"- Factor scores (0-100): {rendered}.")
+
+    quality_bits = []
+    if factor_context.get("filter_ok"):
+        quality_bits.append(f"quality filters passed: {factor_context['filter_ok']}")
+    if factor_context.get("piotroski") is not None:
+        quality_bits.append(f"Piotroski F-Score {factor_context['piotroski']:g}/9")
+    if factor_context.get("altman_z") is not None:
+        quality_bits.append(f"Altman-Z {factor_context['altman_z']:g}")
+    if quality_bits:
+        lines.append("- Quality screen: " + ", ".join(quality_bits) + ".")
+
+    if factor_context.get("recommendation"):
+        lines.append(f"- Model recommendation: {factor_context['recommendation']}.")
+
+    signals = factor_context.get("signals") or {}
+    signal_bits = [f"{k}: {v}" for k, v in signals.items() if v not in (None, "")]
+    if signal_bits:
+        lines.append("- Technical signals: " + ", ".join(signal_bits) + ".")
+
+    return (
+        "\n\n--- Quantitative multi-factor pre-rating ---\n"
+        + "\n".join(lines)
+        + "\nTreat this pre-rating as a prior, dry quantitative evaluation to "
+        "validate or challenge with your own in-depth analysis. It is NOT "
+        "ground truth and must not replace your independent judgment; "
+        "explicitly note where your findings confirm or contradict it."
+    )
+
+
 def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     """Return the instrument context for the current run.
 

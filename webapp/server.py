@@ -31,6 +31,7 @@ from tradingagents.dataflows.alpha_vantage_common import (
     AlphaVantageNotConfiguredError,
     AlphaVantageRateLimitError,
 )
+from tradingagents.dataflows.symbol_utils import normalize_symbol
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -95,6 +96,17 @@ def api_symbol_search(q: str = "") -> JSONResponse:
         return JSONResponse({"results": [], "note": None})
     try:
         results = get_symbol_search(term)
+        # SYMBOL_SEARCH returns Alpha-Vantage-dialect symbols (MBG.FRK), but
+        # the pipeline's canonical dialect is Yahoo's (MBG.F) — picking a raw
+        # AV suggestion used to feed the yfinance-default pipeline a symbol it
+        # can't resolve. Canonicalize here and keep the AV original for
+        # display.
+        for r in results:
+            av_sym = r.get("symbol", "")
+            canonical = normalize_symbol(av_sym) if av_sym else av_sym
+            if canonical != av_sym:
+                r["av_symbol"] = av_sym
+            r["symbol"] = canonical
         return JSONResponse({"results": results, "note": None})
     except AlphaVantageRateLimitError:
         note = {"type": "rate_limit", "text": "Alpha-Vantage-Limit erreicht — kurz warten."}

@@ -20,6 +20,7 @@ from .errors import (
 )
 from .fred import get_macro_data as get_fred_macro_data
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
+from .symbol_utils import yahoo_symbol_to_av
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
     get_cashflow as get_yfinance_cashflow,
@@ -144,6 +145,22 @@ VENDOR_METHODS = {
     },
 }
 
+# Methods whose FIRST positional argument is a ticker symbol — every caller
+# (the @tool wrappers and market_data_validator) passes it positionally. Used
+# to translate the pipeline's canonical Yahoo-dialect symbol into a vendor's
+# native dialect at dispatch time. get_global_news / get_macro_indicators /
+# get_prediction_markets take no ticker and must not be listed.
+TICKER_FIRST_METHODS = frozenset({
+    "get_stock_data",
+    "get_indicators",
+    "get_fundamentals",
+    "get_balance_sheet",
+    "get_cashflow",
+    "get_income_statement",
+    "get_news",
+    "get_insider_transactions",
+})
+
 def get_category_for_method(method: str) -> str:
     """Get the category that contains the specified method."""
     for category, info in TOOLS_CATEGORIES.items():
@@ -213,8 +230,28 @@ def _route_to_vendor_uncached(method: str, *args, **kwargs):
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
+        # The pipeline holds symbols in the canonical Yahoo dialect; Alpha
+        # Vantage speaks its own exchange suffixes (MBG.F -> MBG.FRK), so
+        # translate per call. This lives below the daily cache, keeping cache
+        # keys canonical, and per vendor, so a yfinance->AV fallback works for
+        # exchange-suffixed symbols in both directions.
+        call_args = args
+        if (
+            vendor == "alpha_vantage"
+            and method in TICKER_FIRST_METHODS
+            and args
+            and isinstance(args[0], str)
+        ):
+            translated = yahoo_symbol_to_av(args[0])
+            if translated != args[0]:
+                logger.info(
+                    "Translating %r -> %r for alpha_vantage %s (AV dialect)",
+                    args[0], translated, method,
+                )
+                call_args = (translated,) + args[1:]
+
         try:
-            return impl_func(*args, **kwargs)
+            return impl_func(*call_args, **kwargs)
         except VendorRateLimitError:
             logger.warning("Vendor %r rate-limited for %s; trying next vendor.", vendor, method)
             continue

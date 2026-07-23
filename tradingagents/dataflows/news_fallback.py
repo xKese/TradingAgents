@@ -25,6 +25,7 @@ from .alpha_vantage_common import parse_date
 from .alpha_vantage_search import get_symbol_search
 from .config import get_config
 from .stockstats_utils import yf_retry
+from .symbol_utils import yahoo_symbol_to_av
 
 # Shared article helpers from the ticker-news path, so name-based results get
 # the identical look-ahead-safe window filtering and formatting.
@@ -63,11 +64,13 @@ def _resolve_company_name(ticker: str) -> str | None:
 
     Queries the FULL symbol only. Deliberately no retry with the bare base:
     the same base letters often mean a different company on another exchange
-    (ENR.DEX is Siemens Energy, but ENR alone is Energizer Holdings on NYSE),
-    and wrong-company news is worse than no news.
+    (ENR.DE/ENR.DEX is Siemens Energy, but ENR alone is Energizer Holdings on
+    NYSE), and wrong-company news is worse than no news. The pipeline holds
+    the canonical Yahoo dialect, but SYMBOL_SEARCH is an Alpha Vantage
+    endpoint — query it in the AV dialect (ENR.DE -> ENR.DEX).
     """
     try:
-        matches = get_symbol_search(ticker)
+        matches = get_symbol_search(yahoo_symbol_to_av(ticker))
     except Exception:
         return None  # no key / network / rate limit -> fallback unavailable
     if not matches:

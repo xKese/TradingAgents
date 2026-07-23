@@ -521,7 +521,7 @@ $("ticker").addEventListener("change",async()=>{
       const el=document.createElement("div");
       el.className="ac-item"+(idx===active?" active":"");
       el.setAttribute("role","option");
-      const meta=[it.name,it.region,it.currency].filter(Boolean).join(" · ");
+      const meta=[it.name,it.region,it.currency,it.av_symbol?("AV: "+it.av_symbol):null].filter(Boolean).join(" · ");
       el.innerHTML='<span class="sym"></span><span class="meta"></span>';
       el.querySelector(".sym").textContent=it.symbol;
       el.querySelector(".meta").textContent=meta;

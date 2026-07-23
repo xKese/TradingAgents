@@ -482,6 +482,38 @@ def test_build_run_rejects_bad_advanced_input(field, value):
 
 
 @pytest.mark.unit
+def test_build_run_backend_url_env_fallback(monkeypatch):
+    # TRADINGAGENTS_LLM_BACKEND_URL (absorbed into DEFAULT_CONFIG) must reach
+    # runs whose payload omits backend_url — API callers like the multi_factor
+    # Dash client would otherwise lose the endpoint for openai_compatible.
+    monkeypatch.setitem(DEFAULT_CONFIG, "backend_url", "http://my-relay:9999/v1")
+    spec = run_config.build_run(
+        {**_run_payload(), "llm_provider": "openai_compatible"}
+    )
+    assert spec["config"]["backend_url"] == "http://my-relay:9999/v1"
+
+
+@pytest.mark.unit
+def test_build_run_backend_url_payload_wins_over_env(monkeypatch):
+    monkeypatch.setitem(DEFAULT_CONFIG, "backend_url", "http://my-relay:9999/v1")
+    spec = run_config.build_run(
+        {
+            **_run_payload(),
+            "llm_provider": "openai_compatible",
+            "backend_url": "http://localhost:1234/v1",
+        }
+    )
+    assert spec["config"]["backend_url"] == "http://localhost:1234/v1"
+
+
+@pytest.mark.unit
+def test_build_run_backend_url_provider_default_without_env(monkeypatch):
+    monkeypatch.setitem(DEFAULT_CONFIG, "backend_url", None)
+    spec = run_config.build_run(_run_payload())  # ollama payload
+    assert spec["config"]["backend_url"] == "http://localhost:11434/v1"
+
+
+@pytest.mark.unit
 def test_form_defaults_include_advanced_keys():
     defaults = catalog.form_defaults()
     for key in ("temperature", "seed", "memory_enabled", "data_cache_daily", "ensemble_runs"):

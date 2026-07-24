@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import threading
+import time
 from datetime import datetime
 from io import StringIO
 
@@ -15,6 +17,17 @@ API_BASE_URL = "https://www.alphavantage.co/query"
 # Network timeout (seconds) so a stalled Alpha Vantage request can't hang the
 # CLI/agents indefinitely (#990).
 REQUEST_TIMEOUT = 30
+
+# Alpha Vantage rejects bursts above ~5 requests/second. Agent tool loops fire
+# calls back to back, so space requests at least this far apart (≈4 req/s).
+MIN_REQUEST_INTERVAL = 0.25
+
+# Transient burst throttles ("Burst pattern detected ... no more than 5
+# requests per second") are retried with these backoffs before giving up.
+_BURST_BACKOFFS = (1.5, 3.0)
+
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
 
 
 class AlphaVantageNotConfiguredError(VendorNotConfiguredError):
@@ -105,33 +118,66 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         # Remove entitlement if it's None or empty
         api_params.pop("entitlement", None)
 
-    response = requests.get(API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    for attempt in range(len(_BURST_BACKOFFS) + 1):
+        _throttle()
+        response = requests.get(API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
 
-    response_text = response.text
+        response_text = response.text
 
-    # Error responses are JSON; data responses are usually CSV (or data-keyed
-    # JSON). A non-JSON body is normal data.
-    try:
-        response_json = json.loads(response_text)
-    except json.JSONDecodeError:
+        # Error responses are JSON; data responses are usually CSV (or data-keyed
+        # JSON). A non-JSON body is normal data.
+        try:
+            response_json = json.loads(response_text)
+        except json.JSONDecodeError:
+            return response_text
+
+        # Alpha Vantage reports problems via "Information" / "Note". Classify so a
+        # genuine rate limit and an invalid/missing key aren't conflated (#991):
+        # rate-limit phrasing is checked first because those notices also mention
+        # "API key" ("your API key ... 25 requests per day").
+        notice = response_json.get("Information") or response_json.get("Note")
+        if notice:
+            low = notice.lower()
+            # Burst throttles ("Burst pattern detected ... 5 requests per
+            # second") are transient — back off and retry before failing.
+            # Checked before the daily-cap markers so a burst never surfaces
+            # as an unrecoverable daily limit. Without this branch the notice
+            # matched no marker at all and was returned as data, ending up in
+            # the CSV parser downstream.
+            # Markers must not overlap the legacy per-minute cap notice
+            # ("API call frequency is 5 calls per minute"), which is a hard
+            # limit handled below.
+            if any(m in low for m in ("burst", "per second", "spreading out")):
+                if attempt < len(_BURST_BACKOFFS):
+                    time.sleep(_BURST_BACKOFFS[attempt])
+                    continue
+                raise AlphaVantageRateLimitError(
+                    f"Alpha Vantage burst throttle persisted: {notice}"
+                )
+            if any(m in low for m in ("rate limit", "requests per day", "call frequency", "premium")):
+                raise AlphaVantageRateLimitError(f"Alpha Vantage rate limit exceeded: {notice}")
+            if "api key" in low or "apikey" in low:
+                # Reuse the existing "not configured" error so a bad key surfaces as
+                # a real, actionable failure rather than a mislabeled rate limit (#991).
+                raise AlphaVantageNotConfiguredError(f"Alpha Vantage API key invalid or missing: {notice}")
+
         return response_text
 
-    # Alpha Vantage reports problems via "Information" / "Note". Classify so a
-    # genuine rate limit and an invalid/missing key aren't conflated (#991):
-    # rate-limit phrasing is checked first because those notices also mention
-    # "API key" ("your API key ... 25 requests per day").
-    notice = response_json.get("Information") or response_json.get("Note")
-    if notice:
-        low = notice.lower()
-        if any(m in low for m in ("rate limit", "requests per day", "call frequency", "premium")):
-            raise AlphaVantageRateLimitError(f"Alpha Vantage rate limit exceeded: {notice}")
-        if "api key" in low or "apikey" in low:
-            # Reuse the existing "not configured" error so a bad key surfaces as
-            # a real, actionable failure rather than a mislabeled rate limit (#991).
-            raise AlphaVantageNotConfiguredError(f"Alpha Vantage API key invalid or missing: {notice}")
 
-    return response_text
+def _throttle() -> None:
+    """Space Alpha Vantage requests at least MIN_REQUEST_INTERVAL apart.
+
+    Agent tool loops issue requests back to back; without pacing they trip
+    the vendor's ~5 req/s burst detector. Lock-guarded so concurrent web
+    runs share the same budget.
+    """
+    global _last_request_at
+    with _throttle_lock:
+        wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at = time.monotonic()
 
 
 

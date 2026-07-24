@@ -72,6 +72,82 @@ _FUNDAMENTALS_JSON = json.dumps({
 })
 
 
+_BURST_BODY = json.dumps({
+    "Information": (
+        "Burst pattern detected. Please consider spreading out your API "
+        "requests more evenly across a 1-minute window and query no more "
+        "than 5 requests per second. Please contact support@alphavantage.co "
+        "if you are targeting a higher API request volume."
+    )
+})
+
+
+def _sequenced_get(bodies, sleeps=None):
+    """requests.get-Fake, der die Bodies der Reihe nach liefert."""
+    calls = {"n": 0}
+
+    def fake_get(url, params=None, **kwargs):
+        body = bodies[min(calls["n"], len(bodies) - 1)]
+        calls["n"] += 1
+        return _FakeResponse(body)
+
+    return fake_get, calls
+
+
+@pytest.mark.unit
+def test_burst_throttle_is_retried_then_returns_data(monkeypatch):
+    # A transient burst notice used to slip through unclassified and reach the
+    # CSV parser as data; now it backs off, retries, and returns the real CSV.
+    sleeps = []
+    monkeypatch.setattr(av.time, "sleep", lambda s: sleeps.append(s))
+    fake_get, calls = _sequenced_get([_BURST_BODY, "Date,Close\n2025-01-02,1.0"])
+    monkeypatch.setattr(av.requests, "get", fake_get)
+
+    result = av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    assert result.startswith("Date,Close")
+    assert calls["n"] == 2
+    assert av._BURST_BACKOFFS[0] in sleeps
+
+
+@pytest.mark.unit
+def test_burst_throttle_persisting_raises_rate_limit(monkeypatch):
+    monkeypatch.setattr(av.time, "sleep", lambda s: None)
+    fake_get, calls = _sequenced_get([_BURST_BODY])
+    monkeypatch.setattr(av.requests, "get", fake_get)
+
+    with pytest.raises(av.AlphaVantageRateLimitError, match="[Bb]urst"):
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    assert calls["n"] == len(av._BURST_BACKOFFS) + 1
+
+
+@pytest.mark.unit
+def test_daily_cap_still_raises_immediately(monkeypatch):
+    # The daily cap is not transient — no burst retry may kick in.
+    sleeps = []
+    monkeypatch.setattr(av.time, "sleep", lambda s: sleeps.append(s))
+    body = '{"Information": "Our standard API rate limit is 25 requests per day."}'
+    fake_get, calls = _sequenced_get([body])
+    monkeypatch.setattr(av.requests, "get", fake_get)
+
+    with pytest.raises(av.AlphaVantageRateLimitError):
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    assert calls["n"] == 1
+    assert not [s for s in sleeps if s in av._BURST_BACKOFFS]
+
+
+@pytest.mark.unit
+def test_requests_are_throttled(monkeypatch):
+    # Back-to-back requests must be spaced MIN_REQUEST_INTERVAL apart so agent
+    # tool loops don't trip the vendor's burst detector in the first place.
+    sleeps = []
+    monkeypatch.setattr(av.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(av.requests, "get", _patched_get("Date,Close\n2025-01-02,1.0"))
+
+    av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    av._make_api_request("TIME_SERIES_DAILY", {"symbol": "MSFT"})
+    assert any(0 < s <= av.MIN_REQUEST_INTERVAL for s in sleeps)
+
+
 @pytest.mark.unit
 def test_fundamentals_look_ahead_filter_runs_on_json_string(monkeypatch):
     # #1115: the payload arrives as a JSON *string*; the old dict-only guard let

@@ -514,6 +514,26 @@ def test_build_run_backend_url_provider_default_without_env(monkeypatch):
 
 
 @pytest.mark.unit
+def test_build_run_defaults_llm_max_retries(monkeypatch):
+    # Webapp-Läufe heben das SDK-Retry-Budget an, damit transiente Provider-
+    # 5xx (z. B. Ollama Cloud "Internal Server Error (ref: …)") einen langen
+    # Lauf nicht nach 2 schnellen SDK-Retries killen.
+    monkeypatch.setitem(DEFAULT_CONFIG, "llm_max_retries", None)
+    spec = run_config.build_run(_run_payload())
+    assert spec["config"]["llm_max_retries"] == 5
+
+
+@pytest.mark.unit
+def test_build_run_llm_max_retries_env_override_wins(monkeypatch):
+    # TRADINGAGENTS_LLM_MAX_RETRIES landet als String in DEFAULT_CONFIG und
+    # muss den Webapp-Default unangetastet überstimmen (auch "0" = aus).
+    monkeypatch.setitem(DEFAULT_CONFIG, "llm_max_retries", "8")
+    assert run_config.build_run(_run_payload())["config"]["llm_max_retries"] == "8"
+    monkeypatch.setitem(DEFAULT_CONFIG, "llm_max_retries", "0")
+    assert run_config.build_run(_run_payload())["config"]["llm_max_retries"] == "0"
+
+
+@pytest.mark.unit
 def test_form_defaults_include_advanced_keys():
     defaults = catalog.form_defaults()
     for key in ("temperature", "seed", "memory_enabled", "data_cache_daily", "ensemble_runs"):

@@ -266,6 +266,14 @@ def build_run(payload: dict) -> dict:
     config["anthropic_effort"] = payload.get("anthropic_effort") or None
     config["output_language"] = payload.get("output_language") or "English"
 
+    # Transiente Provider-5xx (z. B. Ollama Cloud "Internal Server Error
+    # (ref: …)") sollen einen langen Lauf nicht sofort killen: ohne expliziten
+    # TRADINGAGENTS_LLM_MAX_RETRIES-Override das SDK-Retry-Budget für
+    # Webapp-Läufe von 2 auf 5 anheben (exponentieller Backoff im SDK).
+    # DEFAULT_CONFIG selbst bleibt bei None (#1091: CLI/Library unverändert).
+    if config.get("llm_max_retries") in (None, ""):
+        config["llm_max_retries"] = 5
+
     # Reproducibility / stability options. The form is prefilled from the
     # env-aware defaults (catalog.form_defaults), so a submitted value is
     # authoritative; keys absent from the payload keep the config default so

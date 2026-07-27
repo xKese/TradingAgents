@@ -584,6 +584,18 @@ class TestDeferredReflection:
         assert TradingAgentsGraph._resolve_benchmark(mock_graph, "MBG.DE") == "^GDAXI"
         assert TradingAgentsGraph._resolve_benchmark(mock_graph, "MBG.F") == "^GDAXI"
 
+    def test_resolve_benchmark_european_listings(self):
+        """Canonicalized European symbols (.PA Paris, .SW Swiss, .MI Milan)
+        get their regional index instead of the SPY fallback (uses the real
+        default benchmark_map)."""
+        from tradingagents.default_config import DEFAULT_CONFIG
+        mock_graph = MagicMock(spec=TradingAgentsGraph)
+        mock_graph.config = {"benchmark_ticker": None,
+                             "benchmark_map": DEFAULT_CONFIG["benchmark_map"]}
+        assert TradingAgentsGraph._resolve_benchmark(mock_graph, "VIE.PA") == "^FCHI"
+        assert TradingAgentsGraph._resolve_benchmark(mock_graph, "NESN.SW") == "^SSMI"
+        assert TradingAgentsGraph._resolve_benchmark(mock_graph, "ENEL.MI") == "FTSEMIB.MI"
+
     def test_resolve_benchmark_us_ticker_defaults_to_spy(self):
         """US tickers (no dotted suffix) take the empty-suffix entry."""
         mock_graph = MagicMock(spec=TradingAgentsGraph)

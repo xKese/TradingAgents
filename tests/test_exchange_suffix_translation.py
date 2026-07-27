@@ -78,8 +78,16 @@ class SuffixTranslationRoutingTests(unittest.TestCase):
         set_config({"data_vendors": {"fundamental_data": "alpha_vantage"}})
         av = _Capture()
         with self._patch("get_fundamentals", {"alpha_vantage": av}):
-            interface.route_to_vendor("get_fundamentals", "0700.HK", "2026-01-01")
-        self.assertEqual(av.symbols, ["0700.HK"])
+            interface.route_to_vendor("get_fundamentals", "FOO.XYZ", "2026-01-01")
+        self.assertEqual(av.symbols, ["FOO.XYZ"])
+
+    def test_paris_symbol_translated_for_av(self):
+        # Canonical Yahoo dialect (.PA) is translated to AV's .PAR at dispatch.
+        set_config({"data_vendors": {"fundamental_data": "alpha_vantage"}})
+        av = _Capture()
+        with self._patch("get_fundamentals", {"alpha_vantage": av}):
+            interface.route_to_vendor("get_fundamentals", "AIR.PA", "2026-01-01")
+        self.assertEqual(av.symbols, ["AIR.PAR"])
 
     def test_non_ticker_method_untouched(self):
         # get_global_news takes a date first — must never be "translated".

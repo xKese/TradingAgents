@@ -602,6 +602,8 @@ def test_symbol_search_canonicalizes_av_dialect(monkeypatch):
              "type": "Equity", "region": "XETRA", "currency": "EUR", "score": "0.9"},
             {"symbol": "AAPL", "name": "Apple Inc",
              "type": "Equity", "region": "United States", "currency": "USD", "score": "0.5"},
+            {"symbol": "VIE.PAR", "name": "Veolia Environnement SA",
+             "type": "Equity", "region": "Paris", "currency": "EUR", "score": "0.4"},
         ],
     )
     client = TestClient(server.app)
@@ -612,3 +614,4 @@ def test_symbol_search_canonicalizes_av_dialect(monkeypatch):
     assert results[0]["symbol"] == "MBG.F" and results[0]["av_symbol"] == "MBG.FRK"
     assert results[1]["symbol"] == "MBG.DE" and results[1]["av_symbol"] == "MBG.DEX"
     assert results[2]["symbol"] == "AAPL" and "av_symbol" not in results[2]
+    assert results[3]["symbol"] == "VIE.PA" and results[3]["av_symbol"] == "VIE.PAR"

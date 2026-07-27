@@ -66,6 +66,11 @@ class TestNormalizeSymbol(unittest.TestCase):
             ("TSCO.LON", "TSCO.L"),
             ("RELIANCE.BSE", "RELIANCE.BO"),
             ("SHOP.TRT", "SHOP.TO"),
+            ("VIE.PAR", "VIE.PA"),
+            ("ASML.AMS", "ASML.AS"),
+            ("NESN.SWX", "NESN.SW"),
+            ("7203.TYO", "7203.T"),
+            ("0700.HKG", "0700.HK"),
         ):
             self.assertEqual(normalize_symbol(av), yahoo)
         self.assertEqual(normalize_symbol("ads.dex"), "ADS.DE")  # case-insensitive
@@ -80,7 +85,9 @@ class TestNormalizeSymbol(unittest.TestCase):
     def test_dialect_helpers_roundtrip_and_guards(self):
         self.assertEqual(yahoo_symbol_to_av("MBG.F"), "MBG.FRK")
         self.assertEqual(yahoo_symbol_to_av("RELIANCE.BO"), "RELIANCE.BSE")
+        self.assertEqual(yahoo_symbol_to_av("VIE.PA"), "VIE.PAR")
         self.assertEqual(av_symbol_to_yahoo(yahoo_symbol_to_av("TSCO.L")), "TSCO.L")
+        self.assertEqual(av_symbol_to_yahoo(yahoo_symbol_to_av("AIR.PA")), "AIR.PA")
         # No suffix / unknown suffix / share class: no-op in both directions.
         self.assertEqual(yahoo_symbol_to_av("AAPL"), "AAPL")
         self.assertEqual(av_symbol_to_yahoo("AAPL"), "AAPL")
@@ -88,6 +95,19 @@ class TestNormalizeSymbol(unittest.TestCase):
         self.assertEqual(av_symbol_to_yahoo("BRK.B"), "BRK.B")
         # Empty base (".DEX") must not be mangled.
         self.assertEqual(av_symbol_to_yahoo(".DEX"), ".DEX")
+
+    def test_suffix_table_invariants(self):
+        # The Yahoo->AV direction is a plain inversion of the AV->Yahoo table,
+        # so Yahoo values must stay unique, AV keys 3 uppercase letters, and
+        # Yahoo values 1-2 characters (the non-collision guarantee documented
+        # above the table).
+        from tradingagents.dataflows.symbol_utils import _AV_TO_YAHOO_SUFFIX
+
+        values = list(_AV_TO_YAHOO_SUFFIX.values())
+        self.assertEqual(len(set(values)), len(values))
+        for av_key, yahoo_val in _AV_TO_YAHOO_SUFFIX.items():
+            self.assertRegex(av_key, r"^[A-Z]{3}$")
+            self.assertRegex(yahoo_val, r"^[A-Z]{1,2}$")
 
 
 @pytest.mark.unit

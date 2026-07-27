@@ -87,6 +87,21 @@ _AV_TO_YAHOO_SUFFIX = {
     "SHH": "SS",  # Shanghai Stock Exchange
     "SHZ": "SZ",  # Shenzhen Stock Exchange
     "SAO": "SA",  # B3 / Sao Paulo (seen in AV search results)
+    "PAR": "PA",  # Euronext Paris (seen in AV search results, e.g. VIE.PAR)
+    "AMS": "AS",  # Euronext Amsterdam
+    "BRU": "BR",  # Euronext Brussels
+    "LIS": "LS",  # Euronext Lisbon
+    "MIL": "MI",  # Borsa Italiana / Euronext Milan
+    "MAD": "MC",  # Bolsa de Madrid
+    "STO": "ST",  # Nasdaq Stockholm
+    "OSL": "OL",  # Oslo Bors
+    "CPH": "CO",  # Nasdaq Copenhagen
+    "HEL": "HE",  # Nasdaq Helsinki
+    "VIE": "VI",  # Wiener Boerse (Vienna)
+    "SWX": "SW",  # SIX Swiss Exchange
+    "TYO": "T",   # Tokyo Stock Exchange
+    "HKG": "HK",  # Hong Kong Stock Exchange
+    "ASX": "AX",  # Australian Securities Exchange
 }
 _YAHOO_TO_AV_SUFFIX = {y: a for a, y in _AV_TO_YAHOO_SUFFIX.items()}
 

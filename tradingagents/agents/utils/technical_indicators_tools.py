@@ -2,6 +2,7 @@ from typing import Annotated
 
 from langchain_core.tools import tool
 
+from tradingagents.dataflows.errors import VendorError
 from tradingagents.dataflows.interface import route_to_vendor
 
 
@@ -31,5 +32,11 @@ def get_indicators(
         try:
             results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
         except ValueError as e:
+            # Includes VendorNotConfiguredError (a ValueError) — unchanged.
             results.append(str(e))
+        except VendorError as e:
+            # A rate-limited vendor chain must not abort the whole tool call:
+            # keep the other indicators' results and report this one as
+            # temporarily unavailable rather than raising out of the loop.
+            results.append(f"TEMPORARILY_UNAVAILABLE: {ind}: {e}")
     return "\n\n".join(results)

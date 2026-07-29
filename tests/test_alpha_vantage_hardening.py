@@ -13,6 +13,14 @@ import tradingagents.dataflows.alpha_vantage_common as av
 import tradingagents.dataflows.alpha_vantage_fundamentals as avf
 
 
+@pytest.fixture(autouse=True)
+def _reset_throttle_state():
+    """The pacing clock is module-global; reset it so tests are order-independent."""
+    av._last_request_at = 0.0
+    yield
+    av._last_request_at = 0.0
+
+
 class _FakeResponse:
     def __init__(self, text):
         self.text = text
@@ -146,6 +154,57 @@ def test_requests_are_throttled(monkeypatch):
     av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
     av._make_api_request("TIME_SERIES_DAILY", {"symbol": "MSFT"})
     assert any(0 < s <= av.MIN_REQUEST_INTERVAL for s in sleeps)
+
+
+@pytest.mark.unit
+def test_min_interval_has_margin_below_burst_wall():
+    # 0.25s (exactly 4 req/s) still tripped AV's burst detector in production;
+    # the default must pace clearly below the 5 req/s wall.
+    assert av.MIN_REQUEST_INTERVAL >= 0.5
+
+
+@pytest.mark.unit
+def test_burst_backoffs_escalate_toward_minute_window(monkeypatch):
+    # AV evaluates bursts over a 1-minute window; retry waits must escalate
+    # into that order of magnitude instead of hammering again within seconds.
+    sleeps = []
+    monkeypatch.setattr(av.time, "sleep", lambda s: sleeps.append(s))
+    fake_get, calls = _sequenced_get([_BURST_BODY])
+    monkeypatch.setattr(av.requests, "get", fake_get)
+
+    with pytest.raises(av.AlphaVantageRateLimitError):
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    backoff_sleeps = [s for s in sleeps if s in av._BURST_BACKOFFS]
+    assert backoff_sleeps == list(av._BURST_BACKOFFS)
+    assert list(av._BURST_BACKOFFS) == sorted(av._BURST_BACKOFFS)  # escalating
+    assert sum(av._BURST_BACKOFFS) >= 20
+
+
+@pytest.mark.unit
+def test_last_request_stamped_after_response(monkeypatch):
+    # The pacing clock must measure from response completion, not request
+    # start, so a slow request doesn't eat the spacing budget.
+    clock = {"t": 100.0}
+    monkeypatch.setattr(av.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(av.time, "sleep", lambda s: None)
+
+    def slow_get(url, params=None, **kwargs):
+        clock["t"] += 2.0  # request takes 2 simulated seconds
+        return _FakeResponse("Date,Close\n2025-01-02,1.0")
+
+    monkeypatch.setattr(av.requests, "get", slow_get)
+    av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    assert av._last_request_at == 102.0  # stamped after the response arrived
+
+
+@pytest.mark.unit
+def test_min_interval_config_override():
+    from tradingagents.dataflows.config import set_config
+
+    set_config({"alpha_vantage_min_request_interval": 0.05})
+    assert av._min_request_interval() == 0.05
+    set_config({"alpha_vantage_min_request_interval": 0})
+    assert av._min_request_interval() == 0.0  # explicit 0 disables pacing
 
 
 @pytest.mark.unit

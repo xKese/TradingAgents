@@ -27,6 +27,16 @@ _SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+@pytest.fixture(autouse=True)
+def _reset_reddit_state():
+    """Throttle clock and feed cache are module-global; keep tests order-independent."""
+    reddit._last_request_at = 0.0
+    reddit._feed_cache.clear()
+    yield
+    reddit._last_request_at = 0.0
+    reddit._feed_cache.clear()
+
+
 def _resp(read_fn):
     """A minimal context-manager response whose read() runs ``read_fn``."""
     class _Resp:
@@ -85,9 +95,11 @@ class TestRssParsing:
         assert posts[0]["created_utc"] > 0
         assert "datacenter unit" in posts[0]["selftext"]
 
-    def test_malformed_xml_fails_open(self):
+    def test_malformed_xml_fails_open_as_unavailable(self):
+        # A parse failure means the feed's content is unknown — that's a fetch
+        # failure (None), not a genuine "no matching posts" ([]).
         with patch.object(reddit, "urlopen", return_value=_resp(lambda: b"<<not xml>>")):
-            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) == []
+            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) is None
 
 
 @pytest.mark.unit
@@ -123,29 +135,43 @@ class TestJsonPathFallsBackToRss:
 
 @pytest.mark.unit
 class TestRss429Backoff:
-    def test_429_then_success_retries_once(self):
+    def _backoff_sleeps(self, slept):
+        # The throttle also sleeps (small waits); isolate the 429 backoffs.
+        return [c.args[0] for c in slept.call_args_list
+                if c.args[0] >= min(reddit._RSS_429_BACKOFFS)]
+
+    def test_429_then_success_retries(self):
         err = HTTPError("url", 429, "Too Many Requests", {}, None)
         with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]) as op, \
              patch.object(reddit.time, "sleep") as slept:
             posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
-        assert op.call_count == 2          # original + exactly one retry
-        slept.assert_called_once()         # backed off before retrying
+        assert op.call_count == 2          # original + one retry sufficed
+        assert self._backoff_sleeps(slept) == [reddit._RSS_429_BACKOFFS[0]]
         assert len(posts) == 2
 
-    def test_429_twice_gives_up_after_one_retry(self):
+    def test_429_exhaustion_returns_none_with_escalating_backoffs(self):
         err = HTTPError("url", 429, "Too Many Requests", {}, None)
-        with patch.object(reddit, "urlopen", side_effect=[err, err]) as op, \
-             patch.object(reddit.time, "sleep"):
+        attempts = len(reddit._RSS_429_BACKOFFS) + 1
+        with patch.object(reddit, "urlopen", side_effect=[err] * attempts) as op, \
+             patch.object(reddit.time, "sleep") as slept:
             posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
-        assert op.call_count == 2          # one retry, then gives up cleanly
-        assert posts == []
+        assert op.call_count == attempts
+        assert self._backoff_sleeps(slept) == list(reddit._RSS_429_BACKOFFS)
+        assert posts is None               # fetch failure, NOT "no posts"
 
-    def test_retry_after_header_is_honoured(self):
+    def test_retry_after_header_wins_when_longer(self):
         err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": "12"}, None)
         with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]), \
              patch.object(reddit.time, "sleep") as slept:
             reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
-        slept.assert_called_once_with(12.0)
+        assert 12.0 in self._backoff_sleeps(slept)
+
+    def test_backoff_wins_when_retry_after_is_shorter(self):
+        err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": "1"}, None)
+        with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]), \
+             patch.object(reddit.time, "sleep") as slept:
+            reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        assert reddit._RSS_429_BACKOFFS[0] in self._backoff_sleeps(slept)
 
 
 @pytest.mark.unit
@@ -153,9 +179,9 @@ class TestChunkedTransferErrorsHandled:
     """IncompleteRead/RemoteDisconnected come from http.client and are NOT
     OSErrors, so they were previously uncaught and crashed the pipeline (#1024)."""
 
-    def test_rss_incomplete_read_degrades_to_empty(self):
+    def test_rss_incomplete_read_degrades_to_unavailable(self):
         with patch.object(reddit, "urlopen", return_value=_raise(http.client.IncompleteRead(b""))):
-            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) == []
+            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) is None
 
     def test_json_incomplete_read_falls_back_to_rss(self):
         with patch.object(reddit, "urlopen", return_value=_raise(http.client.IncompleteRead(b""))), \
@@ -190,6 +216,94 @@ class TestFormatterHandlesRssPosts:
         assert "1234↑" in out
         assert "56c" in out
         assert "via RSS" not in out
+
+
+@pytest.mark.unit
+class TestPlaceholdersDistinguishFailureFromEmpty:
+    """A failed fetch must never read as "no posts found" — the LLM would
+    report absent discussion as fact instead of lowering its confidence."""
+
+    def test_fetch_failure_renders_unavailable(self):
+        with patch.object(reddit, "_fetch_subreddit", return_value=None):
+            out = reddit.fetch_reddit_posts("NVDA", subreddits=("stocks",), inter_request_delay=0)
+        assert "temporarily unavailable" in out
+        assert "no posts found" not in out
+
+    def test_genuine_empty_renders_no_posts(self):
+        with patch.object(reddit, "_fetch_subreddit", return_value=[]):
+            out = reddit.fetch_reddit_posts("NVDA", subreddits=("stocks",), inter_request_delay=0)
+        assert "no Reddit posts found" in out
+        assert "temporarily unavailable" not in out
+
+    def test_mixed_failure_and_posts_keeps_both_blocks(self):
+        posts = [{"title": "NVDA pops", "score": None, "num_comments": None,
+                  "created_utc": None, "selftext": "", "source": "rss"}]
+        results = {"stocks": None, "investing": posts}
+
+        def fake_fetch(t, sub, limit, timeout):
+            return results[sub]
+
+        with patch.object(reddit, "_fetch_subreddit", side_effect=fake_fetch):
+            out = reddit.fetch_reddit_posts(
+                "NVDA", subreddits=("stocks", "investing"), inter_request_delay=0
+            )
+        assert "r/stocks: <temporarily unavailable" in out
+        assert "NVDA pops" in out
+
+
+@pytest.mark.unit
+class TestThrottle:
+    def test_requests_are_paced_process_wide(self):
+        # Two back-to-back fetches must be spaced _MIN_REQUEST_INTERVAL apart
+        # so concurrent webapp runs can't hammer Reddit from one IP.
+        sleeps = []
+        with patch.object(reddit, "urlopen", side_effect=[_atom_resp(), _atom_resp()]), \
+             patch.object(reddit.time, "sleep", side_effect=lambda s: sleeps.append(s)):
+            reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+            reddit._fetch_subreddit_rss("NVDA", "investing", 5, 5.0)
+        assert any(0 < s <= reddit._MIN_REQUEST_INTERVAL for s in sleeps)
+
+
+@pytest.mark.unit
+class TestFeedCache:
+    _POSTS = [{"title": "x", "source": "rss", "score": None,
+               "num_comments": None, "created_utc": None, "selftext": ""}]
+
+    def test_second_fetch_is_served_from_cache(self):
+        with patch.object(reddit, "_fetch_subreddit_rss", return_value=self._POSTS) as rss:
+            first = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            second = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+        rss.assert_called_once()
+        assert first == second == self._POSTS
+
+    def test_empty_result_is_cached_failure_is_not(self):
+        # [] is a real answer (feed fetched, no matches) worth caching;
+        # None is a failure and must be retried on the next call.
+        with patch.object(reddit, "_fetch_subreddit_rss", side_effect=[[], []]) as rss:
+            assert reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0) == []
+            assert reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0) == []
+        rss.assert_called_once()
+
+        reddit._feed_cache.clear()
+        with patch.object(reddit, "_fetch_subreddit_rss", side_effect=[None, self._POSTS]) as rss:
+            assert reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0) is None
+            assert reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0) == self._POSTS
+        assert rss.call_count == 2
+
+    def test_cache_expires_after_ttl(self):
+        with patch.object(reddit, "_fetch_subreddit_rss", return_value=self._POSTS) as rss:
+            reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            key = ("NVDA", "stocks", 5)
+            stored_at, posts = reddit._feed_cache[key]
+            reddit._feed_cache[key] = (stored_at - reddit._FEED_CACHE_TTL - 1.0, posts)
+            reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+        assert rss.call_count == 2
+
+    def test_different_tickers_do_not_share_entries(self):
+        with patch.object(reddit, "_fetch_subreddit_rss", return_value=self._POSTS) as rss:
+            reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            reddit._fetch_subreddit("AMD", "stocks", 5, 5.0)
+        assert rss.call_count == 2
 
 
 @pytest.mark.unit

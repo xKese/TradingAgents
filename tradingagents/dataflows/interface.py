@@ -252,8 +252,10 @@ def _route_to_vendor_uncached(method: str, *args, **kwargs):
 
         try:
             return impl_func(*call_args, **kwargs)
-        except VendorRateLimitError:
+        except VendorRateLimitError as e:
             logger.warning("Vendor %r rate-limited for %s; trying next vendor.", vendor, method)
+            if first_error is None:
+                first_error = e  # Surface it if no other vendor can serve the call.
             continue
         except VendorNotConfiguredError as e:
             logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)

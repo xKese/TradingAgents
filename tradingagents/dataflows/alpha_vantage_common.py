@@ -18,13 +18,19 @@ API_BASE_URL = "https://www.alphavantage.co/query"
 # CLI/agents indefinitely (#990).
 REQUEST_TIMEOUT = 30
 
-# Alpha Vantage rejects bursts above ~5 requests/second. Agent tool loops fire
-# calls back to back, so space requests at least this far apart (≈4 req/s).
-MIN_REQUEST_INTERVAL = 0.25
+# Alpha Vantage rejects bursts above ~5 requests/second and asks for requests
+# to be spread evenly across a 1-minute window. 0.25s (exactly 4 req/s) still
+# tripped the burst detector in production, so pace well below the wall:
+# 0.8s ≈ 1.25 req/s ≈ 75/min, matching AV's premium per-minute tiers with
+# margin. Overridable via TRADINGAGENTS_AV_MIN_REQUEST_INTERVAL (config key
+# ``alpha_vantage_min_request_interval``).
+MIN_REQUEST_INTERVAL = 0.8
 
 # Transient burst throttles ("Burst pattern detected ... no more than 5
 # requests per second") are retried with these backoffs before giving up.
-_BURST_BACKOFFS = (1.5, 3.0)
+# They escalate toward the 1-minute window the detector evaluates; the final
+# raise is recoverable now that the router falls back to the next vendor.
+_BURST_BACKOFFS = (2.0, 8.0, 20.0)
 
 _throttle_lock = threading.Lock()
 _last_request_at = 0.0
@@ -121,6 +127,7 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
     for attempt in range(len(_BURST_BACKOFFS) + 1):
         _throttle()
         response = requests.get(API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT)
+        _stamp_request_complete()
         response.raise_for_status()
 
         response_text = response.text
@@ -165,18 +172,44 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         return response_text
 
 
+def _min_request_interval() -> float:
+    """Effective request spacing: config override or the module default."""
+    try:
+        from .config import get_config
+        configured = get_config().get("alpha_vantage_min_request_interval")
+    except Exception:
+        configured = None
+    # An explicit 0 disables pacing (e.g. premium keys); only a missing key
+    # falls back to the module default.
+    return MIN_REQUEST_INTERVAL if configured is None else float(configured)
+
+
 def _throttle() -> None:
-    """Space Alpha Vantage requests at least MIN_REQUEST_INTERVAL apart.
+    """Space Alpha Vantage requests at least the minimum interval apart.
 
     Agent tool loops issue requests back to back; without pacing they trip
     the vendor's ~5 req/s burst detector. Lock-guarded so concurrent web
-    runs share the same budget.
+    runs share the same budget. The stamp taken here reserves the slot so
+    parallel threads cannot fire simultaneously; ``_stamp_request_complete``
+    moves it to the response time afterwards. Per-process only — multiple
+    containers sharing one API key/IP still sum their request rates.
     """
     global _last_request_at
     with _throttle_lock:
-        wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _last_request_at)
+        wait = _min_request_interval() - (time.monotonic() - _last_request_at)
         if wait > 0:
             time.sleep(wait)
+        _last_request_at = time.monotonic()
+
+
+def _stamp_request_complete() -> None:
+    """Re-stamp the pacing clock once a response has arrived.
+
+    Measuring the interval from response completion (not request start) keeps
+    the spacing budget intact when a request itself is slow.
+    """
+    global _last_request_at
+    with _throttle_lock:
         _last_request_at = time.monotonic()
 
 

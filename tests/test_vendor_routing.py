@@ -118,6 +118,31 @@ class VendorRoutingTests(unittest.TestCase):
                 self.assertRaises(ValueError):
             interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
 
+    def test_rate_limit_falls_back_to_next_vendor(self):
+        # The burst-throttle incident: a rate-limited Alpha Vantage must hand
+        # over to the next vendor in the chain, not poison the data channel.
+        from tradingagents.dataflows.errors import VendorRateLimitError
+
+        set_config({"data_vendors": {"technical_indicators": "alpha_vantage,yfinance"}})
+        with self._route_method("get_indicators", {
+            "alpha_vantage": _raises(VendorRateLimitError("burst throttle persisted")),
+            "yfinance": _returns("YF_INDICATOR_DATA"),
+        }):
+            result = interface.route_to_vendor("get_indicators", "AAPL", "rsi", "2026-07-01", 30)
+        self.assertEqual(result, "YF_INDICATOR_DATA")
+
+    def test_rate_limited_single_vendor_surfaces_typed_error(self):
+        # With an AV-only chain the rate limit must surface as the typed error,
+        # not an opaque RuntimeError("No available vendor ...").
+        from tradingagents.dataflows.errors import VendorRateLimitError
+
+        set_config({"data_vendors": {"technical_indicators": "alpha_vantage"}})
+        with self._route_method("get_indicators", {
+            "alpha_vantage": _raises(VendorRateLimitError("burst throttle persisted")),
+            "yfinance": _returns("YF_INDICATOR_DATA"),
+        }), self.assertRaises(VendorRateLimitError):
+            interface.route_to_vendor("get_indicators", "AAPL", "rsi", "2026-07-01", 30)
+
 
 if __name__ == "__main__":
     unittest.main()

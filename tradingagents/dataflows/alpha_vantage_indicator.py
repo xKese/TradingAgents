@@ -1,8 +1,48 @@
+import threading
+import time
+
 from .alpha_vantage_common import (
-    AlphaVantageNotConfiguredError,
     _make_api_request,
     parse_date,
 )
+from .errors import VendorError
+
+# Short-lived response cache so indicator variants served by one endpoint
+# (boll/boll_ub/boll_lb -> BBANDS, macd/macds/macdh -> MACD) reuse a single
+# HTTP request instead of firing three identical ones back to back — the
+# exact pattern that trips Alpha Vantage's burst detector. 5 minutes covers
+# one analyst run (including LLM latency between tool calls) while staying
+# irrelevant for daily-interval data. Successful responses only; errors are
+# never cached. Per-process, capped, keyed on the full request params.
+_RESPONSE_CACHE_TTL = 300.0
+_RESPONSE_CACHE_MAX_ENTRIES = 64
+_response_cache: dict[tuple, tuple[float, str]] = {}
+_cache_lock = threading.Lock()
+
+
+def _fetch_indicator_data(function_name: str, params: dict) -> str:
+    """Fetch one Alpha Vantage indicator payload, deduplicated via TTL cache."""
+    key = (function_name, tuple(sorted(params.items())))
+    now = time.monotonic()
+    with _cache_lock:
+        cached = _response_cache.get(key)
+        if cached is not None:
+            stored_at, payload = cached
+            if now - stored_at < _RESPONSE_CACHE_TTL:
+                return payload
+            del _response_cache[key]
+
+    # Fetch outside the lock: two threads racing on the same key may both
+    # fetch (rare, harmless); the sequential per-run tool loop dedups exactly.
+    data = _make_api_request(function_name, params)
+
+    if isinstance(data, str):
+        with _cache_lock:
+            if len(_response_cache) >= _RESPONSE_CACHE_MAX_ENTRIES:
+                oldest = min(_response_cache, key=lambda k: _response_cache[k][0])
+                del _response_cache[oldest]
+            _response_cache[key] = (time.monotonic(), data)
+    return data
 
 
 def get_indicator(
@@ -78,68 +118,73 @@ def get_indicator(
     if required_series_type:
         series_type = required_series_type
 
+    if indicator == "vwma":
+        # Alpha Vantage doesn't have direct VWMA, so we'll return an informative message
+        # In a real implementation, this would need to be calculated from OHLCV data
+        return f"## VWMA (Volume Weighted Moving Average) for {symbol}:\n\nVWMA calculation requires OHLCV data and is not directly available from Alpha Vantage API.\nThis indicator would need to be calculated from the raw stock data using volume-weighted price averaging.\n\n{indicator_descriptions.get('vwma', 'No description available.')}"
+
+    # Resolve each indicator to its (endpoint, params) request spec first, so
+    # variants of one endpoint (all three Bollinger bands, all three MACD
+    # series) build identical specs and collapse onto a single cached request.
+    if indicator == "close_50_sma":
+        spec = ("SMA", {
+            "symbol": symbol,
+            "interval": interval,
+            "time_period": "50",
+            "series_type": series_type,
+            "datatype": "csv"
+        })
+    elif indicator == "close_200_sma":
+        spec = ("SMA", {
+            "symbol": symbol,
+            "interval": interval,
+            "time_period": "200",
+            "series_type": series_type,
+            "datatype": "csv"
+        })
+    elif indicator == "close_10_ema":
+        spec = ("EMA", {
+            "symbol": symbol,
+            "interval": interval,
+            "time_period": "10",
+            "series_type": series_type,
+            "datatype": "csv"
+        })
+    elif indicator in ("macd", "macds", "macdh"):
+        spec = ("MACD", {
+            "symbol": symbol,
+            "interval": interval,
+            "series_type": series_type,
+            "datatype": "csv"
+        })
+    elif indicator == "rsi":
+        spec = ("RSI", {
+            "symbol": symbol,
+            "interval": interval,
+            "time_period": str(time_period),
+            "series_type": series_type,
+            "datatype": "csv"
+        })
+    elif indicator in ("boll", "boll_ub", "boll_lb"):
+        spec = ("BBANDS", {
+            "symbol": symbol,
+            "interval": interval,
+            "time_period": "20",
+            "series_type": series_type,
+            "datatype": "csv"
+        })
+    elif indicator == "atr":
+        spec = ("ATR", {
+            "symbol": symbol,
+            "interval": interval,
+            "time_period": str(time_period),
+            "datatype": "csv"
+        })
+    else:
+        return f"Error: Indicator {indicator} not implemented yet."
+
     try:
-        # Get indicator data for the period
-        if indicator == "close_50_sma":
-            data = _make_api_request("SMA", {
-                "symbol": symbol,
-                "interval": interval,
-                "time_period": "50",
-                "series_type": series_type,
-                "datatype": "csv"
-            })
-        elif indicator == "close_200_sma":
-            data = _make_api_request("SMA", {
-                "symbol": symbol,
-                "interval": interval,
-                "time_period": "200",
-                "series_type": series_type,
-                "datatype": "csv"
-            })
-        elif indicator == "close_10_ema":
-            data = _make_api_request("EMA", {
-                "symbol": symbol,
-                "interval": interval,
-                "time_period": "10",
-                "series_type": series_type,
-                "datatype": "csv"
-            })
-        elif indicator == "macd" or indicator == "macds" or indicator == "macdh":
-            data = _make_api_request("MACD", {
-                "symbol": symbol,
-                "interval": interval,
-                "series_type": series_type,
-                "datatype": "csv"
-            })
-        elif indicator == "rsi":
-            data = _make_api_request("RSI", {
-                "symbol": symbol,
-                "interval": interval,
-                "time_period": str(time_period),
-                "series_type": series_type,
-                "datatype": "csv"
-            })
-        elif indicator in ["boll", "boll_ub", "boll_lb"]:
-            data = _make_api_request("BBANDS", {
-                "symbol": symbol,
-                "interval": interval,
-                "time_period": "20",
-                "series_type": series_type,
-                "datatype": "csv"
-            })
-        elif indicator == "atr":
-            data = _make_api_request("ATR", {
-                "symbol": symbol,
-                "interval": interval,
-                "time_period": str(time_period),
-                "datatype": "csv"
-            })
-        elif indicator == "vwma":
-            # Alpha Vantage doesn't have direct VWMA, so we'll return an informative message
-            # In a real implementation, this would need to be calculated from OHLCV data
-            return f"## VWMA (Volume Weighted Moving Average) for {symbol}:\n\nVWMA calculation requires OHLCV data and is not directly available from Alpha Vantage API.\nThis indicator would need to be calculated from the raw stock data using volume-weighted price averaging.\n\n{indicator_descriptions.get('vwma', 'No description available.')}"
-        else:
-            return f"Error: Indicator {indicator} not implemented yet."
+        data = _fetch_indicator_data(*spec)
 
         # Parse CSV data and extract values for the date range
         lines = data.strip().split('\n')
@@ -209,10 +254,12 @@ def get_indicator(
 
         return result_str
 
-    except AlphaVantageNotConfiguredError:
-        # Vendor unavailable (no API key). Let it propagate so the router can
-        # fall back / emit the no-data sentinel instead of returning this as a
-        # successful-looking error string.
+    except VendorError:
+        # Vendor-level failures (missing API key, rate limit, no data) must
+        # propagate so the router can fall back to the next configured vendor
+        # instead of the LLM receiving this as a successful-looking error
+        # string. Notably AlphaVantageRateLimitError: swallowing it here meant
+        # a throttled Alpha Vantage never fell back to yfinance.
         raise
     except Exception as e:
         print(f"Error getting Alpha Vantage indicator data for {indicator}: {e}")

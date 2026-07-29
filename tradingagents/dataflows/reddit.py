@@ -22,6 +22,7 @@ import http.client
 import json
 import logging
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
@@ -47,6 +48,38 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+
+# Process-wide pacing between any two Reddit requests. The per-call
+# ``inter_request_delay`` only spaces requests within one analysis run; the
+# webapp runs several analyses in parallel threads against one egress IP, so
+# without a shared throttle their requests interleave back to back and trip
+# Reddit's per-IP 429. Lock-guarded, same idiom as the Alpha Vantage throttle;
+# per-process only — multiple containers behind one IP still sum their rates.
+_MIN_REQUEST_INTERVAL = 1.0
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+
+# Escalating backoffs for 429 retries (3 attempts total). ``Retry-After``
+# still wins when it asks for longer (capped by _retry_after_seconds).
+_RSS_429_BACKOFFS = (5.0, 15.0)
+
+# Successful per-subreddit results (including genuine "no matches") are kept
+# for a short while so ensemble re-runs and concurrent runs on the same
+# ticker don't re-hammer Reddit. Failures are never cached.
+_FEED_CACHE_TTL = 600.0
+_FEED_CACHE_MAX_ENTRIES = 64
+_feed_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
+_feed_cache_lock = threading.Lock()
+
+
+def _throttle() -> None:
+    """Space Reddit requests at least ``_MIN_REQUEST_INTERVAL`` apart, process-wide."""
+    global _last_request_at
+    with _throttle_lock:
+        wait = _MIN_REQUEST_INTERVAL - (time.monotonic() - _last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at = time.monotonic()
 
 
 def _search_qs(ticker: str, limit: int) -> str:
@@ -95,36 +128,47 @@ def _fetch_subreddit_rss(
     sub: str,
     limit: int,
     timeout: float,
-    _retry: bool = True,
-) -> list[dict]:
+) -> list[dict] | None:
     """Default path: parse the public Atom search feed for a subreddit.
 
     Carries no score / comment counts, so those fields are left None and the
     post is tagged ``source="rss"`` for honest display. On a 429 (Reddit's
-    per-IP rate limit) we back off once — honouring ``Retry-After`` when
-    present — before giving up, so a transient burst doesn't blank the feed.
+    per-IP rate limit) we back off with escalating waits — honouring
+    ``Retry-After`` when it asks for longer — before giving up, so a transient
+    burst doesn't blank the feed.
+
+    Returns ``None`` when the fetch itself failed (429 exhaustion, network or
+    parse error) — the feed's content is unknown, which callers must not
+    confuse with a genuine empty result (``[]``: feed fetched, no matches).
     """
     url = _RSS.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA})
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            root = ET.fromstring(resp.read())
-    except HTTPError as exc:
-        if exc.code == 429 and _retry:
-            wait = _retry_after_seconds(exc) or 5.0
-            logger.warning(
-                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying once",
-                sub, ticker, wait,
-            )
-            time.sleep(wait)
-            return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
-        logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
-    except (OSError, http.client.HTTPException, ET.ParseError) as exc:
-        # OSError covers URLError/TimeoutError/connection resets; HTTPException
-        # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
-        logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+    attempts = len(_RSS_429_BACKOFFS) + 1
+    root = None
+    for attempt in range(attempts):
+        _throttle()
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                root = ET.fromstring(resp.read())
+            break
+        except HTTPError as exc:
+            if exc.code == 429 and attempt < len(_RSS_429_BACKOFFS):
+                wait = max(_retry_after_seconds(exc) or 0.0, _RSS_429_BACKOFFS[attempt])
+                logger.warning(
+                    "Reddit RSS 429 for r/%s · %s — backing off %.1fs (attempt %d/%d)",
+                    sub, ticker, wait, attempt + 1, attempts,
+                )
+                time.sleep(wait)
+                continue
+            logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
+            return None
+        except (OSError, http.client.HTTPException, ET.ParseError) as exc:
+            # OSError covers URLError/TimeoutError/connection resets; HTTPException
+            # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
+            logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
+            return None
+    if root is None:
+        return None
 
     posts = []
     for entry in root.findall("atom:entry", _ATOM_NS)[:limit]:
@@ -149,7 +193,7 @@ def _fetch_subreddit_json(
     sub: str,
     limit: int,
     timeout: float,
-) -> list[dict]:
+) -> list[dict] | None:
     """Richer JSON search path (carries score / comment counts).
 
     Reddit's WAF currently returns ``403 Blocked`` on this endpoint for
@@ -160,6 +204,7 @@ def _fetch_subreddit_json(
     """
     url = _API.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
+    _throttle()
     try:
         with urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read())
@@ -178,14 +223,35 @@ def _fetch_subreddit(
     sub: str,
     limit: int,
     timeout: float,
-) -> list[dict]:
-    """Fetch one subreddit, RSS-first.
+) -> list[dict] | None:
+    """Fetch one subreddit, RSS-first, with a short-lived success cache.
 
     The JSON search endpoint is reliably WAF-blocked (403) for public clients,
     so we go straight to the RSS feed — which serves our identified User-Agent
     reliably — halving our request volume against Reddit's per-IP rate limit.
+    Successful results (including genuine "no matches") are cached for
+    ``_FEED_CACHE_TTL`` so ensemble re-runs and concurrent runs on the same
+    ticker don't repeat the request; ``None`` failures are never cached.
     """
-    return _fetch_subreddit_rss(ticker, sub, limit, timeout)
+    key = (ticker, sub, limit)
+    now = time.monotonic()
+    with _feed_cache_lock:
+        cached = _feed_cache.get(key)
+        if cached is not None:
+            stored_at, posts = cached
+            if now - stored_at < _FEED_CACHE_TTL:
+                return posts
+            del _feed_cache[key]
+
+    posts = _fetch_subreddit_rss(ticker, sub, limit, timeout)
+
+    if posts is not None:
+        with _feed_cache_lock:
+            if len(_feed_cache) >= _FEED_CACHE_MAX_ENTRIES:
+                oldest = min(_feed_cache, key=lambda k: _feed_cache[k][0])
+                del _feed_cache[oldest]
+            _feed_cache[key] = (time.monotonic(), posts)
+    return posts
 
 
 def fetch_reddit_posts(
@@ -207,10 +273,22 @@ def fetch_reddit_posts(
     ticker = crypto_base(ticker) or ticker
     blocks = []
     total_posts = 0
+    fetch_failures = 0
+    subreddits = list(subreddits)
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
         posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        if posts is None:
+            # The fetch failed (rate limited / network error) — the feed's
+            # content is unknown. Say so explicitly: a "no posts found" line
+            # here would make the LLM report absent discussion as fact.
+            fetch_failures += 1
+            blocks.append(
+                f"r/{sub}: <temporarily unavailable (rate limited or fetch error) — "
+                f"absence of data here does NOT mean absence of discussion>"
+            )
+            continue
         total_posts += len(posts)
         if not posts:
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
@@ -242,7 +320,13 @@ def fetch_reddit_posts(
             )
         blocks.append("\n".join(lines))
 
-    if total_posts == 0:
+    if fetch_failures == len(subreddits):
+        return (
+            f"<Reddit data temporarily unavailable (rate limited or fetch errors) "
+            f"across {', '.join(f'r/{s}' for s in subreddits)} — absence of data "
+            f"does NOT mean absence of discussion about {ticker.upper()}>"
+        )
+    if total_posts == 0 and fetch_failures == 0:
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"

@@ -70,6 +70,15 @@ def test_bool_coercion(monkeypatch, raw, expected):
     assert dc.DEFAULT_CONFIG["checkpoint_enabled"] is expected
 
 
+def test_float_coercion_av_min_request_interval(monkeypatch):
+    """The AV pacing knob coerces to float (its default is a float)."""
+    dc = _reload_with_env(monkeypatch, TRADINGAGENTS_AV_MIN_REQUEST_INTERVAL="0.4")
+    assert dc.DEFAULT_CONFIG["alpha_vantage_min_request_interval"] == 0.4
+    assert isinstance(dc.DEFAULT_CONFIG["alpha_vantage_min_request_interval"], float)
+    dc = _reload_with_env(monkeypatch)
+    assert dc.DEFAULT_CONFIG["alpha_vantage_min_request_interval"] == 0.8
+
+
 def test_reasoning_thinking_overrides(monkeypatch):
     """The provider reasoning/thinking knobs are env-configurable (non-interactive runs)."""
     dc = _reload_with_env(

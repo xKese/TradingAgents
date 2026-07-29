@@ -23,6 +23,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MEMORY_ENABLED":       "memory_enabled",
     "TRADINGAGENTS_DATA_CACHE_DAILY":     "data_cache_daily",
     "TRADINGAGENTS_ENSEMBLE_RUNS":        "ensemble_runs",
+    "TRADINGAGENTS_AV_MIN_REQUEST_INTERVAL": "alpha_vantage_min_request_interval",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -174,6 +175,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
     ],
+    # Minimum spacing (seconds) between Alpha Vantage requests, process-wide.
+    # AV's burst detector rejects >5 req/s and wants requests spread across a
+    # 1-minute window; the default paces at ~75 req/min with margin. Lower it
+    # only for premium keys with higher per-minute quotas.
+    "alpha_vantage_min_request_interval": 0.8,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
     # The configured value is the exact vendor chain — requests are NOT silently

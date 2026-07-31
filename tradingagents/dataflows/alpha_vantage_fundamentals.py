@@ -1,6 +1,45 @@
 import json
 
 from .alpha_vantage_common import _make_api_request
+from .errors import NoMarketDataError
+
+
+def _raise_if_empty(result, ticker: str, has_reports: bool):
+    """Raise NoMarketDataError when AV returned an empty-but-successful payload.
+
+    Alpha Vantage's fundamentals coverage is US-centric; non-US listings
+    (e.g. ADS.DEX) get ``{}`` or empty report lists with HTTP 200. Raising
+    the typed error lets the vendor router fall back to the next vendor and
+    emit the NO_DATA sentinel instead of handing the analyst raw ``{}`` —
+    and keeps the daily cache from storing the empty result. Non-JSON and
+    non-dict bodies pass through unchanged (fail-open, like
+    ``_filter_reports_by_date``).
+    """
+    if not isinstance(result, str):
+        return result
+    try:
+        payload = json.loads(result)
+    except json.JSONDecodeError:
+        return result
+    if not isinstance(payload, dict):
+        return result
+    detail = None
+    if not payload:
+        detail = (
+            "Alpha Vantage returned an empty payload "
+            "(fundamentals coverage is US-centric)"
+        )
+    elif "Error Message" in payload:
+        detail = f"Alpha Vantage error: {payload['Error Message']}"
+    elif (
+        has_reports
+        and not payload.get("annualReports")
+        and not payload.get("quarterlyReports")
+    ):
+        detail = "Alpha Vantage returned no annual/quarterly reports"
+    if detail:
+        raise NoMarketDataError(ticker, detail=detail)
+    return result
 
 
 def _filter_reports_by_date(result, curr_date: str):
@@ -42,23 +81,28 @@ def get_fundamentals(ticker: str, curr_date: str = None) -> str:
         "symbol": ticker,
     }
 
-    return _make_api_request("OVERVIEW", params)
+    return _raise_if_empty(
+        _make_api_request("OVERVIEW", params), ticker, has_reports=False
+    )
 
 
 def get_balance_sheet(ticker: str, freq: str = "quarterly", curr_date: str = None):
     """Retrieve balance sheet data for a given ticker symbol using Alpha Vantage."""
     result = _make_api_request("BALANCE_SHEET", {"symbol": ticker})
-    return _filter_reports_by_date(result, curr_date)
+    result = _filter_reports_by_date(result, curr_date)
+    return _raise_if_empty(result, ticker, has_reports=True)
 
 
 def get_cashflow(ticker: str, freq: str = "quarterly", curr_date: str = None):
     """Retrieve cash flow statement data for a given ticker symbol using Alpha Vantage."""
     result = _make_api_request("CASH_FLOW", {"symbol": ticker})
-    return _filter_reports_by_date(result, curr_date)
+    result = _filter_reports_by_date(result, curr_date)
+    return _raise_if_empty(result, ticker, has_reports=True)
 
 
 def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: str = None):
     """Retrieve income statement data for a given ticker symbol using Alpha Vantage."""
     result = _make_api_request("INCOME_STATEMENT", {"symbol": ticker})
-    return _filter_reports_by_date(result, curr_date)
+    result = _filter_reports_by_date(result, curr_date)
+    return _raise_if_empty(result, ticker, has_reports=True)
 

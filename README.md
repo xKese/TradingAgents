@@ -178,6 +178,8 @@ export TRADINGAGENTS_VENDOR_NEWS_DATA=alpha_vantage
 
 Setting the key alone changes nothing — a category is only queried against Alpha Vantage once its `TRADINGAGENTS_VENDOR_*` var selects it. Each value is the exact vendor chain; list several for ordered fallback, e.g. `TRADINGAGENTS_VENDOR_NEWS_DATA=yfinance,alpha_vantage`. These map onto the `data_vendors` block in `tradingagents/default_config.py`, which you can still edit directly (or override per-tool via `tool_vendors`).
 
+Note that Alpha Vantage's fundamentals coverage (income statement, balance sheet, cash flow, overview) is US-centric: non-US listings such as `ADS.DE` (XETRA) typically return empty payloads. Such empty responses are treated as "no data" — with a vendor chain like `TRADINGAGENTS_VENDOR_FUNDAMENTAL_DATA=alpha_vantage,yfinance` the request automatically falls through to the next vendor; with Alpha Vantage alone the agent receives an explicit data-unavailable notice instead of an empty report.
+
 Alternatively, copy `.env.example` to `.env` and fill in your keys:
 ```bash
 cp .env.example .env

@@ -130,7 +130,7 @@ def test_run_archives_factor_context_in_sidecar(monkeypatch, tmp_path):
     class _CapturingGraph(_FakeGraph):
         def prepare_run_context(self, ticker, asset_type, factor_context=None):
             captured["factor_context"] = factor_context
-            return "", {}
+            return "", {}, ""
 
     monkeypatch.setattr(server, "TradingAgentsGraph", _CapturingGraph)
     monkeypatch.setitem(DEFAULT_CONFIG, "results_dir", str(tmp_path))

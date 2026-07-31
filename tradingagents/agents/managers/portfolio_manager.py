@@ -34,8 +34,20 @@ def create_portfolio_manager(llm):
 
         past_context = state.get("past_context", "")
         lessons_line = (
-            f"- Lessons from prior decisions and outcomes:\n{past_context}\n"
+            "- Lessons from prior decisions and outcomes (entries marked "
+            f"'outcome still pending' have no measured result yet):\n{past_context}\n"
             if past_context
+            else ""
+        )
+
+        previous_analysis = state.get("previous_analysis_context", "")
+        previous_block = (
+            f"\n**Previous analysis (reference only):**\n{previous_analysis}\n\n"
+            "Focus your assessment on what has changed since that analysis. Do not "
+            "anchor on the prior rating: derive today's stance solely from the "
+            "current debate, and if your conclusion differs from the previous one, "
+            "explicitly name the developments that changed it.\n"
+            if previous_analysis
             else ""
         )
 
@@ -55,7 +67,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
-{lessons_line}
+{lessons_line}{previous_block}
 **Risk Analysts Debate History:**
 {history}
 

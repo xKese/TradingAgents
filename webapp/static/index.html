@@ -250,6 +250,12 @@
             <div class="field-hint">Frühere Entscheidungen und deren Ergebnis fließen als Kontext in den Portfolio Manager ein. Deaktivieren, damit direkt aufeinanderfolgende Läufe identische Eingaben sehen.</div>
           </div>
           <div class="row">
+            <label class="check single" for="prev-analysis">
+              <input type="checkbox" id="prev-analysis" checked> Vergleich mit letzter Analyse
+            </label>
+            <div class="field-hint">Datum, Rating und Kurzfazit der zuletzt archivierten Analyse desselben Tickers fließen als Kontext in Research Manager und Portfolio Manager ein (Fokus: was hat sich seither geändert). Die Analysten bleiben unbeeinflusst.</div>
+          </div>
+          <div class="row">
             <label class="check single" for="data-cache">
               <input type="checkbox" id="data-cache"> Tages-Cache für News/Makrodaten
             </label>
@@ -400,6 +406,7 @@ function prefillAdvanced(defs){
   if(defs.temperature!==null&&defs.temperature!==undefined) $("temperature").value=defs.temperature;
   if(defs.seed!==null&&defs.seed!==undefined) $("seed").value=defs.seed;
   $("memory-enabled").checked = defs.memory_enabled!==false;
+  $("prev-analysis").checked = defs.previous_analysis_enabled!==false;
   $("data-cache").checked = defs.data_cache_daily===true;
   const runs=String(defs.ensemble_runs||1);
   if([...$("ensemble").options].some(o=>o.value===runs)) $("ensemble").value=runs;
@@ -833,6 +840,7 @@ $("run-form").addEventListener("submit",e=>{
     temperature:$("temperature").value.trim(),
     seed:$("seed").value.trim(),
     memory_enabled:$("memory-enabled").checked,
+    previous_analysis_enabled:$("prev-analysis").checked,
     data_cache_daily:$("data-cache").checked,
     ensemble_runs:parseInt($("ensemble").value,10),
   };

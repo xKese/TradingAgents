@@ -286,6 +286,10 @@ def build_run(payload: dict) -> dict:
         config["memory_enabled"] = _validate_flag(
             payload.get("memory_enabled"), "Lernfunktion (Memory)"
         )
+    if "previous_analysis_enabled" in payload:
+        config["previous_analysis_enabled"] = _validate_flag(
+            payload.get("previous_analysis_enabled"), "Vergleich mit Voranalyse"
+        )
     if "data_cache_daily" in payload:
         config["data_cache_daily"] = _validate_flag(
             payload.get("data_cache_daily"), "Tages-Cache"

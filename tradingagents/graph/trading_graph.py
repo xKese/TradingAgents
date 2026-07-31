@@ -35,6 +35,7 @@ from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
 from tradingagents.reporting import write_report_tree
+from tradingagents.run_archive import build_previous_analysis_context
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -354,13 +355,17 @@ class TradingAgentsGraph:
         """Whether cross-run memory (context injection + persistence) is active."""
         return bool(self.config.get("memory_enabled", True))
 
+    def _previous_analysis_on(self) -> bool:
+        """Whether the newest archived analysis is injected into the managers."""
+        return bool(self.config.get("previous_analysis_enabled", True))
+
     def prepare_run_context(
         self,
         ticker: str,
         asset_type: str = "stock",
         factor_context: dict | None = None,
-    ) -> tuple[str, str]:
-        """Return ``(past_context, instrument_context)`` for a new run.
+    ) -> tuple[str, str, str]:
+        """Return ``(past_context, instrument_context, previous_analysis_context)``.
 
         Single entry point shared by ``propagate()``, the CLI stream loop, and
         the web worker, so cross-run memory behaves identically on all three
@@ -371,13 +376,27 @@ class TradingAgentsGraph:
         ``factor_context`` is an optional external quantitative pre-rating
         (e.g. from a multi-factor screening model); it is appended to the
         instrument context so every agent sees it as a prior to validate.
+
+        ``previous_analysis_context`` condenses the newest archived run.json
+        for the ticker (date, rating, executive summary); it reaches only the
+        Research Manager and Portfolio Manager. Empty when
+        ``previous_analysis_enabled`` is off or no archive exists.
         """
         past_context = ""
         if self._memory_on():
             self._resolve_pending_entries(ticker)
             past_context = self.memory_log.get_past_context(ticker)
-        return past_context, self.resolve_instrument_context(
-            ticker, asset_type, factor_context=factor_context
+        previous_analysis_context = ""
+        if self._previous_analysis_on():
+            previous_analysis_context = build_previous_analysis_context(
+                ticker, self.config.get("results_dir", "")
+            )
+        return (
+            past_context,
+            self.resolve_instrument_context(
+                ticker, asset_type, factor_context=factor_context
+            ),
+            previous_analysis_context,
         )
 
     def record_decision(self, ticker: str, trade_date, final_trade_decision: str) -> None:
@@ -513,8 +532,8 @@ class TradingAgentsGraph:
             )
 
         self.ticker = company_name
-        past_context, instrument_context = self.prepare_run_context(
-            company_name, asset_type
+        past_context, instrument_context, previous_analysis_context = (
+            self.prepare_run_context(company_name, asset_type)
         )
 
         checkpoint_before = self.config.get("checkpoint_enabled")
@@ -533,6 +552,7 @@ class TradingAgentsGraph:
                         asset_type=asset_type,
                         past_context=past_context,
                         instrument_context=instrument_context,
+                        previous_analysis_context=previous_analysis_context,
                         record=False,
                     )
                 )
@@ -578,20 +598,27 @@ class TradingAgentsGraph:
         asset_type: str = "stock",
         past_context: str | None = None,
         instrument_context: str | None = None,
+        previous_analysis_context: str | None = None,
         record: bool = True,
         factor_context: dict | None = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log.
 
-        ``past_context``/``instrument_context`` can be precomputed (ensemble
-        mode reads them once and reuses them for every run); ``record=False``
-        skips the memory-log write so an ensemble stores one decision, not N.
+        The three context strings can be precomputed (ensemble mode reads them
+        once and reuses them for every run); ``record=False`` skips the
+        memory-log write so an ensemble stores one decision, not N.
         """
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
-        if past_context is None or instrument_context is None:
-            past_context, instrument_context = self.prepare_run_context(
-                company_name, asset_type, factor_context=factor_context
+        if (
+            past_context is None
+            or instrument_context is None
+            or previous_analysis_context is None
+        ):
+            past_context, instrument_context, previous_analysis_context = (
+                self.prepare_run_context(
+                    company_name, asset_type, factor_context=factor_context
+                )
             )
         init_agent_state = self.propagator.create_initial_state(
             company_name,
@@ -599,6 +626,7 @@ class TradingAgentsGraph:
             asset_type=asset_type,
             past_context=past_context,
             instrument_context=instrument_context,
+            previous_analysis_context=previous_analysis_context,
         )
         args = self.propagator.get_graph_args()
 

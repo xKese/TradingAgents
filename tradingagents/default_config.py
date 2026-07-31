@@ -21,6 +21,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_SEED":                 "seed",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
     "TRADINGAGENTS_MEMORY_ENABLED":       "memory_enabled",
+    "TRADINGAGENTS_PREVIOUS_ANALYSIS_ENABLED": "previous_analysis_enabled",
     "TRADINGAGENTS_DATA_CACHE_DAILY":     "data_cache_daily",
     "TRADINGAGENTS_ENSEMBLE_RUNS":        "ensemble_runs",
     "TRADINGAGENTS_AV_MIN_REQUEST_INTERVAL": "alpha_vantage_min_request_interval",
@@ -136,6 +137,12 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # controlled by ``memory_log_path``. Turning this off makes back-to-back
     # runs see identical inputs.
     "memory_enabled": True,
+    # When True, the newest archived run.json for the ticker (written by the
+    # webapp under ``results_dir``/reports) is condensed to date, rating and
+    # executive summary and injected into the Research Manager and Portfolio
+    # Manager only — the analysts stay unbiased. Turning this off makes every
+    # run fully independent of earlier archived analyses.
+    "previous_analysis_enabled": True,
     # When True, news/macro/fundamentals vendor responses are cached on disk
     # per calendar day (under ``data_cache_dir``/daily), so repeated runs on
     # the same day see identical data. Price/indicator data has its own

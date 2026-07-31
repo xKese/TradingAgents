@@ -519,13 +519,14 @@ def _write_run_archive(
 def _stream_single_run(graph, spec: dict, stats, emit) -> dict:
     """Stream one full graph run, emitting SSE events; return the final state."""
     tracker = ProgressTracker(spec["analysts"])
-    past_context, instrument_context = spec["_run_context"]
+    past_context, instrument_context, previous_analysis_context = spec["_run_context"]
     init_state = graph.propagator.create_initial_state(
         spec["ticker"],
         spec["analysis_date"],
         asset_type=spec["asset_type"],
         past_context=past_context,
         instrument_context=instrument_context,
+        previous_analysis_context=previous_analysis_context,
     )
     args = graph.propagator.get_graph_args(callbacks=[stats])
 

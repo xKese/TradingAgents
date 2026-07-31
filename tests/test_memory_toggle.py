@@ -28,7 +28,7 @@ def _graph_with_config(config: dict):
 class TestPrepareRunContext:
     def test_disabled_skips_read_and_resolution(self):
         graph = _graph_with_config({"memory_enabled": False})
-        past, instrument = graph.prepare_run_context("NVDA")
+        past, instrument, _previous = graph.prepare_run_context("NVDA")
         assert past == ""
         assert instrument == "INSTRUMENT"
         graph.memory_log.get_past_context.assert_not_called()
@@ -36,7 +36,7 @@ class TestPrepareRunContext:
 
     def test_enabled_reads_and_resolves(self):
         graph = _graph_with_config({"memory_enabled": True})
-        past, instrument = graph.prepare_run_context("NVDA")
+        past, instrument, _previous = graph.prepare_run_context("NVDA")
         assert past == "PAST"
         assert instrument == "INSTRUMENT"
         graph.memory_log.get_past_context.assert_called_once_with("NVDA")
@@ -44,7 +44,7 @@ class TestPrepareRunContext:
 
     def test_missing_key_defaults_to_enabled(self):
         graph = _graph_with_config({})
-        past, _ = graph.prepare_run_context("NVDA")
+        past, _, _ = graph.prepare_run_context("NVDA")
         assert past == "PAST"
 
 

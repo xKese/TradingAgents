@@ -22,10 +22,21 @@ def create_research_manager(llm):
 
         investment_debate_state = state["investment_debate_state"]
 
+        previous_analysis = state.get("previous_analysis_context", "")
+        previous_block = (
+            f"\n**Previous analysis (reference only):**\n{previous_analysis}\n\n"
+            "Focus your assessment on what has changed since that analysis. Do not "
+            "anchor on the prior rating: derive today's stance solely from the "
+            "current debate, and if your conclusion differs from the previous one, "
+            "explicitly name the developments that changed it.\n"
+            if previous_analysis
+            else ""
+        )
+
         prompt = f"""As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
 
 {instrument_context}
-
+{previous_block}
 ---
 
 **Rating Scale** (use exactly one):

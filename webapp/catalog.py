@@ -157,6 +157,9 @@ def form_defaults() -> dict:
         "temperature": DEFAULT_CONFIG.get("temperature"),
         "seed": DEFAULT_CONFIG.get("seed"),
         "memory_enabled": bool(DEFAULT_CONFIG.get("memory_enabled", True)),
+        "previous_analysis_enabled": bool(
+            DEFAULT_CONFIG.get("previous_analysis_enabled", True)
+        ),
         "data_cache_daily": bool(DEFAULT_CONFIG.get("data_cache_daily", False)),
         "ensemble_runs": int(DEFAULT_CONFIG.get("ensemble_runs") or 1),
     }

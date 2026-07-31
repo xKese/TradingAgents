@@ -152,7 +152,7 @@ class _FakeGraph:
         return {}
 
     def prepare_run_context(self, ticker, asset_type, factor_context=None):
-        return "", {}
+        return "", {}, ""
 
     def record_decision(self, ticker, trade_date, final_trade_decision):
         pass

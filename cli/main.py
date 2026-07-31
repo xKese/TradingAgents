@@ -1103,8 +1103,12 @@ def run_analysis(checkpoint: bool | None = None):
         # instrument identity once so all agents anchor to the real company
         # (#814), and read the memory-log context (honoring memory_enabled)
         # so cross-run memory behaves the same as on the propagate() path.
-        past_context, instrument_context = graph.prepare_run_context(
-            selections["ticker"], selections["asset_type"]
+        # Note: the CLI writes no run.json sidecars itself, so the previous-
+        # analysis context comes from webapp-archived runs (if any).
+        past_context, instrument_context, previous_analysis_context = (
+            graph.prepare_run_context(
+                selections["ticker"], selections["asset_type"]
+            )
         )
         init_agent_state = graph.propagator.create_initial_state(
             selections["ticker"],
@@ -1112,6 +1116,7 @@ def run_analysis(checkpoint: bool | None = None):
             asset_type=selections["asset_type"],
             past_context=past_context,
             instrument_context=instrument_context,
+            previous_analysis_context=previous_analysis_context,
         )
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)

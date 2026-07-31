@@ -68,8 +68,13 @@ class TradingMemoryLog:
         return [e for e in self.load_entries() if e.get("pending")]
 
     def get_past_context(self, ticker: str, n_same: int = 5, n_cross: int = 3) -> str:
-        """Return formatted past context string for agent prompt injection."""
-        entries = [e for e in self.load_entries() if not e.get("pending")]
+        """Return formatted past context string for agent prompt injection.
+
+        Pending entries (no resolved price outcome yet) are included and
+        labeled "outcome still pending", so a re-run within a few days still
+        sees the prior decision instead of an empty context.
+        """
+        entries = self.load_entries()
         if not entries:
             return ""
 
@@ -281,17 +286,21 @@ class TradingMemoryLog:
         return entry
 
     def _format_full(self, e: dict) -> str:
-        raw = e["raw"] or "n/a"
-        alpha = e["alpha"] or "n/a"
-        holding = e["holding"] or "n/a"
-        tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {raw} | {alpha} | {holding}]"
+        if e.get("pending"):
+            tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | outcome still pending]"
+        else:
+            raw = e["raw"] or "n/a"
+            alpha = e["alpha"] or "n/a"
+            holding = e["holding"] or "n/a"
+            tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {raw} | {alpha} | {holding}]"
         parts = [tag, f"DECISION:\n{e['decision']}"]
         if e["reflection"]:
             parts.append(f"REFLECTION:\n{e['reflection']}")
         return "\n\n".join(parts)
 
     def _format_reflection_only(self, e: dict) -> str:
-        tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {e['raw'] or 'n/a'}]"
+        outcome = "outcome still pending" if e.get("pending") else (e["raw"] or "n/a")
+        tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {outcome}]"
         if e["reflection"]:
             return f"{tag}\n{e['reflection']}"
         text = e["decision"][:300]

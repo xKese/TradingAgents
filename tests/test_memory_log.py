@@ -247,10 +247,12 @@ class TestTradingMemoryLogCore:
         log = make_log(tmp_path)
         assert log.get_past_context("NVDA") == ""
 
-    def test_get_past_context_pending_excluded(self, tmp_path):
+    def test_get_past_context_pending_included_with_label(self, tmp_path):
         log = make_log(tmp_path)
         log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
-        assert log.get_past_context("NVDA") == ""
+        ctx = log.get_past_context("NVDA")
+        assert "Past analyses of NVDA" in ctx
+        assert "outcome still pending" in ctx
 
     def test_get_past_context_same_ticker(self, tmp_path):
         log = make_log(tmp_path)
@@ -809,7 +811,7 @@ class TestPortfolioManagerInjection:
         log = make_log(tmp_path)
         log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
         assert len(log.get_pending_entries()) == 1
-        assert log.get_past_context("NVDA") == ""
+        assert "outcome still pending" in log.get_past_context("NVDA")
         log.update_with_outcome("NVDA", "2026-01-05", 0.05, 0.02, 5, "Correct call.")
         assert log.get_pending_entries() == []
         past_ctx = log.get_past_context("NVDA")

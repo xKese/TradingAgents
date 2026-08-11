@@ -154,7 +154,7 @@ class _FakeGraph:
     def prepare_run_context(self, ticker, asset_type, factor_context=None):
         return "", {}, ""
 
-    def record_decision(self, ticker, trade_date, final_trade_decision):
+    def record_decision(self, ticker, trade_date, final_trade_decision, rating=None):
         pass
 
     def process_signal(self, text):
@@ -635,3 +635,47 @@ def test_symbol_search_canonicalizes_av_dialect(monkeypatch):
     assert results[1]["symbol"] == "MBG.DE" and results[1]["av_symbol"] == "MBG.DEX"
     assert results[2]["symbol"] == "AAPL" and "av_symbol" not in results[2]
     assert results[3]["symbol"] == "VIE.PA" and results[3]["av_symbol"] == "VIE.PAR"
+
+
+@pytest.mark.unit
+def test_symbol_search_caches_successful_results(monkeypatch):
+    # The UI queries per keystroke; the AV free tier allows 25 requests/day.
+    # A repeated query must be served from the server-side cache.
+    server._search_cache.clear()
+    calls = []
+
+    def fake_search(term):
+        calls.append(term)
+        return [{"symbol": "SAP.DEX", "name": "SAP SE", "type": "Equity",
+                 "region": "XETRA", "currency": "EUR", "score": "1.0"}]
+
+    monkeypatch.setattr(server, "get_symbol_search", fake_search)
+    client = TestClient(server.app)
+    first = client.get("/api/symbol-search?q=sap se").json()
+    second = client.get("/api/symbol-search?q=SAP SE").json()  # case-insensitive key
+    assert len(calls) == 1
+    assert first["results"] == second["results"]
+    assert second["results"][0]["symbol"] == "SAP.DE"
+
+
+@pytest.mark.unit
+def test_symbol_search_does_not_cache_errors(monkeypatch):
+    # Errors (rate limit, missing key) must not be cached, so recovery is
+    # immediate once the underlying cause is fixed.
+    server._search_cache.clear()
+    calls = []
+
+    def flaky_search(term):
+        calls.append(term)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return [{"symbol": "AAPL", "name": "Apple Inc", "type": "Equity",
+                 "region": "United States", "currency": "USD", "score": "1.0"}]
+
+    monkeypatch.setattr(server, "get_symbol_search", flaky_search)
+    client = TestClient(server.app)
+    first = client.get("/api/symbol-search?q=apple").json()
+    assert first["results"] == [] and first["note"]["type"] == "error"
+    second = client.get("/api/symbol-search?q=apple").json()
+    assert len(calls) == 2
+    assert second["results"][0]["symbol"] == "AAPL"

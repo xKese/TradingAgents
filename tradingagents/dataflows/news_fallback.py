@@ -18,6 +18,7 @@ result.
 from __future__ import annotations
 
 import json
+import logging
 
 import yfinance as yf
 
@@ -30,6 +31,8 @@ from .symbol_utils import yahoo_symbol_to_av
 # Shared article helpers from the ticker-news path, so name-based results get
 # the identical look-ahead-safe window filtering and formatting.
 from .yfinance_news import _extract_article_data, _in_news_window
+
+logger = logging.getLogger(__name__)
 
 
 def news_result_is_empty(result) -> bool:
@@ -71,8 +74,10 @@ def _resolve_company_name(ticker: str) -> str | None:
     """
     try:
         matches = get_symbol_search(yahoo_symbol_to_av(ticker))
-    except Exception:
-        return None  # no key / network / rate limit -> fallback unavailable
+    except Exception:  # noqa: BLE001
+        # no key / network / rate limit -> fallback unavailable
+        logger.info("company-name resolution failed for %s", ticker, exc_info=True)
+        return None
     if not matches:
         return None
     name = (matches[0].get("name") or "").strip()
@@ -103,7 +108,8 @@ def get_news_by_company_name(ticker: str, start_date: str, end_date: str) -> str
     limit = get_config()["news_article_limit"]
     try:
         articles = _search_news(name, limit)
-    except Exception:
+    except Exception:  # noqa: BLE001
+        logger.info("name-based news search failed for %s (%r)", ticker, name, exc_info=True)
         return None
     if not articles:
         return None

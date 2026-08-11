@@ -1239,6 +1239,7 @@ def run_analysis(checkpoint: bool | None = None):
                 selections["ticker"],
                 selections["analysis_date"],
                 final_state["final_trade_decision"],
+                rating=final_state.get("final_rating"),
             )
 
         # Update all agent statuses to completed

@@ -763,6 +763,39 @@ class TestPortfolioManagerInjection:
         result = pm_node(_make_pm_state())
         assert result["final_trade_decision"] == plain_response
 
+    def test_pm_structured_rating_passed_through_state(self):
+        """The typed rating travels in state as final_rating so consumers
+        don't have to re-parse the rendered markdown with the regex heuristic."""
+        decision = PortfolioDecision(
+            rating=PortfolioRating.UNDERWEIGHT,
+            executive_summary="Trim into strength.",
+            investment_thesis="Rating pressure - Sell-side analysts note margin risk.",
+        )
+        llm = _structured_pm_llm({}, decision)
+        pm_node = create_portfolio_manager(llm)
+        result = pm_node(_make_pm_state())
+        assert result["final_rating"] == "Underweight"
+
+    def test_pm_fallback_leaves_final_rating_empty(self):
+        """Free-text fallback has no typed rating; final_rating stays empty so
+        consumers know to fall back to text parsing."""
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.return_value = MagicMock(content="**Rating**: Sell\n\nExit.")
+        pm_node = create_portfolio_manager(llm)
+        result = pm_node(_make_pm_state())
+        assert result["final_rating"] == ""
+
+    def test_store_decision_prefers_typed_rating_over_text_parse(self, tmp_path):
+        """An explicitly passed rating wins over the heuristic text parse —
+        even when the decision text would mislead the regex."""
+        log = make_log(tmp_path)
+        text = "Rating pressure - Sell-side analysts note risk.\n\nWe stay constructive."
+        log.store_decision("NVDA", "2026-01-10", text, rating="Overweight")
+        entries = log.load_entries()
+        assert len(entries) == 1
+        assert entries[0]["rating"] == "Overweight"
+
     # get_past_context ordering and limits
 
     def test_same_ticker_prioritised(self, tmp_path):

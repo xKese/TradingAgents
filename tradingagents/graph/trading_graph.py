@@ -399,17 +399,25 @@ class TradingAgentsGraph:
             previous_analysis_context,
         )
 
-    def record_decision(self, ticker: str, trade_date, final_trade_decision: str) -> None:
+    def record_decision(
+        self,
+        ticker: str,
+        trade_date,
+        final_trade_decision: str,
+        rating: str | None = None,
+    ) -> None:
         """Persist a finished run's decision to the memory log (if enabled).
 
         Counterpart to ``prepare_run_context`` for the CLI/web stream paths,
-        which bypass ``_run_graph``.
+        which bypass ``_run_graph``. ``rating`` carries the PM's typed rating
+        when available, so the log entry doesn't rely on re-parsing the text.
         """
         if self._memory_on():
             self.memory_log.store_decision(
                 ticker=ticker,
                 trade_date=trade_date,
                 final_trade_decision=final_trade_decision,
+                rating=rating,
             )
 
     def resolve_instrument_context(
@@ -572,7 +580,10 @@ class TradingAgentsGraph:
         self.curr_state = rep_state
         self._log_state(trade_date, rep_state)
         self.record_decision(
-            company_name, trade_date, rep_state["final_trade_decision"]
+            company_name,
+            trade_date,
+            rep_state["final_trade_decision"],
+            rating=rep_state.get("final_rating"),
         )
         return rep_state, ensemble["rating"], ensemble
 
@@ -667,7 +678,10 @@ class TradingAgentsGraph:
         # Store decision for deferred reflection on the next same-ticker run.
         if record:
             self.record_decision(
-                company_name, trade_date, final_state["final_trade_decision"]
+                company_name,
+                trade_date,
+                final_state["final_trade_decision"],
+                rating=final_state.get("final_rating"),
             )
 
         # Clear checkpoint on successful completion to avoid stale state.
@@ -677,7 +691,12 @@ class TradingAgentsGraph:
                 self._run_signature(asset_type),
             )
 
-        return final_state, self.process_signal(final_state["final_trade_decision"])
+        # Prefer the typed rating from the PM's structured output; the regex
+        # signal processor only handles free-text fallback decisions.
+        decision = final_state.get("final_rating") or self.process_signal(
+            final_state["final_trade_decision"]
+        )
+        return final_state, decision
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""

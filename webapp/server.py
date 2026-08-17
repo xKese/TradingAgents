@@ -12,10 +12,12 @@ auth layer.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import re
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +44,8 @@ from webapp import catalog
 from webapp.run_config import RunRequestError, build_run
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TradingAgents — Local Web UI", docs_url=None, redoc_url=None)
 
@@ -84,6 +88,16 @@ def api_asset_type(ticker: str) -> JSONResponse:
     return JSONResponse({"asset_type": catalog.asset_type_for(ticker)})
 
 
+# Server-side TTL cache for symbol search: the UI queries on every keystroke,
+# and the Alpha Vantage free tier allows only 25 requests/day — without a
+# cache, typing alone exhausts the quota. Successful results only; errors are
+# never cached so a fixed key/limit recovers immediately.
+_SEARCH_CACHE_TTL = 600.0  # seconds
+_SEARCH_CACHE_MAX = 256
+_search_cache: dict[str, tuple[float, list]] = {}
+_search_cache_lock = threading.Lock()
+
+
 @app.get("/api/symbol-search")
 def api_symbol_search(q: str = "") -> JSONResponse:
     # Ticker autocomplete via Alpha Vantage SYMBOL_SEARCH. Additive convenience:
@@ -94,6 +108,12 @@ def api_symbol_search(q: str = "") -> JSONResponse:
     term = q.strip()
     if len(term) < 2:
         return JSONResponse({"results": [], "note": None})
+    cache_key = term.upper()
+    now = time.monotonic()
+    with _search_cache_lock:
+        hit = _search_cache.get(cache_key)
+        if hit and now - hit[0] < _SEARCH_CACHE_TTL:
+            return JSONResponse({"results": hit[1], "note": None})
     try:
         results = get_symbol_search(term)
         # SYMBOL_SEARCH returns Alpha-Vantage-dialect symbols (MBG.FRK), but
@@ -107,6 +127,12 @@ def api_symbol_search(q: str = "") -> JSONResponse:
             if canonical != av_sym:
                 r["av_symbol"] = av_sym
             r["symbol"] = canonical
+        with _search_cache_lock:
+            if len(_search_cache) >= _SEARCH_CACHE_MAX:
+                # Drop the stalest entry; bounded, so a plain min() scan is fine.
+                oldest = min(_search_cache, key=lambda k: _search_cache[k][0])
+                del _search_cache[oldest]
+            _search_cache[cache_key] = (now, results)
         return JSONResponse({"results": results, "note": None})
     except AlphaVantageRateLimitError:
         note = {"type": "rate_limit", "text": "Alpha-Vantage-Limit erreicht — kurz warten."}
@@ -513,6 +539,14 @@ def _write_run_archive(
         )
         return run_id, report_path
     except Exception:  # noqa: BLE001 — archiving must not fail the run
+        # A missing run.json also disables previous-analysis for this ticker,
+        # so the failure must at least be visible in the server log.
+        logger.exception(
+            "run archive write failed for %s (%s) — report and previous-analysis "
+            "context for this run are lost",
+            spec.get("ticker"),
+            spec.get("analysis_date"),
+        )
         return None, None
 
 
@@ -634,7 +668,10 @@ def _run_worker(spec: dict, q: queue.Queue):
                     },
                 )
             final_state = _stream_single_run(graph, spec, stats, emit)
-            run_decision = graph.process_signal(final_state["final_trade_decision"])
+            # Prefer the PM's typed rating; regex parsing is free-text fallback only.
+            run_decision = final_state.get("final_rating") or graph.process_signal(
+                final_state["final_trade_decision"]
+            )
             results.append((final_state, run_decision))
             if n_runs > 1:
                 emit("run_result", {"run": run_idx + 1, "decision": run_decision})
@@ -656,7 +693,10 @@ def _run_worker(spec: dict, q: queue.Queue):
 
         # Persist the (single, aggregated) decision to the memory log.
         graph.record_decision(
-            spec["ticker"], spec["analysis_date"], final_state["final_trade_decision"]
+            spec["ticker"],
+            spec["analysis_date"],
+            final_state["final_trade_decision"],
+            rating=final_state.get("final_rating"),
         )
 
         # Write the report tree + run.json sidecar for the archive.

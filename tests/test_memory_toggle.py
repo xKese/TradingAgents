@@ -62,6 +62,7 @@ class TestRecordDecision:
             ticker="NVDA",
             trade_date="2026-01-10",
             final_trade_decision="Rating: Buy",
+            rating=None,
         )
 
 

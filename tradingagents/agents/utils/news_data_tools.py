@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from langchain_core.tools import tool
@@ -7,6 +8,8 @@ from tradingagents.dataflows.news_fallback import (
     get_news_by_company_name,
     news_result_is_empty,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -37,8 +40,8 @@ def get_news(
             fallback = get_news_by_company_name(ticker, start_date, end_date)
             if fallback:
                 return fallback
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — fallback may only add coverage
+        logger.warning("name-based news fallback failed for %s", ticker, exc_info=True)
     return result
 
 @tool

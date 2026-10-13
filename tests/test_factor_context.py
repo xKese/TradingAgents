@@ -31,6 +31,45 @@ def _factor_context():
     }
 
 
+def _factor_context_v2():
+    return {
+        "source": "multi_factor",
+        "as_of": "2026-07-23",
+        "scoring_version": "v2",
+        "composite_v2": {
+            "score": 83.4,
+            "pct": 0.834,
+            "z": 1.0123,
+            "classification": "B+",
+            "zone": "KANDIDAT",
+            "zone_thresholds": {"entry_pct": 0.8, "exit_pct": 0.667},
+            "data_coverage": 0.95,
+            "segment": "nonfinancial",
+            "factors": {
+                "value": {"z": 0.4, "coverage": 1.0, "weight_strategic": 0.3},
+                "quality": {"z": 1.2, "coverage": 0.75, "weight_strategic": 0.3},
+                "momentum": {"z": 0.9, "coverage": 1.0, "weight_strategic": 0.25},
+                "investment": {"coverage": 0.0, "weight_strategic": 0.15},
+            },
+            "indicators": {
+                "ev_ebitda": {
+                    "factor": "value", "direction": -1, "z": -0.4, "value": 8.1,
+                    "neut_level": "industry_group",
+                },
+                "fcf_yield": {"factor": "value", "direction": 1, "z": 1.2, "value": 0.065},
+                "roic": {"factor": "quality", "direction": 1, "z": 1.0, "value": 0.18},
+            },
+            "filter": {"pass": False, "reasons": ["liquidity", "coverage"]},
+            "trend_warning": True,
+        },
+        "piotroski": 7,
+        "altman_z": 4.2,
+        "signals": {"sma_signal": "Golden Cross"},
+        "identity": {"name": "Apple Inc."},
+        "source_ticker": "AAPL",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # run_config validation
 # --------------------------------------------------------------------------- #
@@ -78,6 +117,24 @@ def test_factor_context_drops_unknown_keys_and_bad_numbers():
 
 
 @pytest.mark.unit
+def test_build_run_passes_composite_v2_block_through():
+    spec = run_config.build_run(
+        {**_run_payload(), "factor_context": _factor_context_v2()}
+    )
+    fc = spec["factor_context"]
+    assert fc["scoring_version"] == "v2"
+    assert fc["composite_v2"]["score"] == 83.4
+    assert fc["composite_v2"]["zone"] == "KANDIDAT"
+    assert fc["composite_v2"]["indicators"]["ev_ebitda"]["z"] == -0.4
+    assert fc["composite_v2"]["filter"]["reasons"] == ["liquidity", "coverage"]
+    # The v2 payload carries no v1 score fields — and none are invented.
+    assert "total_score" not in fc and "factor_scores" not in fc
+    # A non-dict block is dropped like a malformed signals/identity dict.
+    bad = run_config._validate_factor_context({"composite_v2": "83.4", "piotroski": 7})
+    assert "composite_v2" not in bad and bad["piotroski"] == 7
+
+
+@pytest.mark.unit
 def test_factor_context_empty_dict_becomes_none():
     assert run_config._validate_factor_context({}) is None
     assert run_config._validate_factor_context({"unknown": 1}) is None
@@ -104,6 +161,47 @@ def test_format_factor_context_handles_missing_fields():
     assert "total score 55/100" in text
     assert "Factor scores" not in text
     assert "Technical signals" not in text
+
+
+@pytest.mark.unit
+def test_format_factor_context_renders_composite_v2():
+    text = format_factor_context(_factor_context_v2())
+    assert "Quantitative multi-factor pre-rating" in text
+    assert "(scoring v2)" in text
+    assert "composite score 83.4/100" in text
+    assert "composite z +1.01" in text
+    assert "classification B+" in text
+    assert "zone KANDIDAT (buy candidate" in text
+    assert "entry >= 0.800, exit < 0.667" in text
+    assert "segment non-financial, data coverage 0.95" in text
+    # Factor z-scores with weight/coverage; a factor without z is marked n/a.
+    assert "Quality +1.20 (weight 0.30, coverage 0.75)" in text
+    assert "Investment n/a" in text
+    # Indicators grouped by factor with direction and neutralisation level.
+    assert "ev_ebitda (z -0.40, raw 8.1000, lower is better, vs industry_group)" in text
+    assert "Value: ev_ebitda" in text and "Quality: roic" in text
+    assert "Universe filter: FAILED (liquidity, coverage)" in text
+    assert "Trend warning: death cross" in text
+    # Neutral fields and the prior framing are shared with the v1 block.
+    assert "Piotroski F-Score 7/9" in text
+    assert "Golden Cross" in text
+    assert "NOT ground truth" in text
+    # No v1 wording leaks into a v2 context.
+    assert "total score" not in text
+    assert "Factor scores (0-100)" not in text
+    assert "Model recommendation" not in text
+
+
+@pytest.mark.unit
+def test_format_factor_context_v2_passed_filter_minimal():
+    text = format_factor_context(
+        {"composite_v2": {"score": 55.0, "zone": "HALTEN", "filter": {"pass": True}}}
+    )
+    assert "composite score 55.0/100" in text
+    assert "zone HALTEN (hold" in text
+    assert "Universe filter: passed." in text
+    assert "Factor z-scores" not in text
+    assert "Trend warning" not in text
 
 
 @pytest.mark.unit

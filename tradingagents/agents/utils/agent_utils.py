@@ -175,7 +175,148 @@ _FACTOR_LABELS = {
     "growth": "Growth",
     "momentum": "Momentum",
     "lowvol": "Low-Vol",
+    "investment": "Investment",
 }
+
+_V2_ZONE_LABELS = {
+    "KANDIDAT": "KANDIDAT (buy candidate: above the entry percentile)",
+    "HALTEN": "HALTEN (hold: between exit and entry percentile)",
+    "VERKAUFEN": "VERKAUFEN (sell: below the exit percentile)",
+    "FILTER": "FILTER (fails the universe filters, not investable)",
+}
+
+_V2_SEGMENT_LABELS = {
+    "financial": "financial (bank/insurer indicator set: P/B, P/E, ROE, accruals)",
+    "real_estate": "real estate (non-financial indicator set without accruals)",
+    "nonfinancial": "non-financial",
+}
+
+_PRIOR_FOOTER = (
+    "\nTreat this pre-rating as a prior, dry quantitative evaluation to "
+    "validate or challenge with your own in-depth analysis. It is NOT "
+    "ground truth and must not replace your independent judgment; "
+    "explicitly note where your findings confirm or contradict it."
+)
+
+
+def _fmt_num(value: Any, digits: int = 2, signed: bool = False) -> str | None:
+    """Compact number for prompt text; ``None`` for non-numeric input."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return f"{value:+.{digits}f}" if signed else f"{value:.{digits}f}"
+
+
+def _format_composite_v2(comp: Mapping[str, Any]) -> list[str]:
+    """Lines for the multi_factor Composite v2 block (score, zone, factor and
+    indicator z-scores, universe filter). Every field is optional."""
+    lines: list[str] = []
+
+    overall = []
+    if (score := _fmt_num(comp.get("score"), 1)) is not None:
+        overall.append(f"composite score {score}/100 (percentile rank x 100)")
+    if (z := _fmt_num(comp.get("z"), 2, signed=True)) is not None:
+        overall.append(f"composite z {z}")
+    if comp.get("classification"):
+        overall.append(f"classification {comp['classification']}")
+    zone = str(comp.get("zone") or "").upper()
+    if zone:
+        overall.append("zone " + _V2_ZONE_LABELS.get(zone, zone))
+    if overall:
+        lines.append("- Overall (Composite v2): " + ", ".join(overall) + ".")
+
+    thresholds = comp.get("zone_thresholds") or {}
+    if isinstance(thresholds, Mapping):
+        entry = _fmt_num(thresholds.get("entry_pct"), 3)
+        exit_ = _fmt_num(thresholds.get("exit_pct"), 3)
+        if entry is not None or exit_ is not None:
+            bits = []
+            if entry is not None:
+                bits.append(f"entry >= {entry}")
+            if exit_ is not None:
+                bits.append(f"exit < {exit_}")
+            lines.append(
+                "- Zone thresholds (composite percentile): " + ", ".join(bits) + "."
+            )
+
+    meta = []
+    segment = str(comp.get("segment") or "")
+    if segment:
+        meta.append("segment " + _V2_SEGMENT_LABELS.get(segment, segment))
+    if (cov := _fmt_num(comp.get("data_coverage"), 2)) is not None:
+        meta.append(f"data coverage {cov}")
+    if meta:
+        lines.append("- Scoring basis: " + ", ".join(meta) + ".")
+
+    factors = comp.get("factors") or {}
+    if isinstance(factors, Mapping):
+        rendered = []
+        for name, entry in factors.items():
+            if not isinstance(entry, Mapping):
+                continue
+            z = _fmt_num(entry.get("z"), 2, signed=True)
+            label = _FACTOR_LABELS.get(name, str(name))
+            if z is None:
+                rendered.append(f"{label} n/a (insufficient indicator coverage)")
+                continue
+            extras = []
+            if (w := _fmt_num(entry.get("weight_strategic"), 2)) is not None:
+                extras.append(f"weight {w}")
+            if (c := _fmt_num(entry.get("coverage"), 2)) is not None:
+                extras.append(f"coverage {c}")
+            rendered.append(f"{label} {z}" + (f" ({', '.join(extras)})" if extras else ""))
+        if rendered:
+            lines.append(
+                "- Factor z-scores (peer-neutralised, positive = better than "
+                "peers): " + ", ".join(rendered) + "."
+            )
+
+    indicators = comp.get("indicators") or {}
+    if isinstance(indicators, Mapping):
+        by_factor: dict[str, list[str]] = {}
+        for name, entry in indicators.items():
+            if not isinstance(entry, Mapping):
+                continue
+            z = _fmt_num(entry.get("z"), 2, signed=True)
+            raw = _fmt_num(entry.get("value"), 4)
+            if z is None and raw is None:
+                continue
+            parts = []
+            if z is not None:
+                parts.append(f"z {z}")
+            if raw is not None:
+                parts.append(f"raw {raw}")
+            text = f"{name} ({', '.join(parts)}"
+            if entry.get("direction") == -1:
+                text += ", lower is better"
+            if entry.get("neut_level"):
+                text += f", vs {entry['neut_level']}"
+            text += ")"
+            by_factor.setdefault(str(entry.get("factor") or "other"), []).append(text)
+        if by_factor:
+            chunks = [
+                f"{_FACTOR_LABELS.get(f, f)}: " + "; ".join(items)
+                for f, items in by_factor.items()
+            ]
+            lines.append("- Indicators behind the factors: " + " | ".join(chunks) + ".")
+
+    filt = comp.get("filter") or {}
+    if isinstance(filt, Mapping) and "pass" in filt:
+        if filt.get("pass"):
+            lines.append("- Universe filter: passed.")
+        else:
+            reasons = [str(r) for r in (filt.get("reasons") or []) if r]
+            lines.append(
+                "- Universe filter: FAILED"
+                + (f" ({', '.join(reasons)})" if reasons else "")
+                + "."
+            )
+
+    if comp.get("trend_warning"):
+        lines.append(
+            "- Trend warning: death cross (price below SMA-50 below SMA-200); "
+            "informational only, does not trigger a sell in the model."
+        )
+    return lines
 
 
 def format_factor_context(factor_context: Mapping[str, Any] | None) -> str:
@@ -184,6 +325,13 @@ def format_factor_context(factor_context: Mapping[str, Any] | None) -> str:
     The block is framed explicitly as a prior to validate or challenge — not
     ground truth — so agents build on the dry factor evaluation without
     over-anchoring on it. Returns "" when no factor context was supplied.
+
+    Two payload shapes are supported: the legacy flat v1 scoring
+    (``total_score``, ``factor_scores`` 0-100, ``recommendation``) and the
+    multi_factor Composite v2 block (``composite_v2``: composite score/
+    percentile/z, class, zone, factor and indicator z-scores, universe
+    filter). Neutral fields (Piotroski, Altman-Z, technical signals) are
+    rendered for both.
     """
     if not factor_context:
         return ""
@@ -191,31 +339,39 @@ def format_factor_context(factor_context: Mapping[str, Any] | None) -> str:
     lines = []
     as_of = factor_context.get("as_of")
     source = factor_context.get("source") or "an external deterministic factor model"
+    composite = factor_context.get("composite_v2")
+    version = factor_context.get("scoring_version")
+    if isinstance(composite, Mapping) and composite:
+        version = version or "v2"
     lines.append(
         f"A quantitative multi-factor pre-rating from `{source}`"
+        + (f" (scoring {version})" if version else "")
         + (f" (as of {as_of})" if as_of else "")
         + " is available for this instrument:"
     )
 
-    total = factor_context.get("total_score")
-    classification = factor_context.get("classification")
-    if total is not None or classification:
-        parts = []
-        if total is not None:
-            parts.append(f"total score {total:g}/100")
-        if classification:
-            parts.append(f"classification {classification}")
-        lines.append("- Overall: " + ", ".join(parts) + ".")
+    if isinstance(composite, Mapping) and composite:
+        lines.extend(_format_composite_v2(composite))
+    else:
+        total = factor_context.get("total_score")
+        classification = factor_context.get("classification")
+        if total is not None or classification:
+            parts = []
+            if total is not None:
+                parts.append(f"total score {total:g}/100")
+            if classification:
+                parts.append(f"classification {classification}")
+            lines.append("- Overall: " + ", ".join(parts) + ".")
 
-    scores = factor_context.get("factor_scores") or {}
-    if scores:
-        rendered = ", ".join(
-            f"{_FACTOR_LABELS.get(k, k)} {v:g}"
-            for k, v in scores.items()
-            if isinstance(v, (int, float))
-        )
-        if rendered:
-            lines.append(f"- Factor scores (0-100): {rendered}.")
+        scores = factor_context.get("factor_scores") or {}
+        if scores:
+            rendered = ", ".join(
+                f"{_FACTOR_LABELS.get(k, k)} {v:g}"
+                for k, v in scores.items()
+                if isinstance(v, (int, float))
+            )
+            if rendered:
+                lines.append(f"- Factor scores (0-100): {rendered}.")
 
     quality_bits = []
     if factor_context.get("filter_ok"):
@@ -238,10 +394,7 @@ def format_factor_context(factor_context: Mapping[str, Any] | None) -> str:
     return (
         "\n\n--- Quantitative multi-factor pre-rating ---\n"
         + "\n".join(lines)
-        + "\nTreat this pre-rating as a prior, dry quantitative evaluation to "
-        "validate or challenge with your own in-depth analysis. It is NOT "
-        "ground truth and must not replace your independent judgment; "
-        "explicitly note where your findings confirm or contradict it."
+        + _PRIOR_FOOTER
     )
 
 

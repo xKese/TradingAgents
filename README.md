@@ -277,6 +277,35 @@ the run's `run.json` for auditability:
 }
 ```
 
+With multi_factor's Composite v2 scoring active, the flat v1 score fields are
+replaced by a `composite_v2` block (plus `scoring_version: "v2"`); the neutral
+fields (`piotroski`, `altman_z`, `signals`, `identity`) stay the same. The
+block is rendered for every agent as composite score/percentile/z, class and
+zone (with the entry/exit percentile thresholds), peer-neutralised factor
+z-scores with weight and coverage, the indicators behind each factor (z-score,
+raw value, direction, neutralisation level), the universe-filter verdict and a
+death-cross trend warning:
+
+```jsonc
+{
+  "factor_context": {
+    "source": "multi_factor", "as_of": "2026-07-23", "scoring_version": "v2",
+    "composite_v2": {
+      "score": 83.4, "pct": 0.834, "z": 1.01, "classification": "B+",
+      "zone": "KANDIDAT", "zone_thresholds": {"entry_pct": 0.8, "exit_pct": 0.667},
+      "data_coverage": 0.95, "segment": "nonfinancial",
+      "factors": {"value": {"z": 0.4, "coverage": 1.0, "weight_strategic": 0.3}, /* … */},
+      "indicators": {"ev_ebitda": {"factor": "value", "direction": -1, "z": -0.4,
+                                    "value": 8.1, "neut_level": "industry_group"}, /* … */},
+      "filter": {"pass": true, "reasons": []}, "trend_warning": false
+    },
+    "piotroski": 7, "altman_z": 4.2,
+    "signals": {"sma_signal": "Golden Cross", "trend_phase": "bull"},
+    "identity": {"name": "Mercedes-Benz Group AG", "region": "Germany"}
+  }
+}
+```
+
 Programmatic parity: `TradingAgentsGraph.propagate(ticker, date,
 factor_context={...})`.
 

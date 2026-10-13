@@ -27,9 +27,15 @@ _MAX_ENSEMBLE_RUNS = 5
 
 # Whitelisted keys of the external quantitative pre-rating payload; anything
 # else is dropped so callers can evolve their schema without breaking us.
+# ``scoring_version`` + ``composite_v2`` carry the multi_factor Composite v2
+# block (composite score/percentile/z, class, zone, factor and indicator
+# z-scores, universe filter); the flat ``total_score``/``factor_scores``/
+# ``recommendation`` fields are the legacy v1 scoring.
 _FACTOR_CONTEXT_KEYS = {
     "source",
     "as_of",
+    "scoring_version",
+    "composite_v2",
     "total_score",
     "classification",
     "factor_scores",
@@ -195,7 +201,7 @@ def _validate_factor_context(raw) -> dict | None:
                 for k, v in value.items()
                 if (n := _coerce_number(v)) is not None
             }
-        elif key in ("signals", "identity"):
+        elif key in ("signals", "identity", "composite_v2"):
             if not isinstance(value, dict):
                 continue
         else:

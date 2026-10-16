@@ -48,7 +48,9 @@ _FACTOR_CONTEXT_KEYS = {
     "source_ticker",
 }
 
-_MAX_FACTOR_CONTEXT_BYTES = 8192
+# Composite v2 payloads carry per-indicator data plus a methodology note
+# (~6 KB); keep headroom for larger universes.
+_MAX_FACTOR_CONTEXT_BYTES = 16384
 
 
 class RunRequestError(ValueError):
@@ -182,7 +184,7 @@ def _validate_factor_context(raw) -> dict | None:
         )
 
     if len(json.dumps(raw, ensure_ascii=False)) > _MAX_FACTOR_CONTEXT_BYTES:
-        raise RunRequestError("factor_context ist zu groß (max. 8 KB).")
+        raise RunRequestError("factor_context ist zu groß (max. 16 KB).")
 
     cleaned: dict = {}
     for key in _FACTOR_CONTEXT_KEYS & set(raw):

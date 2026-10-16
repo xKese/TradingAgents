@@ -214,6 +214,11 @@ def _format_composite_v2(comp: Mapping[str, Any]) -> list[str]:
     overall = []
     if (score := _fmt_num(comp.get("score"), 1)) is not None:
         overall.append(f"composite score {score}/100 (percentile rank x 100)")
+    else:
+        overall.append(
+            "composite score not computable for this stock (insufficient "
+            "factor coverage); factor and indicator data below still apply"
+        )
     if (z := _fmt_num(comp.get("z"), 2, signed=True)) is not None:
         overall.append(f"composite z {z}")
     if comp.get("classification"):
@@ -316,6 +321,18 @@ def _format_composite_v2(comp: Mapping[str, Any]) -> list[str]:
             "- Trend warning: death cross (price below SMA-50 below SMA-200); "
             "informational only, does not trigger a sell in the model."
         )
+
+    methodology = comp.get("methodology")
+    if isinstance(methodology, str):
+        methodology = [methodology]
+    if isinstance(methodology, (list, tuple)):
+        notes = [str(m).strip() for m in methodology if str(m).strip()]
+        if notes:
+            lines.append(
+                "- Methodology of the factor model (use it to interpret the "
+                "numbers above):"
+            )
+            lines.extend(f"  * {note}" for note in notes)
     return lines
 
 

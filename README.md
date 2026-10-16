@@ -283,8 +283,11 @@ fields (`piotroski`, `altman_z`, `signals`, `identity`) stay the same. The
 block is rendered for every agent as composite score/percentile/z, class and
 zone (with the entry/exit percentile thresholds), peer-neutralised factor
 z-scores with weight and coverage, the indicators behind each factor (z-score,
-raw value, direction, neutralisation level), the universe-filter verdict and a
-death-cross trend warning:
+raw value, direction, neutralisation level), the universe-filter verdict, a
+death-cross trend warning and the `methodology` notes multi_factor generates
+from its settings (weights, neutralisation, winsorisation, minimum coverage,
+class/zone thresholds, filter rules) so the agents can interpret the numbers.
+The size cap for the whole object is 16 KB:
 
 ```jsonc
 {
@@ -297,7 +300,8 @@ death-cross trend warning:
       "factors": {"value": {"z": 0.4, "coverage": 1.0, "weight_strategic": 0.3}, /* … */},
       "indicators": {"ev_ebitda": {"factor": "value", "direction": -1, "z": -0.4,
                                     "value": 8.1, "neut_level": "industry_group"}, /* … */},
-      "filter": {"pass": true, "reasons": []}, "trend_warning": false
+      "filter": {"pass": true, "reasons": []}, "trend_warning": false,
+      "methodology": ["Composite v2 is a relative, z-score based 4-factor ranking …", /* … */]
     },
     "piotroski": 7, "altman_z": 4.2,
     "signals": {"sma_signal": "Golden Cross", "trend_phase": "bull"},

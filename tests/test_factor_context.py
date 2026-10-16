@@ -61,6 +61,10 @@ def _factor_context_v2():
             },
             "filter": {"pass": False, "reasons": ["liquidity", "coverage"]},
             "trend_warning": True,
+            "methodology": [
+                "Composite v2 is a relative, z-score based 4-factor ranking.",
+                "Zone KANDIDAT = composite pct >= 80.0%.",
+            ],
         },
         "piotroski": 7,
         "altman_z": 4.2,
@@ -96,7 +100,7 @@ def test_factor_context_rejects_non_dict():
 
 @pytest.mark.unit
 def test_factor_context_rejects_oversize():
-    huge = {"total_score": 50, "signals": {"x": "y" * 10_000}}
+    huge = {"total_score": 50, "signals": {"x": "y" * 20_000}}
     with pytest.raises(run_config.RunRequestError):
         run_config.build_run({**_run_payload(), "factor_context": huge})
 
@@ -182,6 +186,10 @@ def test_format_factor_context_renders_composite_v2():
     assert "Value: ev_ebitda" in text and "Quality: roic" in text
     assert "Universe filter: FAILED (liquidity, coverage)" in text
     assert "Trend warning: death cross" in text
+    # Methodology notes are rendered verbatim as an indented list.
+    assert "Methodology of the factor model" in text
+    assert "  * Composite v2 is a relative, z-score based 4-factor ranking." in text
+    assert "  * Zone KANDIDAT = composite pct >= 80.0%." in text
     # Neutral fields and the prior framing are shared with the v1 block.
     assert "Piotroski F-Score 7/9" in text
     assert "Golden Cross" in text
@@ -202,6 +210,37 @@ def test_format_factor_context_v2_passed_filter_minimal():
     assert "Universe filter: passed." in text
     assert "Factor z-scores" not in text
     assert "Trend warning" not in text
+
+
+@pytest.mark.unit
+def test_format_factor_context_v2_without_score():
+    text = format_factor_context(
+        {
+            "scoring_version": "v2",
+            "composite_v2": {
+                "zone": "FILTER",
+                "factors": {"quality": {"z": 0.5}},
+                "filter": {"pass": False, "reasons": ["coverage"]},
+                "methodology": "Composite v2 is a relative ranking.",
+            },
+        }
+    )
+    assert "composite score not computable" in text
+    assert "zone FILTER (fails the universe filters" in text
+    assert "Quality +0.50" in text
+    assert "Universe filter: FAILED (coverage)" in text
+    assert "  * Composite v2 is a relative ranking." in text
+    assert "total score" not in text
+
+
+@pytest.mark.unit
+def test_factor_context_size_cap_allows_v2_payloads():
+    # A realistic v2 payload (indicators + methodology) is ~6 KB; the cap
+    # must leave headroom, while a runaway payload is still rejected.
+    big_but_ok = {"composite_v2": {"methodology": ["x" * 9_000]}}
+    assert run_config._validate_factor_context(big_but_ok)["composite_v2"]
+    with pytest.raises(run_config.RunRequestError):
+        run_config._validate_factor_context({"signals": {"x": "y" * 17_000}})
 
 
 @pytest.mark.unit
